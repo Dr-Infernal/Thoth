@@ -24,6 +24,12 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **First-run setup** — if the default model isn't available, the app automatically downloads it on startup
 - **Local indicators** — models are marked with ✅ (downloaded) or ⬇️ (needs download) in the selector
 
+### API Key Management
+- **In-app configuration** — add and edit API keys directly from the ⚙️ Settings panel (no need to edit source files)
+- **Persistent storage** — keys are saved to a local `api_keys.json` file and loaded automatically on startup
+- **Password-masked inputs** — keys are hidden by default in the UI for security
+- **Extensible** — add new keys by editing the `API_KEY_DEFINITIONS` dict in `api_keys.py`
+
 ### Intelligent Context Retrieval
 - **Smart context assessment** — an LLM-powered node decides whether additional context is needed before searching
 - **Accumulated context** — context from multiple queries within a thread builds up rather than being replaced
@@ -108,7 +114,8 @@ Thoth/
 ├── documents.py            # Document loading, chunking, FAISS vector store
 ├── models.py               # LLM configuration (Ollama)
 ├── threads.py              # Thread/conversation management (SQLite)
-├── api_keys.py             # API key configuration
+├── api_keys.py             # API key management (load/save/apply from JSON)
+├── api_keys.json           # Stored API keys (auto-generated, do not commit)
 ├── processed_files.json    # Tracks which files have been indexed (auto-generated)
 ├── threads.db              # SQLite database for thread metadata (auto-generated)
 ├── vector_store/           # FAISS index files (auto-generated)
@@ -126,7 +133,7 @@ Thoth/
 | **`documents.py`** | Manages document ingestion: loading (PDF/DOCX/TXT), text splitting, embedding with `Qwen/Qwen3-Embedding-0.6B`, FAISS storage, and processed file tracking. |
 | **`models.py`** | LLM model management — listing, downloading, and switching Ollama models at runtime. |
 | **`threads.py`** | SQLite-backed thread metadata (create, list, rename, delete) and LangGraph `SqliteSaver` checkpointer for persisting conversation state. |
-| **`api_keys.py`** | Sets environment variables for external API keys (Tavily). |
+| **`api_keys.py`** | API key management — defines available keys, reads/writes `api_keys.json`, and applies keys as environment variables at startup. The Settings UI in `app.py` uses this module to let users add/edit keys. |
 
 ---
 
@@ -134,7 +141,7 @@ Thoth/
 
 - **Python 3.11+**
 - **[Ollama](https://ollama.com/)** installed and running locally
-- **Tavily API Key** for web search (set in `api_keys.py`)
+- **Tavily API Key** for web search (configured via the in-app Settings panel)
 
 > **Note:** You no longer need to manually pull a model — the app will automatically download the default model (`qwen3:8b`) on first run if it isn't available.
 
@@ -169,10 +176,14 @@ Thoth/
 
 5. **Configure API keys**
 
-   Edit `api_keys.py` and set your Tavily API key:
-   ```python
-   os.environ["TAVILY_API_KEY"] = "your-tavily-api-key"
-   ```
+   Launch the app and open **⚙️ Settings** in the sidebar. Enter your API keys (e.g. Tavily) in the **API Keys** section. Keys are saved to `api_keys.json` and loaded automatically on future runs.
+
+   > Alternatively, you can create `api_keys.json` manually:
+   > ```json
+   > {
+   >   "TAVILY_API_KEY": "your-tavily-api-key"
+   > }
+   > ```
 
 6. **Ensure Ollama is running**
    ```bash
@@ -190,7 +201,7 @@ streamlit run app.py
 ```
 
 This opens the Thoth web UI in your browser with:
-- **Left sidebar**: Create, switch, and delete conversation threads; Settings panel at the bottom for model selection and retrieval source toggles
+- **Left sidebar**: Create, switch, and delete conversation threads; Settings panel at the bottom for model selection, retrieval source toggles, and API key management
 - **Center**: Chat interface for asking questions
 - **Right panel**: Upload and manage documents
 

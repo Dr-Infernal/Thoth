@@ -1,0 +1,34 @@
+# ── Core App ─────────────────────────────────────────────────────────────────
+streamlit>=1.54.0
+
+# ── LLM / Ollama ────────────────────────────────────────────────────────────
+ollama>=0.6.1
+langchain>=1.2.0
+langchain-core>=1.2.0
+langchain-classic>=1.0.1
+langchain-community>=0.4.1
+langchain-huggingface>=1.2.0
+langchain-ollama>=1.0.1
+langchain-text-splitters>=1.1.0
+langgraph>=1.0.7
+langgraph-checkpoint-sqlite>=3.0.3
+
+# ── Vector Store & Embeddings ────────────────────────────────────────────────
+faiss-cpu>=1.13.0
+sentence-transformers>=5.2.0
+huggingface_hub>=1.4.0
+transformers>=5.1.0
+tokenizers>=0.22.0
+
+# ── PyTorch (CPU-only for installer; swap for CUDA if GPU available) ────────
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.10.0
+torchvision>=0.25.0
+
+# ── Retrieval Sources ───────────────────────────────────────────────────────
+tavily-python>=0.7.21
+wikipedia>=1.4.0
+arxiv>=2.4.0
+
+# ── Document Loaders ────────────────────────────────────────────────────────
+pypdf>=6.7.0

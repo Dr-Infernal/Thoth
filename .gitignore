@@ -1,4 +1,12 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
-api_keys.py
+
+# Secrets
+api_keys.json
+
+# Installer build artifacts
+installer/build/
+dist/

@@ -2,7 +2,7 @@ from multiprocessing import context
 from langchain_core.prompts import ChatPromptTemplate
 from documents import vector_store
 from models import get_llm
-from api_keys import set_keys
+from api_keys import apply_keys
 from langchain_community.retrievers.wikipedia import WikipediaRetriever
 from langchain_community.retrievers.arxiv import ArxivRetriever
 from langchain_community.retrievers.tavily_search_api import TavilySearchAPIRetriever
@@ -24,7 +24,7 @@ wiki_retriever = WikipediaRetriever()
 arxiv_retriever = ArxivRetriever()
 web_search_retriever = TavilySearchAPIRetriever()
 
-set_keys()
+apply_keys()
 
 class SessionState(TypedDict):
     needs_context: bool

@@ -34,6 +34,8 @@ with st.spinner("Loading models. Please Wait…"):
         pull_model,
         DEFAULT_MODEL,
     )
+    from api_keys import API_KEY_DEFINITIONS, get_key, set_key, apply_keys
+    apply_keys()
 
 # ── Ensure default model is available ────────────────────────────────────────
 if not is_model_local(DEFAULT_MODEL):
@@ -211,6 +213,19 @@ with st.sidebar:
         st.session_state.search_web = st.toggle(
             "🔍 Web Search", value=st.session_state.search_web, key="toggle_web"
         )
+
+        st.divider()
+        st.markdown("#### API Keys")
+        for label, env_var in API_KEY_DEFINITIONS.items():
+            current_val = get_key(env_var)
+            new_val = st.text_input(
+                f"{label} ({env_var})",
+                value=current_val,
+                type="password",
+                key=f"apikey_{env_var}",
+            )
+            if new_val != current_val:
+                set_key(env_var, new_val)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ── Handle model switch ──────────────────────────────────────────────────
