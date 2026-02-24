@@ -26,7 +26,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ### API Key Management
 - **In-app configuration** — add and edit API keys directly from the ⚙️ Settings panel (no need to edit source files)
-- **Persistent storage** — keys are saved to a local `api_keys.json` file and loaded automatically on startup
+- **Persistent storage** — keys are saved to `api_keys.json` in the user data directory and loaded automatically on startup
 - **Password-masked inputs** — keys are hidden by default in the UI for security
 - **Extensible** — add new keys by editing the `API_KEY_DEFINITIONS` dict in `api_keys.py`
 
@@ -108,21 +108,25 @@ A conditional edge routes from `needs_context` to either `get_context` or direct
 ## Project Structure
 
 ```
-Thoth/
-├── app.py                  # Streamlit frontend — UI, chat, document upload
-├── rag.py                  # LangGraph RAG pipeline — nodes, edges, state
-├── documents.py            # Document loading, chunking, FAISS vector store
-├── models.py               # LLM configuration (Ollama)
-├── threads.py              # Thread/conversation management (SQLite)
-├── api_keys.py             # API key management (load/save/apply from JSON)
-├── api_keys.json           # Stored API keys (auto-generated, do not commit)
-├── processed_files.json    # Tracks which files have been indexed (auto-generated)
-├── threads.db              # SQLite database for thread metadata (auto-generated)
-├── vector_store/           # FAISS index files (auto-generated)
-│   ├── index.faiss
-│   └── index.pkl
+Thoth/                          # Source / installation directory
+├── app.py                      # Streamlit frontend — UI, chat, document upload
+├── rag.py                      # LangGraph RAG pipeline — nodes, edges, state
+├── documents.py                # Document loading, chunking, FAISS vector store
+├── models.py                   # LLM configuration (Ollama)
+├── threads.py                  # Thread/conversation management (SQLite)
+├── api_keys.py                 # API key management (load/save/apply from JSON)
 └── README.md
+
+~/.thoth/                       # User data directory (auto-created at runtime)
+├── api_keys.json               # Stored API keys
+├── processed_files.json        # Tracks which files have been indexed
+├── threads.db                  # SQLite database for thread metadata
+└── vector_store/               # FAISS index files
+    ├── index.faiss
+    └── index.pkl
 ```
+
+> **Data directory**: All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows). This keeps data separate from the app installation and avoids write-permission issues in protected directories like `C:\Program Files\`. Override the location by setting the `THOTH_DATA_DIR` environment variable.
 
 ### Module Descriptions
 
@@ -132,8 +136,8 @@ Thoth/
 | **`rag.py`** | Defines the LangGraph state machine with `SessionState`, retriever initialization, context compression, and answer generation. Also supports a CLI mode via `__main__`. |
 | **`documents.py`** | Manages document ingestion: loading (PDF/DOCX/TXT), text splitting, embedding with `Qwen/Qwen3-Embedding-0.6B`, FAISS storage, and processed file tracking. |
 | **`models.py`** | LLM model management — listing, downloading, and switching Ollama models at runtime. |
-| **`threads.py`** | SQLite-backed thread metadata (create, list, rename, delete) and LangGraph `SqliteSaver` checkpointer for persisting conversation state. |
-| **`api_keys.py`** | API key management — defines available keys, reads/writes `api_keys.json`, and applies keys as environment variables at startup. The Settings UI in `app.py` uses this module to let users add/edit keys. |
+| **`threads.py`** | SQLite-backed thread metadata (create, list, rename, delete) and LangGraph `SqliteSaver` checkpointer for persisting conversation state. Data stored in `~/.thoth/threads.db`. |
+| **`api_keys.py`** | API key management — defines available keys, reads/writes `~/.thoth/api_keys.json`, and applies keys as environment variables at startup. The Settings UI in `app.py` uses this module to let users add/edit keys. |
 
 ---
 
@@ -176,14 +180,16 @@ Thoth/
 
 5. **Configure API keys**
 
-   Launch the app and open **⚙️ Settings** in the sidebar. Enter your API keys (e.g. Tavily) in the **API Keys** section. Keys are saved to `api_keys.json` and loaded automatically on future runs.
+   Launch the app and open **⚙️ Settings** in the sidebar. Enter your API keys (e.g. Tavily) in the **API Keys** section. Keys are saved to `~/.thoth/api_keys.json` and loaded automatically on future runs.
 
-   > Alternatively, you can create `api_keys.json` manually:
+   > Alternatively, you can create `~/.thoth/api_keys.json` manually:
    > ```json
    > {
    >   "TAVILY_API_KEY": "your-tavily-api-key"
    > }
    > ```
+   >
+   > To use a custom data directory, set the `THOTH_DATA_DIR` environment variable before launching.
 
 6. **Ensure Ollama is running**
    ```bash

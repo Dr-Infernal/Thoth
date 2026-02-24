@@ -64,27 +64,35 @@ The output is placed in `dist\ThothSetup_1.0.0.exe`.
 On the end user's machine:
 
 ```
-C:\Program Files\Thoth\
-├── launch_thoth.bat        # Main launcher (Start Menu shortcut points here)
-├── get-pip.py              # Deleted after install
-├── install_deps.bat        # Deleted after install
-├── python\                 # Embedded Python runtime
+C:\Program Files\Thoth\            # Installation directory (read-only)
+├── launch_thoth.bat                # Main launcher
+├── launch_thoth.vbs                # Hidden-console wrapper (shortcuts point here)
+├── get-pip.py                      # Deleted after install
+├── install_deps.bat                # Deleted after install
+├── python\                         # Embedded Python runtime
 │   ├── python.exe
 │   ├── python313.dll
-│   ├── Lib\site-packages\  # All pip packages installed here
+│   ├── Lib\site-packages\          # All pip packages installed here
 │   └── ...
-└── app\                    # Your application code
+└── app\                            # Application source code
     ├── app.py
     ├── models.py
     ├── rag.py
     ├── documents.py
     ├── threads.py
     ├── api_keys.py
-    ├── requirements.txt
-    └── vector_store\
+    └── requirements.txt
+
+%USERPROFILE%\.thoth\               # User data directory (auto-created at runtime)
+├── api_keys.json                   # API keys (configured via Settings UI)
+├── processed_files.json            # Tracks indexed documents
+├── threads.db                      # Conversation thread metadata
+└── vector_store\                   # FAISS index files
 ```
 
 Ollama is installed system-wide via its official installer.
+
+> **Note:** User data is stored outside `Program Files` to avoid write-permission issues. The location can be overridden by setting the `THOTH_DATA_DIR` environment variable.
 
 ## End-User Experience
 
@@ -97,5 +105,6 @@ Ollama is installed system-wide via its official installer.
 
 - **CPU-only PyTorch**: The `requirements.txt` uses CPU-only torch to keep the installer smaller. Users with NVIDIA GPUs can manually upgrade to CUDA torch after installation.
 - **First launch**: The first run may take longer as the default LLM model (`qwen3:8b`) is downloaded by Ollama (~5 GB).
-- **API Keys**: Users configure API keys (e.g. Tavily) from the in-app **⚙️ Settings** panel. Keys are saved to `api_keys.json` in the app directory. No keys are hardcoded or bundled in the installer.
-- **Uninstall**: The installer registers with Windows Add/Remove Programs for clean uninstallation.
+- **API Keys**: Users configure API keys (e.g. Tavily) from the in-app **⚙️ Settings** panel. Keys are saved to `%USERPROFILE%\.thoth\api_keys.json`. No keys are hardcoded or bundled in the installer.
+- **User data**: All runtime data (threads, vector store, API keys, processed files list) is stored in `%USERPROFILE%\.thoth\`, keeping the installation directory read-only.
+- **Uninstall**: The installer registers with Windows Add/Remove Programs for clean uninstallation. The uninstaller removes the `.thoth` data directory as well.
