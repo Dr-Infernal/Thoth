@@ -43,6 +43,14 @@ if %ERRORLEVEL% NEQ 0 (
 :: Add Scripts dir to PATH so pip-installed commands are found
 set "PATH=%PYTHON_DIR%\Scripts;%PYTHON_DIR%;%PATH%"
 
+:: ── Install setuptools and wheel (needed to build some packages) ────────────
+echo Installing setuptools and wheel... >> "%LOG%" 2>&1
+"%PYTHON%" -m pip install --no-warn-script-location setuptools wheel >> "%LOG%" 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Failed to install setuptools/wheel. >> "%LOG%" 2>&1
+    exit /b 1
+)
+
 :: ── Install requirements ────────────────────────────────────────────────────
 echo Installing Python packages (this may take several minutes)... >> "%LOG%" 2>&1
 "%PYTHON%" -m pip install --no-warn-script-location -r "%APP_DIR%\requirements.txt" >> "%LOG%" 2>&1
