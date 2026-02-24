@@ -7,6 +7,7 @@ title Thoth - Starting...
 set "APP_DIR=%~dp0app"
 set "PYTHON_DIR=%~dp0python"
 set "PYTHON=%PYTHON_DIR%\python.exe"
+set "PATH=%PYTHON_DIR%\Scripts;%PYTHON_DIR%;%PATH%"
 
 :: ── Ensure Ollama is running ────────────────────────────────────────────────
 echo Checking Ollama service...

@@ -80,7 +80,7 @@ Filename: "{tmp}\OllamaSetup.exe";  Parameters: "/VERYSILENT /NORESTART"; \
 ; ── Install Python packages ──────────────────────────────────────────────────
 Filename: "{app}\install_deps.bat";  Parameters: """{app}"""; \
     StatusMsg: "Installing Python packages (this may take a few minutes)..."; \
-    Flags: waituntilterminated runhidden
+    Flags: waituntilterminated
 
 ; ── Launch app after install (optional) ──────────────────────────────────────
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; \
