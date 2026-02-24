@@ -25,5 +25,3 @@ if %ERRORLEVEL% NEQ 0 (
 echo Starting Thoth...
 cd /d "%APP_DIR%"
 "%PYTHON%" -m streamlit run app.py --server.headless true --browser.gatherUsageStats false
-
-pause

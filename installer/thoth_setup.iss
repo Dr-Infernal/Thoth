@@ -15,7 +15,7 @@
 #define MyAppVersion   "1.0.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/your-repo/thoth"
-#define MyAppExeName   "launch_thoth.bat"
+#define MyAppExeName   "launch_thoth.vbs"
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
@@ -65,12 +65,13 @@ Source: "build\OllamaSetup.exe";       DestDir: "{tmp}"; Flags: ignoreversion de
 
 ; ── Launcher & helper scripts ────────────────────────────────────────────────
 Source: "launch_thoth.bat";            DestDir: "{app}"; Flags: ignoreversion
+Source: "launch_thoth.vbs";            DestDir: "{app}"; Flags: ignoreversion
 Source: "install_deps.bat";            DestDir: "{app}"; Flags: ignoreversion deleteafterinstall
 
 [Icons]
-Name: "{group}\{#MyAppName}";                    Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app\thoth.ico"; Comment: "Launch Thoth"
+Name: "{group}\{#MyAppName}";                    Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\app\thoth.ico"; Comment: "Launch Thoth"
 Name: "{group}\Uninstall {#MyAppName}";           Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}";               Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app\thoth.ico"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}";               Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\app\thoth.ico"; Tasks: desktopicon
 
 [Run]
 ; ── Install Ollama (silent) ──────────────────────────────────────────────────
@@ -87,7 +88,7 @@ Filename: "{app}\install_deps.bat";  Parameters: """{app}"""; \
     Flags: waituntilterminated
 
 ; ── Launch app after install (optional) ──────────────────────────────────────
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; \
+Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; Description: "Launch {#MyAppName}"; \
     Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
