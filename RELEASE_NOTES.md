@@ -1,6 +1,25 @@
-# 𓁟 Thoth v1.0.0 — The Scribe Awakens
+# 𓁟 Thoth v1.1.0 — Sharpened Recall
 
 **Thoth** is a local-first, privacy-focused knowledge agent that combines Retrieval-Augmented Generation (RAG) with multi-source information retrieval. Ask questions, upload your own documents, and get cited answers — all powered by a locally-running LLM via [Ollama](https://ollama.com/).
+
+---
+
+## ✨ What's New in v1.1.0
+
+### RAG Pipeline Improvements
+
+- **Contextual compression retrieval** — each retriever is now wrapped with a `ContextualCompressionRetriever` + `LLMChainExtractor` that filters and extracts only query-relevant content per document, replacing the previous single-pass LLM compression of concatenated results
+- **Query rewriting** — follow-up questions with pronouns or references (e.g., "how are they related?") are automatically rewritten into standalone search queries using conversation history, so retrievers receive semantically complete queries
+- **Parallel retrieval** — all enabled retrieval sources are queried simultaneously via `ThreadPoolExecutor`, reducing total retrieval time from the sum of all sources to the time of the slowest one
+- **Context deduplication** — embedding-based cosine similarity deduplication at two levels:
+  - *Within-retrieval*: removes near-duplicate documents returned by different sources in the same query
+  - *Cross-turn*: prevents adding context that is too similar to already-accumulated context from previous turns
+- **Character-based context & message trimming** — context entries and message history are trimmed to fit within a character budget (1 token ≈ 4.5 characters), preventing context window overflow in long conversations
+- **Smarter context assessment** — `needs_context` now checks existing context relevance via fast embedding similarity before falling back to an LLM call, reducing unnecessary retrieval and LLM invocations
+
+### UI Improvements
+
+- **Auto-scroll** — the chat area now automatically scrolls to show new messages and the "Thinking…" spinner
 
 ---
 

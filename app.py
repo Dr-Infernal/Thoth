@@ -85,6 +85,32 @@ st.markdown(
 )
 
 
+# ── Auto-scroll helper ───────────────────────────────────────────────────────
+import streamlit.components.v1 as components
+
+def _scroll_to_bottom():
+    """Inject JS to scroll the chat area to the bottom."""
+    components.html(
+        """
+        <script>
+            function scrollChatToBottom() {
+                let el = window.frameElement;
+                while (el) {
+                    el = el.parentElement;
+                    if (el && el.scrollHeight > el.clientHeight + 10) {
+                        el.scrollTop = el.scrollHeight;
+                    }
+                }
+            }
+            scrollChatToBottom();
+            setTimeout(scrollChatToBottom, 200);
+            setTimeout(scrollChatToBottom, 800);
+        </script>
+        """,
+        height=1,
+    )
+
+
 # ── Helper: load chat history from checkpoint ───────────────────────────────
 def load_thread_messages(thread_id: str) -> list[dict]:
     """Return list of {'role': ..., 'content': ...} from the checkpointer."""
@@ -273,6 +299,9 @@ with chat_col:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
+        # Auto-scroll chat to bottom after messages render
+        _scroll_to_bottom()
+
         # Chat input
         if user_input := st.chat_input("Ask a question…"):
             # Show user message immediately
@@ -294,6 +323,7 @@ with chat_col:
             )
 
             with st.chat_message("assistant"):
+                _scroll_to_bottom()  # scroll so the spinner is visible
                 with st.spinner("Thinking…"):
                     result = rag_graph_compiled.invoke(
                         {

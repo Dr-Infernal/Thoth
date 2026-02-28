@@ -10,3 +10,6 @@ api_keys.json
 # Installer build artifacts
 installer/build/
 dist/
+
+# Backups
+*.bak*    

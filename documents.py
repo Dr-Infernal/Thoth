@@ -63,8 +63,8 @@ class DocumentLoader(object):
 
 text_splitter = RecursiveCharacterTextSplitter(
     separators = ["\n\n", "\n", " ", ""],
-    chunk_size = 4000,
-    chunk_overlap = 200
+    chunk_size = 1500,
+    chunk_overlap = 150
 )
 
 embedding_model = HuggingFaceEmbeddings(

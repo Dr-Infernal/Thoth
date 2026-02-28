@@ -31,7 +31,14 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Extensible** — add new keys by editing the `API_KEY_DEFINITIONS` dict in `api_keys.py`
 
 ### Intelligent Context Retrieval
-- **Smart context assessment** — an LLM-powered node decides whether additional context is needed before searching
+- **Smart context assessment** — an embedding similarity check first determines if existing context already covers the question; only falls back to an LLM judgment call for ambiguous cases
+- **Contextual compression retrieval** — each retriever is wrapped with a `ContextualCompressionRetriever` + `LLMChainExtractor` that filters and extracts only query-relevant content per document before it enters the context
+- **Query rewriting** — follow-up questions with pronouns or references (e.g., "how are they related?") are automatically rewritten into standalone search queries using conversation history, so retrievers receive semantically complete queries
+- **Parallel retrieval** — all enabled retrieval sources are queried simultaneously via `ThreadPoolExecutor`, reducing total retrieval time from the sum of all sources to the duration of the slowest one
+- **Context deduplication** — embedding-based cosine similarity deduplication operates at two levels:
+  - *Within-retrieval*: removes near-duplicate documents returned by different sources in the same query
+  - *Cross-turn*: prevents adding context that is too similar to already-accumulated context from previous turns
+- **Character-based context & message trimming** — context entries and message history are trimmed to fit within a character budget (1 token ≈ 4.5 characters), keeping the most recent entries and preventing context window overflow in long conversations
 - **Accumulated context** — context from multiple queries within a thread builds up rather than being replaced
 - **Configurable retrieval sources** — toggle each retrieval backend on/off from the Settings panel:
   | Source | Description |
@@ -40,7 +47,6 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
   | **🌐 Wikipedia** | Real-time Wikipedia article retrieval |
   | **📚 Arxiv** | Academic paper search via the Arxiv API |
   | **🔍 Web Search** | Live web search via the Tavily Search API |
-- **Context compression** — retrieved content is compressed by the LLM to keep only relevant information while preserving source citations
 
 ### Document Management
 - **Upload & index** PDF, DOCX, DOC, and TXT files
@@ -97,9 +103,9 @@ Every piece of information in an answer is cited:
 
 The RAG pipeline is implemented as a LangGraph `StateGraph` with three nodes:
 
-1. **`needs_context`** — Asks the LLM whether the current question can be answered with existing accumulated context or if new retrieval is needed. Returns `Yes`/`No`.
-2. **`get_context`** — Queries all four retrieval backends in parallel, combines the results, and uses the LLM to compress the context down to only relevant information (preserving source citations).
-3. **`generate_answer`** — Formats the system prompt, accumulated context, and user question into a final prompt and generates the answer with citations.
+1. **`needs_context`** — First checks if existing accumulated context is already relevant to the current question using embedding cosine similarity (fast, no LLM call). If no existing context is relevant, falls back to an LLM judgment call. Returns `Yes`/`No`.
+2. **`get_context`** — Rewrites the user's question into a standalone search query (resolving pronouns/references from conversation history), then queries all enabled retrieval backends in parallel via `ThreadPoolExecutor`. Each retriever is wrapped with a `ContextualCompressionRetriever` that extracts only query-relevant content per document. Results are deduplicated within the retrieval batch and against existing accumulated context using embedding cosine similarity.
+3. **`generate_answer`** — Trims accumulated context and message history to fit within the model's character budget, then formats the system prompt, context, and question into a final prompt and generates the answer with citations.
 
 A conditional edge routes from `needs_context` to either `get_context` or directly to `generate_answer`.
 
@@ -224,16 +230,19 @@ This starts an interactive terminal session where you can select/create threads 
 ## How It Works
 
 1. **User asks a question** in the chat interface.
-2. The **`needs_context` node** evaluates whether the accumulated context from previous turns is sufficient or if new retrieval is needed.
-3. If new context is needed, the **`get_context` node** queries the enabled sources (configurable via Settings):
-   - FAISS vector store (uploaded documents)
-   - Wikipedia API
-   - Arxiv API
-   - Tavily web search
-4. Retrieved content is **compressed** by the LLM to remove irrelevant information while preserving source citations.
-5. The compressed context is **appended** to the existing context (not replaced).
-6. The **`generate_answer` node** combines the system prompt, all accumulated context, and the question to produce a cited answer.
-7. The full conversation state is **checkpointed** in SQLite, enabling thread persistence across sessions.
+2. The **`needs_context` node** first checks if existing context is relevant to the question via embedding similarity. If no relevant context exists, it falls back to an LLM call to decide whether new retrieval is needed.
+3. If new context is needed, the **`get_context` node**:
+   - **Rewrites** the question into a standalone query using conversation history (resolving pronouns like "they", "it", etc.)
+   - Queries the enabled sources **in parallel** via `ThreadPoolExecutor`:
+     - FAISS vector store (uploaded documents)
+     - Wikipedia API
+     - Arxiv API
+     - Tavily web search
+   - Each source uses a **`ContextualCompressionRetriever`** to extract only relevant content per document
+   - Results are **deduplicated** within the batch and against existing accumulated context
+4. New context is **appended** to the existing context (not replaced), subject to character-budget trimming.
+5. The **`generate_answer` node** trims context and messages to fit within the model's character budget, then combines the system prompt, context, and question to produce a cited answer.
+6. The full conversation state is **checkpointed** in SQLite, enabling thread persistence across sessions.
 
 ---
 
