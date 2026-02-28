@@ -12,7 +12,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "1.0.0"
+#define MyAppVersion   "1.1.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/your-repo/thoth"
 #define MyAppExeName   "launch_thoth.vbs"

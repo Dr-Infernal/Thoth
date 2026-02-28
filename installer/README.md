@@ -47,7 +47,7 @@ This will:
 3. Download the Ollama installer
 4. Compile everything into a single installer EXE
 
-The output is placed in `dist\ThothSetup_1.0.0.exe`.
+The output is placed in `dist\ThothSetup_1.1.0.exe`.
 
 ### Options
 
@@ -96,7 +96,7 @@ Ollama is installed system-wide via its official installer.
 
 ## End-User Experience
 
-1. Run `ThothSetup_1.0.0.exe`
+1. Run `ThothSetup_1.1.0.exe`
 2. Follow the wizard (installs Ollama + Python packages automatically)
 3. Launch Thoth from Start Menu or Desktop shortcut
 4. The app opens in the default browser at `http://localhost:8501`

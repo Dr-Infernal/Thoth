@@ -110,7 +110,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Green
     Write-Host " Installer built successfully!"               -ForegroundColor Green
-    Write-Host " Output: dist\ThothSetup_1.0.0.exe"           -ForegroundColor Green
+    Write-Host " Output: dist\ThothSetup_1.1.0.exe"           -ForegroundColor Green
     Write-Host "============================================" -ForegroundColor Green
 } else {
     Write-Host ""
