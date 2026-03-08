@@ -5,6 +5,9 @@ from langchain_classic.retrievers.document_compressors import LLMChainExtractor
 from langchain_core.messages import trim_messages, ToolMessage
 from langgraph.types import interrupt, Command
 from threads import pick_or_create_thread, checkpointer
+import logging
+
+logger = logging.getLogger(__name__)
 
 apply_keys()
 
