@@ -38,8 +38,10 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Persistent personal knowledge** — the agent remembers names, birthdays, preferences, projects, and more across conversations
 - **6 categories** — `person`, `preference`, `fact`, `event`, `place`, `project`
 - **Agent-driven** — the agent autonomously decides when to save, search, update, or delete memories based on conversation context
-- **Keyword search** — search across subjects, content, and tags
-- **Local SQLite storage** — memories stored in `~/.thoth/memory.db`, never sent to the cloud
+- **Semantic search** — FAISS vector index with Qwen3-Embedding-0.6B for similarity-based memory retrieval (replaces keyword search)
+- **Auto-recall** — relevant memories are automatically retrieved and injected into context before every LLM call based on semantic similarity to the current message
+- **Background extraction** — on startup and every 6 hours, past conversations are scanned by the LLM to extract personal facts and save them as memories with semantic deduplication
+- **Local SQLite + FAISS storage** — memories stored in `~/.thoth/memory.db` with vector index in `~/.thoth/memory_vectors/`, never sent to the cloud
 - **Settings UI** — browse, search, and bulk-delete memories from the Memory tab in Settings
 
 ### 🧠 Brain Model
@@ -57,14 +59,14 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Inline image display** — captured images are shown inline in the chat
 
 ### 🎤 Voice Input & 🔊 Text-to-Speech
-- **Wake word detection** — hands-free activation with "Hey Jarvis" or "Hey Mycroft" via OpenWakeWord (ONNX models)
-- **Local speech-to-text** — transcription via faster-whisper (tiny/base/small models), no cloud APIs
-- **Configurable sensitivity** — adjustable wake word threshold slider
+- **Toggle-based voice** — simple manual toggle to start/stop listening, no wake word needed
+- **4-state pipeline** — stopped → listening → transcribing → muted, with clean state transitions
+- **Local speech-to-text** — transcription via faster-whisper (tiny/base/small/medium models), CPU-only int8 quantization, no cloud APIs
+- **Voice-aware responses** — voice input is tagged so the agent knows you're speaking and responds conversationally
 - **Neural TTS** — high-quality text-to-speech via Piper TTS, fully offline
 - **8 voice options** — US and British English, male and female variants
 - **Streaming TTS** — responses are spoken sentence-by-sentence as they stream in
 - **Mic gating** — microphone is automatically muted during TTS playback to prevent echo and feedback loops
-- **Follow-up mode** — after TTS finishes, the mic re-opens for a brief window so you can ask follow-up questions without re-triggering the wake word
 - **Hands-free mode** — combine voice input + TTS for a fully conversational experience
 - **System tray launcher** — `launcher.py` runs a system tray icon that reflects voice state (green = listening, yellow = processing, grey = off)
 
@@ -155,15 +157,16 @@ Thoth's agent has access to 19 tools that expose 42 individual operations to the
 | **`app.py`** | Streamlit UI — chat interface, sidebar thread manager with live token counter, Settings dialog (9 tabs), file attachment handling, streaming event loop with error recovery, export, voice bar, custom CSS |
 | **`agent.py`** | LangGraph ReAct agent — system prompt, pre-model context trimming with proportional tool-output shrinking, streaming event generator, interrupt handling for destructive actions, live token usage reporting, contextual compression |
 | **`threads.py`** | SQLite-backed thread metadata and `SqliteSaver` checkpointer for persisting LangGraph conversation state |
-| **`memory.py`** | SQLite CRUD layer for long-term memories — save, search, list, update, delete, count across 6 categories |
+| **`memory.py`** | Long-term memory with SQLite CRUD and FAISS semantic vector search — save, search, list, update, delete, count across 6 categories; auto-rebuilds vector index on mutations |
 | **`models.py`** | Ollama model management — listing, downloading, switching models, context size configuration |
 | **`documents.py`** | Document ingestion — PDF/DOCX/TXT loading, chunking, FAISS embedding and storage |
-| **`voice.py`** | Local STT pipeline — OpenWakeWord detection → VAD silence detection → faster-whisper transcription |
+| **`voice.py`** | Local STT pipeline — toggle-based 4-state machine (stopped/listening/transcribing/muted) with faster-whisper CPU-only int8 transcription |
 | **`tts.py`** | Piper TTS integration — auto-downloads engine + voices, streaming sentence-by-sentence playback |
 | **`vision.py`** | Camera/screen capture via OpenCV/MSS, image analysis via Ollama vision models |
 | **`data_reader.py`** | Shared pandas-based reader for CSV, TSV, Excel, JSON, JSONL — returns schema + stats + preview rows |
 | **`launcher.py`** | System tray launcher via pystray — manages Streamlit subprocess, reflects voice state |
 | **`api_keys.py`** | API key management — load/save/apply from `~/.thoth/api_keys.json` |
+| **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts personal facts, deduplicates against existing memories (cosine > 0.85), runs on startup + every 6 hours |
 | **`tools/`** | 19 self-registering tool modules + base class + registry |
 
 ### Data Storage
@@ -174,6 +177,8 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ~/.thoth/
 ├── threads.db              # Conversation history & LangGraph checkpoints
 ├── memory.db               # Long-term memories
+├── memory_vectors/         # FAISS vector index for semantic memory search
+├── memory_extraction_state.json  # Tracks last extraction run timestamp
 ├── api_keys.json           # API keys (Tavily, Wolfram, etc.)
 ├── tools_config.json       # Tool enable/disable state & config
 ├── model_settings.json     # Selected model & context size
@@ -294,4 +299,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgements
 
-Built with [Streamlit](https://streamlit.io/), [LangGraph](https://langchain-ai.github.io/langgraph/), [LangChain](https://python.langchain.com/), [Ollama](https://ollama.com/), [FAISS](https://github.com/facebookresearch/faiss), [Piper TTS](https://github.com/rhasspy/piper), [OpenWakeWord](https://github.com/dscripka/openWakeWord), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and [HuggingFace](https://huggingface.co/).
+Built with [Streamlit](https://streamlit.io/), [LangGraph](https://langchain-ai.github.io/langgraph/), [LangChain](https://python.langchain.com/), [Ollama](https://ollama.com/), [FAISS](https://github.com/facebookresearch/faiss), [Piper TTS](https://github.com/rhasspy/piper), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and [HuggingFace](https://huggingface.co/).

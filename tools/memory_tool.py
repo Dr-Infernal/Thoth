@@ -88,9 +88,11 @@ def _save_memory(category: str, subject: str, content: str, tags: str = "") -> s
 
 
 def _search_memory(query: str, category: str = "") -> str:
-    """Search memories by keyword."""
-    cat = category if category else None
-    results = memory_db.search_memories(query, category=cat)
+    """Search memories semantically."""
+    results = memory_db.semantic_search(query, top_k=10, threshold=0.3)
+    if category:
+        cat = category.lower().strip()
+        results = [m for m in results if m["category"] == cat]
     if not results:
         return "No memories found matching that query."
     entries = []
@@ -101,6 +103,7 @@ def _search_memory(query: str, category: str = "") -> str:
             "subject": m["subject"],
             "content": m["content"],
             "tags": m["tags"],
+            "relevance": m.get("score", ""),
             "updated": m["updated_at"][:16],
         })
     return json.dumps(entries, indent=2)
@@ -194,9 +197,10 @@ class MemoryTool(BaseTool):
                 func=_search_memory,
                 name="search_memory",
                 description=(
-                    "Search stored memories by keyword. Use to recall what you know "
-                    "about a person, topic, or preference before answering questions "
-                    "about them. Returns matching memories with IDs."
+                    "Search stored memories using semantic similarity. Use to "
+                    "find specific memories about a person, topic, or preference. "
+                    "Relevant memories are also auto-recalled each turn, but "
+                    "this tool lets you do a deeper or more focused search."
                 ),
                 args_schema=_SearchMemoryInput,
             ),

@@ -1,6 +1,6 @@
 # Building the Thoth Windows Installer
 
-This guide explains how to build a distributable Windows installer for Thoth v2.0.
+This guide explains how to build a distributable Windows installer for Thoth v2.1.
 
 ## Architecture
 
@@ -10,7 +10,6 @@ The installer is **lightweight** (~20 MB) — it bundles only the embedded Pytho
 |----------------|---------------------------|
 | Python 3.13 embeddable (~15 MB) | Ollama (~120 MB) |
 | App source code + tools (~200 KB) | Python packages via pip (~2 GB) |
-| Wake word ONNX models (~5 MB) | |
 | get-pip.py (~2.5 MB) | |
 
 ## Prerequisites
@@ -34,7 +33,7 @@ The installer is **lightweight** (~20 MB) — it bundles only the embedded Pytho
 This will:
 1. Download Python 3.13 embeddable package (~15 MB)
 2. Download `get-pip.py` (~2.5 MB)
-3. Compile everything into `dist\ThothSetup_2.0.0.exe`
+3. Compile everything into `dist\ThothSetup_2.1.0.exe`
 
 ### Options
 
@@ -62,32 +61,31 @@ C:\Program Files\Thoth\            # Installation directory
 └── app\                            # Application source code
     ├── app.py                      # Streamlit frontend
     ├── agent.py                    # ReAct agent
-    ├── memory.py                   # Long-term memory DB
+    ├── memory.py                   # Long-term memory DB + FAISS vector search
+    ├── memory_extraction.py        # Background memory extraction from conversations
     ├── models.py                   # Ollama model management
     ├── documents.py                # Document ingestion
     ├── threads.py                  # Thread/conversation persistence
     ├── api_keys.py                 # API key management
-    ├── voice.py                    # Speech-to-text pipeline
+    ├── voice.py                    # Speech-to-text (toggle-based, CPU Whisper)
     ├── tts.py                      # Text-to-speech (Piper TTS)
     ├── vision.py                   # Camera/screen capture
     ├── launcher.py                 # System tray launcher
     ├── requirements.txt
     ├── thoth.ico
-    ├── tools/                      # 16 tool modules
+    ├── tools/                      # 19 tool modules
     │   ├── __init__.py
     │   ├── base.py
     │   ├── registry.py
     │   ├── web_search_tool.py
     │   ├── ...
     │   └── youtube_tool.py
-    └── wake_models/                # Wake word ONNX models
-        ├── hey_jarvis_v0.1.onnx
-        ├── hey_mycroft_v0.1.onnx
-        └── ...
 
 %USERPROFILE%\.thoth\               # User data directory (auto-created at runtime)
 ├── threads.db                      # Conversation history & checkpoints
 ├── memory.db                       # Long-term memories
+├── memory_vectors/                 # FAISS index for semantic memory search
+├── memory_extraction_state.json    # Tracks last extraction run
 ├── api_keys.json                   # API keys
 ├── tools_config.json               # Tool enable/disable state
 ├── model_settings.json             # Selected model & context size
@@ -107,7 +105,7 @@ Ollama is installed system-wide via its official installer.
 
 The Inno Setup installer runs these steps:
 
-1. **Extract files** — embedded Python, app source, wake models, scripts
+1. **Extract files** — embedded Python, app source, scripts
 2. **Run `install_deps.bat`** which:
    - Patches the Python `._pth` file to enable pip and site-packages
    - Installs pip via `get-pip.py`
@@ -119,7 +117,7 @@ The Inno Setup installer runs these steps:
 
 ## End-User Experience
 
-1. Run `ThothSetup_2.0.0.exe`
+1. Run `ThothSetup_2.1.0.exe`
 2. Follow the wizard — dependencies download and install automatically (5-15 min)
 3. Launch Thoth from Start Menu or Desktop shortcut
 4. The system tray icon appears; the app opens at `http://localhost:8501`

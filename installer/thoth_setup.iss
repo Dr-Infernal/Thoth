@@ -1,5 +1,5 @@
 ; =============================================================================
-; Thoth v2.0.0 – Inno Setup Script
+; Thoth v2.1.0 – Inno Setup Script
 ; Lightweight installer: bundles embedded Python + app source code.
 ; Downloads Ollama and Python packages at install time.
 ; =============================================================================
@@ -11,7 +11,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "2.0.0"
+#define MyAppVersion   "2.1.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -45,6 +45,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\app.py";                   DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\agent.py";                 DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\memory.py";                DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\memory_extraction.py";     DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\models.py";                DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\data_reader.py";            DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\documents.py";             DestDir: "{app}\app"; Flags: ignoreversion
@@ -80,9 +81,6 @@ Source: "..\tools\web_search_tool.py"; DestDir: "{app}\app\tools"; Flags: ignore
 Source: "..\tools\wikipedia_tool.py";  DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\wolfram_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\youtube_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
-
-; ── Wake word models ─────────────────────────────────────────────────────────
-Source: "..\wake_models\*.onnx";       DestDir: "{app}\app\wake_models"; Flags: ignoreversion
 
 ; ── Embedded Python ──────────────────────────────────────────────────────────
 Source: "build\python\*";              DestDir: "{app}\python"; Flags: ignoreversion recursesubdirs createallsubdirs

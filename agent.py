@@ -111,6 +111,48 @@ def _pre_model_trim(state: dict) -> dict:
             break
     trimmed.insert(insert_idx, time_msg)
 
+    # ── Auto-recall: inject relevant memories before the last user msg ───
+    # Embed the latest human message and pull the top-5 most relevant
+    # memories from the FAISS index.  This ensures the model always has
+    # personal context without needing to call search_memory explicitly.
+    try:
+        last_human_text = None
+        last_human_idx = None
+        for i in range(len(trimmed) - 1, -1, -1):
+            if trimmed[i].type == "human":
+                last_human_text = trimmed[i].content
+                last_human_idx = i
+                break
+
+        if last_human_text and last_human_idx is not None:
+            from memory import semantic_search as _mem_search, count_memories
+
+            if count_memories() > 0:
+                # Use first 500 chars of user message for embedding
+                query = last_human_text[:500] if isinstance(last_human_text, str) else str(last_human_text)[:500]
+                memories = _mem_search(query, top_k=5, threshold=0.35)
+                if memories:
+                    lines = []
+                    for m in memories:
+                        lines.append(
+                            f"- [{m['category']}] {m['subject']}: {m['content']}"
+                            + (f" (tags: {m['tags']})" if m.get("tags") else "")
+                        )
+                    recall_msg = SystemMessage(
+                        content=(
+                            "You KNOW the following facts about this user "
+                            "(from your long-term memory):\n"
+                            + "\n".join(lines)
+                            + "\n\nTreat these as things you already know. "
+                            "Use them to answer the user's question directly — "
+                            "do NOT say you don't know or search for this info. "
+                            "Do not mention that these were recalled from memory."
+                        )
+                    )
+                    trimmed.insert(last_human_idx, recall_msg)
+    except Exception as exc:
+        logger.debug("Auto-recall failed (non-fatal): %s", exc)
+
     return {"llm_input_messages": trimmed}
 
 AGENT_SYSTEM_PROMPT = (
@@ -166,8 +208,13 @@ AGENT_SYSTEM_PROMPT = (
     "- When the user tells you something worth remembering (e.g. 'My mom's name is\n"
     "  Sarah', 'I prefer dark mode', 'My project deadline is June 1'), save it\n"
     "  using save_memory with an appropriate category.\n"
-    "- When the user asks about something you might have stored (e.g. 'What's my\n"
-    "  mom's name?', 'What do you know about me?'), use search_memory first.\n"
+    "- IMPORTANT: If the user casually mentions personal information (moving,\n"
+    "  birthdays, names, preferences, pets, relationships) alongside another\n"
+    "  request, you MUST save that info AND handle their request. Do both.\n"
+    "- Relevant memories are automatically recalled and shown to you before each\n"
+    "  response.  Use them to answer directly — do not say 'I don't know' when\n"
+    "  the information is in your recalled memories.  If you need a deeper or\n"
+    "  more focused search, use search_memory.\n"
     "- Categories: person (people and relationships), preference (likes/dislikes/\n"
     "  settings), fact (general knowledge about the user), event (dates/deadlines/\n"
     "  appointments), place (locations/addresses), project (work/hobby projects).\n"

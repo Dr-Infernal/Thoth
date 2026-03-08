@@ -55,28 +55,48 @@ VOICE_CATALOG: dict[str, str] = {
 _DEFAULT_VOICE = "en_US-lessac-medium"
 
 # ── Markdown / noise stripping patterns ──────────────────────────────────────
+# Order matters: links/code first, then blocks, then line-level (bullets
+# BEFORE emphasis so `* ` bullets aren't eaten by the *italic* regex),
+# then emphasis (triple before double before single), then cleanup.
 _MD_STRIP: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"```[\s\S]*?```"),                  ""),       # code blocks
-    (re.compile(r"`([^`]+)`"),                       r"\1"),    # inline code → text
-    (re.compile(r"!\[.*?\]\(.*?\)"),                 ""),       # images
-    (re.compile(r"\[([^\]]+)\]\([^\)]+\)"),          r"\1"),    # [text](url) → text
-    (re.compile(r"https?://\S+"),                    ""),       # raw URLs
-    (re.compile(r"\S+@\S+\.\S+"),                    ""),       # emails
-    (re.compile(r"^#{1,6}\s+", re.MULTILINE),        ""),       # headers
-    (re.compile(r"\*\*([^*]+)\*\*"),                 r"\1"),    # bold
-    (re.compile(r"__([^_]+)__"),                     r"\1"),    # bold alt
-    (re.compile(r"(?<!\*)\*(?!\*)([^*]+)\*(?!\*)"),  r"\1"),    # italic
-    (re.compile(r"(?<!_)_(?!_)([^_]+)_(?!_)"),       r"\1"),    # italic alt
-    (re.compile(r"^\s*[-*+]\s+", re.MULTILINE),      ""),       # bullets
-    (re.compile(r"^\s*\d+\.\s+", re.MULTILINE),      ""),       # numbered lists
-    (re.compile(r"^\|.*\|$", re.MULTILINE),           ""),       # tables
-    (re.compile(r"^[-=]{3,}$", re.MULTILINE),         ""),       # hr
-    (re.compile(r"^>\s?", re.MULTILINE),              ""),       # blockquotes
-    # Emoji ranges
+    # ── Inline formatting (keep inner text) ──────────────────────────
+    (re.compile(r"`([^`]+)`"),                         r"\1"),    # inline code → text
+    (re.compile(r"\[([^\]]+)\]\([^\)]*\)"),            r"\1"),    # [text](url) → text
+
+    # ── Blocks (remove entirely) ─────────────────────────────────────
+    (re.compile(r"```[\s\S]*?```"),                   ""),       # fenced code blocks
+    (re.compile(r"^\|.*\|$", re.MULTILINE),           ""),       # table rows
+    (re.compile(r"^[-=]{3,}$", re.MULTILINE),         ""),       # horizontal rules
+    (re.compile(r"!\[.*?\]\(.*?\)"),                   ""),       # images
+    (re.compile(r"https?://\S+"),                      ""),       # raw URLs
+    (re.compile(r"\S+@\S+\.\S+"),                      ""),       # email addresses
+
+    # ── Line-level (must run BEFORE emphasis) ────────────────────────
+    (re.compile(r"^#{1,6}\s+", re.MULTILINE),          ""),       # headers
+    (re.compile(r"^>\s?", re.MULTILINE),               ""),       # blockquotes
+    (re.compile(r"^\s*[-*+•◦▪▸●○⬤◉⚫]\s+", re.MULTILINE), ""),  # bullet lists
+    (re.compile(r"^\s*\d+[.)]\s+", re.MULTILINE),      ""),       # numbered lists
+
+    # ── Emphasis (triple before double before single) ────────────────
+    (re.compile(r"\*{3}(.+?)\*{3}", re.DOTALL),       r"\1"),    # ***bold italic***
+    (re.compile(r"_{3}(.+?)_{3}", re.DOTALL),          r"\1"),    # ___bold italic___
+    (re.compile(r"\*{2}(.+?)\*{2}", re.DOTALL),       r"\1"),    # **bold**
+    (re.compile(r"_{2}(.+?)_{2}", re.DOTALL),          r"\1"),    # __bold__
+    (re.compile(r"(?<!\*)\*(?!\*)(.+?)\*(?!\*)", re.DOTALL), r"\1"),  # *italic*
+    (re.compile(r"~~(.+?)~~", re.DOTALL),              r"\1"),    # ~~strikethrough~~
+
+    # ── Emoji ────────────────────────────────────────────────────────
     (re.compile(
         r"[\U0001f000-\U0001ffff\u2600-\u27bf\ufe00-\ufe0f\u200d]"
     ), ""),
-    (re.compile(r"\n{3,}"),                           "\n\n"),   # excess newlines
+
+    # ── Final cleanup sweeps ─────────────────────────────────────────
+    (re.compile(r"[•◦▪▸▹►▻●○⬤◉⚫·∙⋅]"),             ""),       # ALL dot/bullet chars
+    (re.compile(r"[–—]"),                              " "),      # en/em dashes → space
+    (re.compile(r"\*{2,}"),                            ""),       # leftover ** or ***
+    (re.compile(r"(?<!\w)\*(?!\w)"),                   ""),       # stray lone *
+    (re.compile(r"\n{3,}"),                            "\n\n"),   # excess newlines
+    (re.compile(r"[ \t]{2,}"),                         " "),      # excess whitespace
 ]
 
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
@@ -94,7 +114,7 @@ class TTSService:
 
     Mic gating: when a ``voice_service`` is attached, this service will
     call ``voice_service.mute()`` before speaking and
-    ``voice_service.enter_follow_up()`` when finished, preventing echo
+    ``voice_service.unmute()`` when finished, preventing echo
     feedback loops.
     """
 
@@ -133,9 +153,9 @@ class TTSService:
             self._voice_service.mute()
 
     def _unmute_mic(self) -> None:
-        """Tell the voice service to enter follow-up mode."""
+        """Tell the voice service to resume listening."""
         if self._voice_service and self._voice_service.is_running:
-            self._voice_service.enter_follow_up()
+            self._voice_service.unmute()
 
     # ── Properties ───────────────────────────────────────────────────────
 
@@ -279,10 +299,10 @@ class TTSService:
     def _stream_worker_loop(self) -> None:
         """Background worker: pick sentences from the queue and play them.
 
-        Only enters follow-up mode (unmutes mic) when the stream ends
-        naturally via the end-of-stream sentinel from ``flush_streaming``.
-        If ``stop()`` kills this worker (sets ``_stop_event``), the mic
-        stays muted so the caller can decide what to do next.
+        When the stream ends naturally via the end-of-stream sentinel from
+        ``flush_streaming``, the mic is unmuted.  If ``stop()`` kills this
+        worker (sets ``_stop_event``), the mic stays muted so the caller
+        can decide what to do next.
         """
         import tempfile
         counter = 0

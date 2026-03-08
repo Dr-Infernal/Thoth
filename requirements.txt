@@ -64,7 +64,6 @@ plotly
 # ── Voice Input (STT) ───────────────────────────────────────────────────────
 sounddevice
 faster-whisper
-openwakeword
 
 # ── System Tray / Launcher ──────────────────────────────────────────────────
 pystray

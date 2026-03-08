@@ -2,6 +2,94 @@
 
 ---
 
+## v2.1.0 — Semantic Memory & Voice Simplification
+
+A major upgrade to the memory system and a complete simplification of the voice pipeline.
+
+---
+
+### 🧠 Semantic Memory System
+
+The memory system has been upgraded from keyword-based search to full **FAISS semantic vector search** with automatic recall and background extraction.
+
+#### Semantic Search
+- **FAISS vector index** — memories are now embedded with `Qwen3-Embedding-0.6B` and stored in a FAISS index at `~/.thoth/memory_vectors/`
+- **Cosine similarity search** — `semantic_search()` replaces the old keyword `LIKE` queries for much better recall on indirect/paraphrased queries
+- **Auto-rebuild** — the FAISS index automatically rebuilds on any memory mutation (save, update, delete)
+
+#### Auto-Recall
+- **Automatic memory injection** — before every LLM call, the current user message is embedded and the top-5 most relevant memories (threshold ≥ 0.35) are injected as a system message
+- **Assertive phrasing** — recalled memories are presented as "You KNOW the following facts about this user" so the model treats them as ground truth
+- **System prompt reinforcement** — the agent is explicitly instructed to save buried personal info alongside other requests
+
+#### Background Memory Extraction
+- **LLM-powered extraction** — on startup and every 6 hours, past conversations are scanned by the LLM to extract personal facts (names, preferences, projects, etc.)
+- **Semantic deduplication** — extracted facts are compared against existing memories using cosine similarity; duplicates (> 0.85) update existing entries, novel facts create new ones
+- **Incremental scanning** — only conversations updated since the last extraction run are processed
+- **State persistence** — extraction timestamps tracked in `~/.thoth/memory_extraction_state.json`
+- **New module** — `memory_extraction.py` added to the codebase
+
+### 🎤 Voice Pipeline Simplification
+
+The voice pipeline has been completely rewritten for reliability and simplicity.
+
+#### What Changed
+- **Removed wake word detection** — no more OpenWakeWord, ONNX models, or "Hey Jarvis"/"Hey Mycroft" activation
+- **Removed `wake_models/` directory** — deleted all bundled ONNX wake word model files
+- **Removed auto-timeout and heartbeat** — no more inactivity timer or browser heartbeat polling
+- **Removed follow-up mode** — no more timed mic re-open window after TTS playback
+- **Removed tool call announcements** — TTS no longer speaks tool names aloud during execution
+
+#### New Design
+- **Toggle-based activation** — simple manual toggle to start/stop listening
+- **4-state machine** — clean state transitions: `stopped` → `listening` → `transcribing` → `muted`
+- **CPU-only Whisper** — faster-whisper runs exclusively on CPU with int8 quantization for consistent performance
+- **Medium model support** — added `medium` to the Whisper model size options (tiny/base/small/medium)
+- **Voice-aware responses** — voice input is tagged with a system hint so the agent responds conversationally
+- **Status safety net** — auto-unmutes when TTS finishes but pipeline state is stuck on "muted"
+
+### 🔊 TTS Markdown-to-Speech Improvements
+
+The `_MD_STRIP` regex pipeline in `tts.py` has been overhauled for cleaner speech output:
+- Fixed bold/italic/strikethrough pattern ordering (triple before double before single)
+- Added black circle, middle dot, and additional bullet character stripping
+- Added numbered list prefix stripping (both `1.` and `1)` styles)
+- Moved bullet stripping before emphasis patterns to prevent partial matches
+- Removed broken `_italic_` pattern
+
+### 🚀 Startup UX Revamp
+
+- **Live progress steps** — replaced generic "Loading models…" spinner with `st.status` widget showing each initialization step (core modules, documents, models, API keys, voice/TTS, vision, memory extraction)
+- **No flicker on reruns** — startup UI only shows on first run; thread switches and page reruns skip it entirely via session state gate
+- **Clean banner removal** — startup status wrapped in `st.empty()` placeholder for clean removal after load
+
+### 🧹 Cleanup
+
+- **Deleted `wake_models/` directory** — removed all bundled ONNX wake word model files (alexa, hey_jarvis, hey_mycroft, hey_thought)
+- **Cleaned installer references** — removed wake_models from `installer/thoth_setup.iss` and `installer/README.md`
+- **Removed OpenWakeWord dependency** — no longer referenced in codebase or acknowledgements
+
+### 📦 Data Storage Updates
+
+Two new entries in `~/.thoth/`:
+- `memory_vectors/` — FAISS index (`index.faiss`) and ID mapping (`id_map.json`) for semantic memory search
+- `memory_extraction_state.json` — tracks last extraction run timestamp per thread
+
+### 🧹 Codebase Changes
+
+- **Added**: `memory_extraction.py` (background extraction + dedup + periodic timer)
+- **Updated**: `memory.py` (FAISS vector index, `semantic_search()`, `_rebuild_memory_index()`, shared embedding model)
+- **Updated**: `agent.py` (auto-recall injection in `_pre_model_trim`, updated system prompt for memory awareness)
+- **Updated**: `voice.py` (complete rewrite — 4-state toggle machine, CPU-only int8 Whisper, no wake word)
+- **Updated**: `tts.py` (overhauled `_MD_STRIP` patterns, removed tool call announcements)
+- **Updated**: `app.py` (startup UX revamp, memory extraction integration, voice simplification)
+- **Updated**: `tools/memory_tool.py` (`search_memory` now uses `semantic_search()`)
+- **Updated**: `installer/thoth_setup.iss` (removed wake_models references)
+- **Updated**: `installer/README.md` (removed wake_models from bundled files)
+- **Deleted**: `wake_models/` directory (4 ONNX files)
+
+---
+
 ## v2.0.0 — ReAct Agent Rewrite
 
 **A complete architectural overhaul.** Thoth v2 replaces the original RAG pipeline with a fully autonomous ReAct agent that can reason, use tools, and carry persistent memory across conversations.

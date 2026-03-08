@@ -16,37 +16,81 @@ st.set_page_config(
 )
 
 # ── Heavy imports behind a loading indicator ─────────────────────────────────
-with st.spinner("Loading models. Please Wait…"):
+_first_run = "modules_loaded" not in st.session_state
+
+if _first_run:
+    _startup_placeholder = st.empty()
+    with _startup_placeholder.status("Starting Thoth…", expanded=True) as _startup_status:
+        _startup_status.write("⚙️ Loading core modules…")
+
+        from threads import _list_threads, _save_thread_meta, _delete_thread, checkpointer, DB_PATH
+        from agent import invoke_agent, get_agent_graph, stream_agent, resume_stream_agent, clear_agent_cache, repair_orphaned_tool_calls, get_token_usage
+
+        _startup_status.write("📄 Loading document engine…")
+        from documents import (
+            load_processed_files,
+            load_and_vectorize_document,
+            reset_vector_store,
+            DocumentLoader,
+        )
+
+        _startup_status.write("🤖 Loading model configuration…")
+        from models import (
+            get_current_model,
+            set_model,
+            list_all_models,
+            list_local_models,
+            is_model_local,
+            pull_model,
+            get_context_size,
+            set_context_size,
+            DEFAULT_MODEL,
+            DEFAULT_CONTEXT_SIZE,
+            CONTEXT_SIZE_OPTIONS,
+            CONTEXT_SIZE_LABELS,
+        )
+
+        _startup_status.write("🔑 Applying API keys…")
+        from api_keys import get_key, set_key, apply_keys
+        from tools import registry as tool_registry
+        apply_keys()
+
+        _startup_status.write("🎤 Loading voice & TTS services…")
+        from voice import VoiceService, get_voice_service, get_available_whisper_sizes
+        from tts import TTSService, get_voice_catalog, VOICE_CATALOG
+
+        _startup_status.write("👁️ Loading vision service…")
+        from vision import VisionService, POPULAR_VISION_MODELS, DEFAULT_VISION_MODEL, list_cameras
+        from tools.vision_tool import set_vision_service
+
+        _startup_status.write("🧠 Loading memory system…")
+        from memory_extraction import run_extraction, start_periodic_extraction
+
+        # Run memory extraction on startup (only processes new threads since last run)
+        if "memory_extraction_done" not in st.session_state:
+            def _extraction_status(msg):
+                _startup_status.write(f"🧠 {msg}")
+            _extraction_count = run_extraction(on_status=_extraction_status)
+            start_periodic_extraction()
+            st.session_state.memory_extraction_done = True
+
+    _startup_placeholder.empty()
+    st.session_state.modules_loaded = True
+else:
+    # Reruns: imports are cached by Python, no UI needed
     from threads import _list_threads, _save_thread_meta, _delete_thread, checkpointer, DB_PATH
     from agent import invoke_agent, get_agent_graph, stream_agent, resume_stream_agent, clear_agent_cache, repair_orphaned_tool_calls, get_token_usage
-    from documents import (
-        load_processed_files,
-        load_and_vectorize_document,
-        reset_vector_store,
-        DocumentLoader,
-    )
-    from models import (
-        get_current_model,
-        set_model,
-        list_all_models,
-        list_local_models,
-        is_model_local,
-        pull_model,
-        get_context_size,
-        set_context_size,
-        DEFAULT_MODEL,
-        DEFAULT_CONTEXT_SIZE,
-        CONTEXT_SIZE_OPTIONS,
-        CONTEXT_SIZE_LABELS,
-    )
+    from documents import load_processed_files, load_and_vectorize_document, reset_vector_store, DocumentLoader
+    from models import (get_current_model, set_model, list_all_models, list_local_models,
+                        is_model_local, pull_model, get_context_size, set_context_size,
+                        DEFAULT_MODEL, DEFAULT_CONTEXT_SIZE, CONTEXT_SIZE_OPTIONS, CONTEXT_SIZE_LABELS)
     from api_keys import get_key, set_key, apply_keys
     from tools import registry as tool_registry
-    from voice import VoiceService, get_voice_service, get_available_wake_models, get_available_whisper_sizes
+    from voice import VoiceService, get_voice_service, get_available_whisper_sizes
     from tts import TTSService, get_voice_catalog, VOICE_CATALOG
     from vision import VisionService, POPULAR_VISION_MODELS, DEFAULT_VISION_MODEL, list_cameras
     from tools.vision_tool import set_vision_service
-    apply_keys()
-
+    from memory_extraction import run_extraction, start_periodic_extraction
 
 # ── Startup health check ────────────────────────────────────────────────────
 def _startup_health_check():
@@ -149,7 +193,7 @@ I remember important things you tell me across conversations. I can also search 
 ⚙️ **Getting started:**
 - Head to **⚙️ Settings** (bottom of the sidebar) to configure tools like Gmail, Calendar, and your filesystem workspace folder.
 - **Attach files** by clicking the 📎 icon in the chat input — I can read PDFs, spreadsheets, JSON, images, and more.
-- **Voice mode**: Click the 🎙️ mic button above the chat input or say the wake word to talk to me.
+- **Voice mode**: Click the � Voice toggle above the chat input to talk to me.
 - **Stop generation** anytime with the ⏹ button.
 
 ---
@@ -758,14 +802,6 @@ def _stream_events(event_generator, voice_mode: bool = False):
         if event_type == "tool_call":
             s = status_container.status(f"Searching {payload}…", expanded=False)
             active_statuses[payload] = s
-
-            # Announce tool usage aloud in voice mode (queued through
-            # the streaming pipeline so it serialises with the response)
-            if voice_mode:
-                tts = st.session_state.tts_service
-                if tts.enabled:
-                    phrase = payload.replace("_", " ")
-                    tts.speak_streaming(f"Ok, let me use the {phrase} tool.")
 
         elif event_type == "tool_done":
             tool_name = payload["name"] if isinstance(payload, dict) else payload
@@ -1589,7 +1625,9 @@ credentials.json works for Calendar.
             "names, birthdays, preferences, important facts, and more. Memories "
             "are stored locally and never sent to any cloud service.\n\n"
             "The agent saves memories automatically when you share something "
-            "worth remembering. You can also ask it to recall, update, or "
+            "worth remembering. Memories are searchable via semantic similarity, "
+            "so the agent can find relevant memories even when you don't use "
+            "the exact same words. You can also ask it to recall, update, or "
             "forget specific memories in chat.",
             icon="🧠",
         )
@@ -1673,9 +1711,11 @@ credentials.json works for Calendar.
     with tab_prefs:
         st.subheader("🎤 Voice Input")
         st.info(
-            "Enable voice input to talk to Thoth using a wake word. "
-            "When enabled, Thoth listens for a wake word (e.g. \"Hey Jarvis\") "
-            "and then transcribes your speech using a local Whisper model. "
+            "Talk to Thoth hands-free using voice input. "
+            "Toggle 🎤 Voice in the chat area to start listening. "
+            "Thoth continuously listens and transcribes your speech "
+            "using a local Whisper model. The mic is automatically muted while "
+            "Thoth speaks and resumes when it finishes.\n\n"
             "Everything runs locally — no audio is sent to the cloud.\n\n"
             "**Requirements:** A working microphone connected to this computer.",
             icon="🎤",
@@ -1683,28 +1723,9 @@ credentials.json works for Calendar.
 
         voice_svc = st.session_state.voice_service
 
-        # Wake word model selector
-        available_wake = get_available_wake_models()
-        if available_wake:
-            wake_labels = {m: m.replace("_", " ").replace("v0.1", "").strip().title() for m in available_wake}
-            current_wake = voice_svc.wake_model
-            if current_wake not in available_wake and available_wake:
-                current_wake = available_wake[0]
-            selected_wake = st.selectbox(
-                "Wake word",
-                options=available_wake,
-                index=available_wake.index(current_wake) if current_wake in available_wake else 0,
-                format_func=lambda m: wake_labels.get(m, m),
-                help="The phrase you say to activate voice input.",
-            )
-            if selected_wake != voice_svc.wake_model:
-                voice_svc.wake_model = selected_wake
-        else:
-            st.warning("No wake-word models found. They will be downloaded automatically when voice is first enabled.")
-
         # Whisper model size
         whisper_sizes = get_available_whisper_sizes()
-        whisper_labels = {"tiny": "Tiny (~39 MB, fastest)", "base": "Base (~74 MB, balanced)", "small": "Small (~244 MB, best accuracy)"}
+        whisper_labels = {"tiny": "Tiny (~39 MB, fastest)", "base": "Base (~74 MB, balanced)", "small": "Small (~244 MB, accurate)", "medium": "Medium (~769 MB, best accuracy)"}
         current_whisper = voice_svc.whisper_size
         selected_whisper = st.selectbox(
             "Whisper model size",
@@ -1715,18 +1736,6 @@ credentials.json works for Calendar.
         )
         if selected_whisper != voice_svc.whisper_size:
             voice_svc.whisper_size = selected_whisper
-
-        # Wake threshold slider
-        new_threshold = st.slider(
-            "Wake word sensitivity",
-            min_value=0.1,
-            max_value=0.95,
-            value=voice_svc.wake_threshold,
-            step=0.05,
-            help="Lower = more sensitive (may trigger on background noise). Higher = stricter (may miss soft speech).",
-        )
-        if new_threshold != voice_svc.wake_threshold:
-            voice_svc.wake_threshold = new_threshold
 
         st.divider()
 
@@ -2046,10 +2055,10 @@ else:
         _tts = st.session_state.get("tts_service")
         if _tts and _tts.enabled:
             _tts.stop()
-            # User pressed stop → let them speak next (enter follow-up)
+            # User pressed stop → resume mic listening
             _vsvc = st.session_state.get("voice_service")
             if _vsvc and _vsvc.is_running:
-                _vsvc.enter_follow_up()
+                _vsvc.unmute()
         if st.session_state.is_generating:
             # Generation was in progress — clear pending input
             st.session_state.pending_agent_input = None
@@ -2129,6 +2138,7 @@ else:
 
     # ── Voice controls (pinned above chat input) ────────────────────────
     voice_svc = st.session_state.voice_service
+
     with st.container(key="voice_bar"):
         vcol_toggle, vcol_status = st.columns([1, 4])
         with vcol_toggle:
@@ -2149,29 +2159,29 @@ else:
                 @st.fragment(run_every=0.25)
                 def _voice_poll():
                     svc = st.session_state.voice_service
-                    # Send heartbeat so voice knows the browser tab is open
-                    svc.update_heartbeat()
-                    # Drain status queue
+
+                    # Status caption
                     new_status = svc.get_status()
                     if new_status:
                         st.session_state.voice_status = new_status
-                    # Render live status
                     state = svc.state
-                    if state == "sleeping":
-                        st.caption(f"💤 {st.session_state.voice_status or 'Waiting for wake word…'}")
-                    elif state == "listening":
+                    if state == "listening":
                         st.caption("🔴 Listening — speak now…")
                     elif state == "transcribing":
-                        st.caption("⏳ Transcribing…")
+                        st.caption("⏳ Processing…")
                     elif state == "muted":
-                        st.caption("🔇 Speaking…")
-                    elif state == "follow_up":
-                        st.caption("👂 Listening (no wake word needed)…")
+                        # Safety net: if TTS finished but state is still
+                        # muted, nudge the voice service to unmute.
+                        tts = st.session_state.get("tts_service")
+                        if tts and not tts.is_speaking:
+                            svc.unmute()
+                            st.caption("🔴 Listening — speak now…")
+                        else:
+                            st.caption("🔇 Speaking…")
                     elif state == "stopped":
                         st.caption(f"⚫ {st.session_state.voice_status or 'Stopped'}")
-                        if st.session_state.voice_enabled:
-                            svc.start()
-                    # Check for completed transcription
+
+                    # Transcription
                     text = svc.get_transcription()
                     if text:
                         st.session_state.voice_text = text
@@ -2220,8 +2230,16 @@ else:
                         )
                     )
                 else:
+                    _agent_input = _pending["input"]
+                    if voice_mode:
+                        _agent_input = (
+                            "[Voice input — the user is speaking to you via microphone "
+                            "and your response will be read aloud. You can hear them. "
+                            "Keep responses concise and conversational.]\n\n"
+                            + _agent_input
+                        )
                     answer, interrupt_data, cap_imgs, tool_res, charts = _stream_events(
-                        stream_agent(_pending["input"], enabled_tools, config),
+                        stream_agent(_agent_input, enabled_tools, config),
                         voice_mode=voice_mode,
                     )
             except Exception as _agent_exc:
@@ -2246,6 +2264,15 @@ else:
 
         st.session_state.is_generating = False
         st.session_state.stop_requested = False
+
+        # Resume mic after agent finishes.
+        # Only needed when TTS is off — when TTS is on, it calls unmute()
+        # itself after speaking, so calling it here would leave a stale
+        # _unmute_event that instantly breaks the next mute cycle.
+        _vsvc = st.session_state.get("voice_service")
+        _tts_on = st.session_state.get("tts_service")
+        if _vsvc and _vsvc.is_running and not (_tts_on and _tts_on.enabled):
+            _vsvc.unmute()
 
         if interrupt_data:
             st.session_state.pending_interrupt = interrupt_data
