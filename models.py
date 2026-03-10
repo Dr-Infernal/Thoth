@@ -37,18 +37,42 @@ def _save_settings(settings: dict):
 _saved = _load_settings()
 
 POPULAR_MODELS = [
-    "llama3.1:8b", "llama3.1:70b",
+    # ── Qwen family ──────────────────────────────────────────────────────
+    "qwen3:8b", "qwen3:14b", "qwen3:30b", "qwen3:32b", "qwen3:235b",
+    "qwen3.5:9b", "qwen3.5:27b", "qwen3.5:35b", "qwen3.5:122b",
+    "qwen3-coder:30b",
+    # ── Llama family ─────────────────────────────────────────────────────
+    "llama3.1:8b", "llama3.1:70b", "llama3.1:405b",
     "llama3.3:70b",
-    "qwen3:8b", "qwen3:14b", "qwen3:30b",
-    "qwen2.5:7b", "qwen2.5:14b", "qwen2.5:32b", "qwen2.5:72b",
-    "gemma3:12b", "gemma3:27b",
-    "gemma2:9b", "gemma2:27b",
+    "llama3-groq-tool-use:8b", "llama3-groq-tool-use:70b",
+    # ── Mistral family ───────────────────────────────────────────────────
     "mistral:7b",
-    "mixtral:8x7b",
-    "phi4:14b",
-    "deepseek-r1:7b", "deepseek-r1:8b",
-    "deepseek-r1:14b", "deepseek-r1:32b", "deepseek-r1:70b",
+    "mistral-nemo:12b",
+    "mistral-small:22b", "mistral-small:24b",
+    "mistral-small3.1:24b",
+    "mistral-small3.2:24b",
+    "mistral-large:123b",
+    "mixtral:8x7b", "mixtral:8x22b",
+    "magistral:24b",
+    "ministral-3:8b", "ministral-3:14b",
+    # ── Other tool-capable models ────────────────────────────────────────
+    "rnj-1:8b",
+    "glm-4.7-flash:30b",
+    "nemotron-3-nano:30b",
+    "nemotron:70b",
+    "devstral-small-2:24b",
+    "devstral-2:123b",
+    "olmo-3.1:32b",
+    "lfm2:24b",
+    "gpt-oss:20b", "gpt-oss:120b",
+    "firefunction-v2:70b",
 ]
+
+# Set of all model *family* prefixes known to support Ollama tool calling.
+# Used to flag downloaded models NOT in this set with a ⚠️ warning.
+_TOOL_COMPATIBLE_FAMILIES: set[str] = {
+    m.split(":")[0] for m in POPULAR_MODELS
+}
 
 _current_model = _saved.get("model", DEFAULT_MODEL)
 _num_ctx = _saved.get("context_size", DEFAULT_CONTEXT_SIZE)
@@ -119,6 +143,37 @@ def is_model_local(model_name: str) -> bool:
         or model_name == m.split(":")[0]
         for m in local
     )
+
+
+def is_tool_compatible(model_name: str) -> bool:
+    """Check whether a model family is in the known tool-compatible set."""
+    family = model_name.split(":")[0]
+    return family in _TOOL_COMPATIBLE_FAMILIES
+
+
+def check_tool_support(model_name: str) -> bool:
+    """Send a minimal tool-call request to verify the model supports tools.
+
+    Returns True if the model accepts tools, False if it rejects them (400).
+    """
+    try:
+        ollama.chat(
+            model=model_name,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": "_ping",
+                    "description": "test",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }],
+        )
+        return True
+    except Exception as exc:
+        if "does not support tools" in str(exc) or "400" in str(exc):
+            return False
+        return True  # Network or other error — don't block
 
 
 def pull_model(model_name: str):

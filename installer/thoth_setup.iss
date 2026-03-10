@@ -12,7 +12,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "2.2.0"
+#define MyAppVersion   "3.0.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -43,7 +43,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; ── App source code ──────────────────────────────────────────────────────────
-Source: "..\app.py";                   DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\app_nicegui.py";             DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\agent.py";                 DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\memory.py";                DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\memory_extraction.py";     DestDir: "{app}\app"; Flags: ignoreversion
@@ -64,8 +64,11 @@ Source: "..\thoth.ico";                DestDir: "{app}\app"; Flags: ignoreversio
 ; ── Sounds ──────────────────────────────────────────────────────────────────────
 Source: "..\sounds\*.wav";              DestDir: "{app}\app\sounds"; Flags: ignoreversion
 
-; ── Streamlit config ────────────────────────────────────────────────────────────
-Source: "..\.streamlit\config.toml";    DestDir: "{app}\app\.streamlit"; Flags: ignoreversion
+; ── Channels package ─────────────────────────────────────────────────────────
+Source: "..\channels\__init__.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\config.py";        DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\telegram.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\email.py";         DestDir: "{app}\app\channels"; Flags: ignoreversion
 
 ; ── Tools package ────────────────────────────────────────────────────────────
 Source: "..\tools\__init__.py";        DestDir: "{app}\app\tools"; Flags: ignoreversion
@@ -122,3 +125,4 @@ Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; Description: "
 Type: filesandordirs; Name: "{app}\python"
 Type: filesandordirs; Name: "{app}\app\__pycache__"
 Type: filesandordirs; Name: "{app}\app\tools\__pycache__"
+Type: filesandordirs; Name: "{app}\app\channels\__pycache__"

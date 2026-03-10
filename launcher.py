@@ -1,9 +1,10 @@
-"""Thoth Launcher — system-tray process that manages the Streamlit server.
+"""Thoth Launcher — system-tray process that manages the NiceGUI server.
 
 Responsibilities:
+    • Splash screen while the server starts (tkinter — no extra deps)
     • System-tray icon (green = running, grey = stopped)
-    • Launch  ``streamlit run app.py``  as a managed subprocess
-    • Open the browser to http://localhost:8501
+    • Launch  ``python app_nicegui.py``  as a managed subprocess
+    • Open the browser to http://localhost:8080
     • Detect an already-running instance and just open the browser
     • Graceful shutdown on Quit
 """
@@ -28,9 +29,9 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
-_PORT = 8501
+_PORT = 8080
 _URL = f"http://localhost:{_PORT}"
-_STARTUP_GRACE = 6            # seconds to wait for Streamlit before opening browser
+_STARTUP_GRACE = 15           # seconds to wait for NiceGUI before opening browser
 _ICON_SIZE = 64               # px for generated tray icons
 
 
@@ -75,36 +76,40 @@ def _is_port_in_use(port: int = _PORT) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-# ── Streamlit subprocess management ─────────────────────────────────────────
+# ── NiceGUI subprocess management ───────────────────────────────────────────
 
-class _StreamlitProcess:
-    """Wraps the Streamlit subprocess."""
+class _ThothProcess:
+    """Wraps the NiceGUI app subprocess."""
 
     def __init__(self) -> None:
         self._proc: subprocess.Popen | None = None
 
-    def start(self) -> None:
-        """Launch ``streamlit run app.py`` in the project directory."""
+    def start(self, *, native: bool = True) -> None:
+        """Launch ``python app_nicegui.py`` in the project directory.
+
+        If *native* is True (default) the app opens in a pywebview
+        native OS window instead of a browser tab.
+        """
         app_dir = Path(__file__).resolve().parent
-        app_py = app_dir / "app.py"
+        app_py = app_dir / "app_nicegui.py"
 
         # Use the same Python that's running this launcher
         python = sys.executable
 
+        cmd = [python, str(app_py)]
+        if native:
+            cmd.append("--native")
+
         self._proc = subprocess.Popen(
-            [
-                python, "-m", "streamlit", "run", str(app_py),
-                "--server.headless", "true",
-                "--server.port", str(_PORT),
-            ],
+            cmd,
             cwd=str(app_dir),
             # On Windows, CREATE_NO_WINDOW prevents a visible console
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        logger.info("Streamlit started (PID %s)", self._proc.pid)
+        logger.info("Thoth started (PID %s, native=%s)", self._proc.pid, native)
 
     def stop(self) -> None:
-        """Terminate the Streamlit process."""
+        """Terminate the NiceGUI process."""
         if self._proc is None:
             return
         try:
@@ -115,7 +120,7 @@ class _StreamlitProcess:
                 self._proc.kill()
             except Exception:
                 pass
-        logger.info("Streamlit stopped")
+        logger.info("Thoth stopped")
         self._proc = None
 
     @property
@@ -125,15 +130,80 @@ class _StreamlitProcess:
         return self._proc.poll() is None
 
 
+# ── Splash screen (tkinter — stdlib, runs as subprocess to avoid Tcl issues) ─
+
+# Inline script executed via ``python -c``.  Avoids Tcl/thread crashes
+# that occur when tkinter is used in the same process as pystray.
+_SPLASH_SCRIPT = r'''
+import tkinter as tk, socket, time, sys
+
+PORT    = int(sys.argv[1])
+TIMEOUT = float(sys.argv[2])
+W, H    = 500, 300
+BG      = "#1e1e1e"
+GOLD    = "#FFD700"
+
+def port_ready():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.3)
+        s.connect(("127.0.0.1", PORT))
+        s.close()
+        return True
+    except OSError:
+        return False
+
+root = tk.Tk()
+root.overrideredirect(True)
+root.attributes("-topmost", True)
+root.configure(bg=BG)
+sx, sy = root.winfo_screenwidth(), root.winfo_screenheight()
+root.geometry(f"{W}x{H}+{(sx-W)//2}+{(sy-H)//2}")
+
+tk.Label(root, text="\U0001305F", font=("Segoe UI Emoji", 64), fg=GOLD, bg=BG).pack(pady=(40,0))
+tk.Label(root, text="Thoth", font=("Segoe UI", 28, "bold"), fg=GOLD, bg=BG).pack(pady=(0,10))
+lbl = tk.Label(root, text="Loading.", font=("Segoe UI", 12), fg="#aaaaaa", bg=BG)
+lbl.pack()
+
+_start = time.monotonic()
+_d = [0]
+
+def _check():
+    _d[0] = (_d[0] % 3) + 1
+    lbl.configure(text="Loading" + "." * _d[0])
+    if time.monotonic() - _start > TIMEOUT or port_ready():
+        root.destroy()
+        return
+    root.after(500, _check)
+
+root.after(500, _check)
+root.mainloop()
+'''
+
+
+def _show_splash(port: int = _PORT, timeout: float = 60.0) -> subprocess.Popen:
+    """Launch the splash screen in a child process and return the handle.
+
+    The splash monitors *port* and closes itself once the server is
+    listening (or *timeout* seconds elapse).  Because it runs in its own
+    process, tkinter's Tcl layer is fully isolated from the main launcher.
+    """
+    return subprocess.Popen(
+        [sys.executable, "-c", _SPLASH_SCRIPT, str(port), str(timeout)],
+        # CREATE_NO_WINDOW prevents a console flash on Windows
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
 # ── Tray application ────────────────────────────────────────────────────────
 
 class ThothTray:
-    """System-tray icon that manages the Streamlit server."""
+    """System-tray icon that manages the NiceGUI server."""
 
     def __init__(self) -> None:
         import pystray
 
-        self._server = _StreamlitProcess()
+        self._server = _ThothProcess()
         self._owns_server = False          # True if *we* started it
         self._stop_event = threading.Event()
 
@@ -151,7 +221,15 @@ class ThothTray:
     # ── Menu callbacks ───────────────────────────────────────────────────
 
     def _on_open(self, icon=None, item=None) -> None:   # noqa: ARG002
-        webbrowser.open(_URL)
+        if self._owns_server:
+            if not self._server.is_alive:
+                # Native window was closed — restart the process to reopen it
+                logger.info("Re-launching Thoth native window")
+                self._server.start(native=True)
+            # else: native window is already open, nothing to do
+        else:
+            # Someone else started the server (e.g. dev mode) — open browser
+            webbrowser.open(_URL)
 
     def _on_quit(self, icon=None, item=None) -> None:    # noqa: ARG002
         logger.info("Quit requested")
@@ -163,7 +241,7 @@ class ThothTray:
     # ── Background poller ────────────────────────────────────────────────
 
     def _poll_loop(self) -> None:
-        """Periodically check if Streamlit is still alive and update icon."""
+        """Periodically check if the app is still alive and update icon."""
         _POLL_INTERVAL = 3.0  # seconds
         while not self._stop_event.is_set():
             if self._owns_server and self._server.is_alive:
@@ -181,32 +259,28 @@ class ThothTray:
     # ── Entry point ──────────────────────────────────────────────────────
 
     def run(self) -> None:
-        """Start the tray icon and (if needed) the Streamlit server."""
+        """Start the tray icon and (if needed) the NiceGUI server."""
         already_running = _is_port_in_use(_PORT)
 
         if already_running:
-            logger.info("Streamlit already running on port %s", _PORT)
+            logger.info("Thoth already running on port %s", _PORT)
         else:
             self._server.start()
             self._owns_server = True
             # Register cleanup in case launcher crashes
             atexit.register(self._server.stop)
 
+            # Show splash screen while the server starts up
+            _show_splash()
+
         # Start the status-polling thread
         poller = threading.Thread(target=self._poll_loop, daemon=True, name="tray-poll")
         poller.start()
 
-        # Give Streamlit a moment to spin up, then open the browser
-        def _delayed_open():
-            if not already_running:
-                deadline = time.monotonic() + _STARTUP_GRACE
-                while time.monotonic() < deadline:
-                    if _is_port_in_use(_PORT):
-                        break
-                    time.sleep(0.5)
+        # In native mode, the pywebview window opens automatically.
+        # Only open a browser if we didn't start the server (external instance).
+        if already_running:
             webbrowser.open(_URL)
-
-        threading.Thread(target=_delayed_open, daemon=True).start()
 
         # Blocking — runs the tray icon's event loop on the main thread
         logger.info("Thoth tray running  (Ctrl+C or Quit menu to exit)")

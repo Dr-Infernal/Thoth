@@ -5,8 +5,6 @@ from langchain_community.document_loaders import (
 )
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_classic.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 
 import shutil
 import os
@@ -45,12 +43,13 @@ def clear_processed_files():
 
 def reset_vector_store():
     """Clear all indexed documents and reinitialize an empty vector store."""
-    global vector_store
+    global _vector_store
+    from langchain_classic.vectorstores import FAISS
     clear_processed_files()
     if VECTOR_STORE_DIR.exists():
         shutil.rmtree(VECTOR_STORE_DIR)
-    vector_store = FAISS.from_texts([" "], embedding=embedding_model)
-    vector_store.save_local(str(VECTOR_STORE_DIR))
+    _vector_store = FAISS.from_texts([" "], embedding=get_embedding_model())
+    _vector_store.save_local(str(VECTOR_STORE_DIR))
 
 class DocumentLoader(object):
     supported_file_types = {
@@ -66,19 +65,37 @@ text_splitter = RecursiveCharacterTextSplitter(
     chunk_overlap = 150
 )
 
-embedding_model = HuggingFaceEmbeddings(
-    model_name = "Qwen/Qwen3-Embedding-0.6B"
-)
+# ── Lazy-loaded singletons (avoids heavy imports in child processes) ────────
+_embedding_model = None
+_vector_store = None
 
-vector_store = (
-    FAISS.load_local(
-        str(VECTOR_STORE_DIR),
-        embeddings=embedding_model,
-        allow_dangerous_deserialization=True,
-    )
-    if VECTOR_STORE_DIR.exists()
-    else FAISS.from_texts([" "], embedding=embedding_model)
-)
+
+def get_embedding_model():
+    """Return the shared HuggingFaceEmbeddings instance (created on first call)."""
+    global _embedding_model
+    if _embedding_model is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
+        _embedding_model = HuggingFaceEmbeddings(model_name="Qwen/Qwen3-Embedding-0.6B")
+    return _embedding_model
+
+
+def get_vector_store():
+    """Return the FAISS vector store (loaded/created on first call)."""
+    global _vector_store
+    if _vector_store is None:
+        from langchain_classic.vectorstores import FAISS
+        em = get_embedding_model()
+        _vector_store = (
+            FAISS.load_local(
+                str(VECTOR_STORE_DIR),
+                embeddings=em,
+                allow_dangerous_deserialization=True,
+            )
+            if VECTOR_STORE_DIR.exists()
+            else FAISS.from_texts([" "], embedding=em)
+        )
+    return _vector_store
+
 
 def load_and_vectorize_document(file_path, skip_if_processed=True, display_name=None):
     record_name = display_name or file_path
@@ -105,8 +122,9 @@ def load_and_vectorize_document(file_path, skip_if_processed=True, display_name=
         if display_name:
             for chunk in chunks:
                 chunk.metadata["source"] = display_name
-        vector_store.add_documents(chunks)
-        vector_store.save_local(str(VECTOR_STORE_DIR))
+        vs = get_vector_store()
+        vs.add_documents(chunks)
+        vs.save_local(str(VECTOR_STORE_DIR))
         # Mark as processed using the display name
         save_processed_file(record_name)
         return

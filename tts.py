@@ -246,8 +246,6 @@ class TTSService:
                 self._stream_queue.get_nowait()
         except Empty:
             pass
-        # Signal worker to exit
-        self._stream_queue.put(None)
         # Kill audio immediately on Windows
         if os.name == "nt":
             try:
@@ -259,8 +257,10 @@ class TTSService:
         if self._playback_thread and self._playback_thread.is_alive():
             self._playback_thread.join(timeout=0.5)
         if self._stream_worker and self._stream_worker.is_alive():
+            # Signal worker to exit only if it's alive to consume the sentinel
+            self._stream_queue.put(None)
             self._stream_worker.join(timeout=0.5)
-            self._stream_worker = None
+        self._stream_worker = None
 
     # ── Streaming TTS (sentence-by-sentence) ─────────────────────────
 
@@ -281,6 +281,12 @@ class TTSService:
         # Ensure worker thread is running
         if self._stream_worker is None or not self._stream_worker.is_alive():
             self._stop_event.clear()
+            # Drain any stale items left from a previous stop()/session
+            try:
+                while True:
+                    self._stream_queue.get_nowait()
+            except Empty:
+                pass
             self._stream_worker = threading.Thread(
                 target=self._stream_worker_loop, daemon=True,
                 name="thoth-tts-stream",

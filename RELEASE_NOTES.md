@@ -2,6 +2,49 @@
 
 ---
 
+## v3.0.0 — NiceGUI & Messaging Channels
+
+Complete frontend rewrite from Streamlit to NiceGUI, plus new messaging channel adapters for Telegram and Email.
+
+---
+
+### 🖥️ NiceGUI Frontend
+
+The entire UI has been rewritten using [NiceGUI](https://nicegui.io/), replacing Streamlit. The new frontend runs on port **8080** and offers a faster, more responsive experience with true real-time streaming.
+
+- **Full feature parity** — all existing functionality ported: chat interface, sidebar thread manager, settings dialog (now 11 tabs), file attachments, streaming, voice bar, export, workflows
+- **Real-time updates** — no more page reloads; token streaming, tool status, and toast notifications update instantly via websocket
+- **System tray launcher** — `launcher.py` updated to manage the NiceGUI process
+- **Native desktop window** — runs in a native OS window via pywebview instead of a browser tab; `--native` flag passed by default from the launcher
+- **Splash screen** — branded tkinter splash (dark background, gold Thoth logo, animated loading indicator) displays while the server starts; runs as an isolated subprocess to avoid Tcl/threading conflicts with pystray; self-closes when port 8080 responds
+
+### 📬 Messaging Channels
+
+New `channels/` package with two messaging channel adapters:
+
+#### Telegram Bot
+- **Long-polling adapter** — connect a Telegram bot via Bot API token
+- **Full agent access** — messages are processed by the same ReAct agent with all tools available
+- **Thread per chat** — each Telegram chat gets its own conversation thread with a 📱 icon
+- **Settings UI** — configure bot token, start/stop, and auto-start on launch from Settings → Channels tab
+
+#### Email Channel
+- **Gmail polling** — polls inbox at configurable intervals for new messages
+- **OAuth 2.0 authentication** — uses existing Gmail OAuth credentials with re-authenticate button
+- **Smart filtering** — responds only to emails from approved senders list
+- **Thread per sender** — each email sender gets a dedicated thread with a 📧 icon
+- **Auto-start** — channels can be set to auto-start when Thoth launches
+
+### 🔧 Infrastructure
+
+- **Version bump** — v2.2.0 → v3.0.0
+- **Installer updated** — Inno Setup script updated for NiceGUI, channels package included
+- **Dependencies** — `streamlit` replaced by `nicegui`; `pywebview` added for native window; `pythonnet` added for Python 3.14 compatibility
+- **Lazy FAISS initialization** — embedding model and vector store are now lazy-loaded via getter functions to avoid double-initialization caused by NiceGUI's `multiprocessing.Process` (Windows spawn) re-importing the module
+- **Old Streamlit app** — `app.py` kept in repo but git-ignored; not deleted
+
+---
+
 ## v2.2.0 — Workflows
 
 A new workflow engine for reusable, multi-step prompt sequences with scheduling support.

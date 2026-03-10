@@ -1,6 +1,21 @@
 # 𓁟 Thoth — Private AI Assistant
 
-Thoth is a **local-first, privacy-focused AI assistant** that runs entirely on your machine. It combines a powerful ReAct agent with 18 integrated tools — web search, email, calendar, file management, vision, long-term memory, and more — all powered by a locally-running LLM via [Ollama](https://ollama.com/). No data leaves your machine unless you explicitly use an online tool.
+Thoth is a **local-first, privacy-focused AI assistant** that runs entirely on your machine. It combines a powerful ReAct agent with 19 integrated tools — web search, email, calendar, file management, vision, long-term memory, and more — plus Telegram and Email messaging channels, all powered by a locally-running LLM via [Ollama](https://ollama.com/). No data leaves your machine unless you explicitly use an online tool.
+
+### Why not just use ChatGPT?
+
+| | ChatGPT / Claude / Gemini | Thoth |
+|---|---|---|
+| **Your data** | Sent to cloud servers, used for training | Stays on your machine — always |
+| **Conversations** | Owned by the provider, can be deleted or leaked | Stored locally in SQLite, fully yours |
+| **Cost** | $20+/month per subscription | Free forever — runs on your own hardware |
+| **Memory** | Limited, opaque, provider-controlled | You control what's remembered, searchable, deletable |
+| **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, webcam |
+| **Customisation** | Pick a model, write a system prompt | Swap models freely, build multi-step workflows, schedule tasks |
+| **Voice** | Cloud-processed speech | Local Whisper STT + Piper TTS — never leaves your mic |
+| **Availability** | Requires internet, subject to outages & rate limits | Works offline (core features), no throttling |
+
+> **Bottom line:** Cloud AI assistants rent you access to someone else's computer. Thoth gives you your own.
 
 ### Why "Thoth"?
 
@@ -12,6 +27,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ### 🤖 ReAct Agent Architecture
 - **Autonomous tool use** — the agent decides which tools to call, when, and how many times, based on your question
+- **19 tools / 42 sub-tools** — web search, email, calendar, file management, vision, memory, and more (see [full list below](#-tools-19-tools--42-sub-tools))
 - **Streaming responses** — tokens stream in real-time with a typing indicator
 - **Thinking indicators** — shows when the model is reasoning before responding
 - **Smart context management** — conversation history is trimmed to 80% of the context window before each LLM call; oversized tool outputs (e.g. large PDF reads) are proportionally shrunk so multi-file workflows fit within context
@@ -19,6 +35,57 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Graceful error recovery** — agent tool loops are caught automatically with a user-friendly error message; orphaned tool calls are repaired
 - **Date/time awareness** — current date and time is injected into every LLM call so the model always knows "today"
 - **Destructive action confirmation** — dangerous operations (file deletion, sending emails, deleting calendar events, deleting memories) require explicit user approval via an interrupt mechanism
+
+### 🧠 Long-Term Memory
+- **Persistent personal knowledge** — the agent remembers names, birthdays, preferences, projects, and more across conversations
+- **6 categories** — `person`, `preference`, `fact`, `event`, `place`, `project`
+- **Agent-driven** — the agent autonomously decides when to save, search, update, or delete memories based on conversation context
+- **Semantic search** — FAISS vector index with Qwen3-Embedding-0.6B for similarity-based memory retrieval (replaces keyword search)
+- **Auto-recall** — relevant memories are automatically retrieved and injected into context before every LLM call based on semantic similarity to the current message
+- **Background extraction** — on startup and every 6 hours, past conversations are scanned by the LLM to extract personal facts and save them as memories with semantic deduplication
+- **Local SQLite + FAISS storage** — memories stored in `~/.thoth/memory.db` with vector index in `~/.thoth/memory_vectors/`, never sent to the cloud
+- **Settings UI** — browse, search, and bulk-delete memories from the Memory tab in Settings
+
+### 🎤 Voice Input & 🔊 Text-to-Speech
+- **Toggle-based voice** — simple manual toggle to start/stop listening, no wake word needed
+- **4-state pipeline** — stopped → listening → transcribing → muted, with clean state transitions
+- **Local speech-to-text** — transcription via faster-whisper (tiny/base/small/medium models), CPU-only int8 quantization, no cloud APIs
+- **Voice-aware responses** — voice input is tagged so the agent knows you're speaking and responds conversationally
+- **Neural TTS** — high-quality text-to-speech via Piper TTS, fully offline
+- **8 voice options** — US and British English, male and female variants
+- **Streaming TTS** — responses are spoken sentence-by-sentence as they stream in
+- **Mic gating** — microphone is automatically muted during TTS playback to prevent echo and feedback loops
+- **Hands-free mode** — combine voice input + TTS for a fully conversational experience
+
+### 👁️ Vision
+- **Camera analysis** — capture and analyze images from your webcam in real-time
+- **Screen capture** — take screenshots and ask questions about what's on your screen
+- **Configurable vision model** — choose from popular vision models (gemma3, llava, etc.)
+- **Camera selection** — pick which camera to use if you have multiple
+- **Inline image display** — captured images are shown inline in the chat
+
+### ⚡ Workflows
+- **Reusable prompt sequences** — create named, multi-step workflows that run sequentially in a fresh thread
+- **Template variables** — use `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}` in prompts — replaced at runtime
+- **Manual + scheduled execution** — run workflows on demand from the home screen, or schedule them daily/weekly
+- **Prompt chaining** — each step sees the output of the previous step, enabling research → summarise → action pipelines
+- **Always-background execution** — workflows always run in the background so you can keep chatting; the sidebar shows a ⏳ indicator while running
+- **Safety** — destructive tools (send email, delete files, etc.) are automatically excluded from background workflow runs; the LLM adapts by using safe alternatives
+- **Pre-built templates** — ships with 4 starter workflows (Daily Briefing, Research Summary, Email Digest, Weekly Review)
+- **Full editor** — create, edit, duplicate, and delete workflows from the Settings → Workflows tab
+- **Run history** — track past workflow executions with timestamps and step counts
+
+### 📬 Messaging Channels
+- **Telegram bot** — connect a Telegram bot via Bot API token; messages are processed by the full ReAct agent with all tools available; each chat gets its own conversation thread
+- **Email channel** — Gmail polling at configurable intervals; responds only to emails from approved senders; each sender gets a dedicated conversation thread
+- **Auto-start** — channels can be set to start automatically when Thoth launches
+- **Settings UI** — configure, start/stop, and manage channels from Settings → Channels tab
+
+### 🖥️ Desktop App
+- **Native window** — runs in a native OS window via pywebview instead of a browser tab; no browser chrome, feels like a real desktop application
+- **Splash screen** — a branded splash screen displays the Thoth logo while the server starts up, then closes automatically when ready
+- **System tray** — `launcher.py` runs a pystray system tray icon showing app status (green = running, grey = stopped) with Open / Quit menu
+- **Auto-restart** — if the native window is closed, re-opening from the tray relaunches it instantly
 
 ### 💬 Chat & Conversations
 - **Multi-turn conversational Q&A** with full message history
@@ -34,57 +101,17 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Onboarding guide** — first-run welcome message with tool overview and clickable example prompts; `?` button in sidebar to re-show anytime
 - **Startup health check** — verifies Ollama connectivity and model availability on launch
 
-### 🧠 Long-Term Memory
-- **Persistent personal knowledge** — the agent remembers names, birthdays, preferences, projects, and more across conversations
-- **6 categories** — `person`, `preference`, `fact`, `event`, `place`, `project`
-- **Agent-driven** — the agent autonomously decides when to save, search, update, or delete memories based on conversation context
-- **Semantic search** — FAISS vector index with Qwen3-Embedding-0.6B for similarity-based memory retrieval (replaces keyword search)
-- **Auto-recall** — relevant memories are automatically retrieved and injected into context before every LLM call based on semantic similarity to the current message
-- **Background extraction** — on startup and every 6 hours, past conversations are scanned by the LLM to extract personal facts and save them as memories with semantic deduplication
-- **Local SQLite + FAISS storage** — memories stored in `~/.thoth/memory.db` with vector index in `~/.thoth/memory_vectors/`, never sent to the cloud
-- **Settings UI** — browse, search, and bulk-delete memories from the Memory tab in Settings
-
-### 🧠 Brain Model
+### 🤖 Brain Model
 - **Dynamic model switching** — choose any Ollama-supported model from the Settings panel
 - **30+ curated models** — Llama, Qwen, Gemma, Mistral, DeepSeek, Phi, and more
 - **Automatic download** — selecting a model you haven't pulled yet triggers an in-app download with live progress
 - **Configurable context window** — 4K to 256K tokens via slider
 - **Local indicators** — models marked ✅ (downloaded) or ⬇️ (needs download)
 
-### 👁️ Vision
-- **Camera analysis** — capture and analyze images from your webcam in real-time
-- **Screen capture** — take screenshots and ask questions about what's on your screen
-- **Configurable vision model** — choose from popular vision models (gemma3, llava, etc.)
-- **Camera selection** — pick which camera to use if you have multiple
-- **Inline image display** — captured images are shown inline in the chat
-
-### 🎤 Voice Input & 🔊 Text-to-Speech
-- **Toggle-based voice** — simple manual toggle to start/stop listening, no wake word needed
-- **4-state pipeline** — stopped → listening → transcribing → muted, with clean state transitions
-- **Local speech-to-text** — transcription via faster-whisper (tiny/base/small/medium models), CPU-only int8 quantization, no cloud APIs
-- **Voice-aware responses** — voice input is tagged so the agent knows you're speaking and responds conversationally
-- **Neural TTS** — high-quality text-to-speech via Piper TTS, fully offline
-- **8 voice options** — US and British English, male and female variants
-- **Streaming TTS** — responses are spoken sentence-by-sentence as they stream in
-- **Mic gating** — microphone is automatically muted during TTS playback to prevent echo and feedback loops
-- **Hands-free mode** — combine voice input + TTS for a fully conversational experience
-- **System tray launcher** — `launcher.py` runs a system tray icon that shows app status (green = running, grey = stopped)
-
-### ⚡ Workflows
-- **Reusable prompt sequences** — create named, multi-step workflows that run sequentially in a fresh thread
-- **Template variables** — use `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}` in prompts — replaced at runtime
-- **Manual + scheduled execution** — run workflows on demand from the home screen, or schedule them daily/weekly
-- **Prompt chaining** — each step sees the output of the previous step, enabling research → summarise → action pipelines
-- **Always-background execution** — workflows always run in the background so you can keep chatting; the sidebar shows a ⏳ indicator while running
-- **Safety** — destructive tools (send email, delete files, etc.) are automatically excluded from background workflow runs; the LLM adapts by using safe alternatives
-- **Pre-built templates** — ships with 4 starter workflows (Daily Briefing, Research Summary, Email Digest, Weekly Review)
-- **Full editor** — create, edit, duplicate, and delete workflows from the Settings → Workflows tab
-- **Run history** — track past workflow executions with timestamps and step counts
-
 ### 🔔 Notifications
 - **Desktop notifications** — workflow completions and timer expirations trigger a Windows desktop notification with timestamp
 - **Sound effects** — distinct audio chimes for workflow completion (two-tone C5→E5) and timer alerts (5-beep A5), played asynchronously
-- **In-app toasts** — transient toast messages appear in the Streamlit UI on the next page load with contextual emoji icons
+- **In-app toasts** — transient toast messages appear in the UI with contextual emoji icons
 - **Unified system** — all notification channels (desktop, sound, toast) fire from a single `notify()` call, keeping notification logic consistent across features
 
 ---
@@ -140,10 +167,10 @@ Thoth's agent has access to 19 tools that expose 42 individual operations to the
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                    Streamlit Frontend (app.py)                       │
+│                    NiceGUI Frontend (app_nicegui.py)                 │
 │  ┌────────────┐  ┌──────────────────────┐  ┌───────────────────┐   │
 │  │  Sidebar   │  │   Chat Interface     │  │   Settings Dialog │   │
-│  │  Threads   │  │   Streaming Tokens   │  │   10 Tabs         │   │
+│  │  Threads   │  │   Streaming Tokens   │  │   11 Tabs         │   │
 │  │  Controls  │  │   Tool Status        │  │   Tool Config     │   │
 │  └────────────┘  └──────────────────────┘  └───────────────────┘   │
 └──────────────────────────┬───────────────────────────────────────────┘
@@ -171,7 +198,7 @@ Thoth's agent has access to 19 tools that expose 42 individual operations to the
 
 | File | Purpose |
 |------|---------|
-| **`app.py`** | Streamlit UI — chat interface, sidebar thread manager with live token counter, Settings dialog (10 tabs), file attachment handling, streaming event loop with error recovery, export, voice bar, custom CSS |
+| **`app_nicegui.py`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (11 tabs), file attachment handling, streaming event loop with error recovery, export, voice bar |
 | **`agent.py`** | LangGraph ReAct agent — system prompt, pre-model context trimming with proportional tool-output shrinking, streaming event generator, interrupt handling for destructive actions, live token usage reporting, contextual compression |
 | **`threads.py`** | SQLite-backed thread metadata and `SqliteSaver` checkpointer for persisting LangGraph conversation state |
 | **`memory.py`** | Long-term memory with SQLite CRUD and FAISS semantic vector search — save, search, list, update, delete, count across 6 categories; auto-rebuilds vector index on mutations |
@@ -181,11 +208,12 @@ Thoth's agent has access to 19 tools that expose 42 individual operations to the
 | **`tts.py`** | Piper TTS integration — engine + default voice bundled with installer, additional voices downloaded on demand, streaming sentence-by-sentence playback |
 | **`vision.py`** | Camera/screen capture via OpenCV/MSS, image analysis via Ollama vision models |
 | **`data_reader.py`** | Shared pandas-based reader for CSV, TSV, Excel, JSON, JSONL — returns schema + stats + preview rows |
-| **`launcher.py`** | System tray launcher via pystray — manages Streamlit subprocess, shows app status |
+| **`launcher.py`** | Desktop launcher — system tray (pystray), native window management (pywebview), splash screen (tkinter subprocess), manages NiceGUI server lifecycle |
 | **`api_keys.py`** | API key management — load/save/apply from `~/.thoth/api_keys.json` |
 | **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts personal facts, deduplicates against existing memories (cosine > 0.85), runs on startup + every 6 hours |
 | **`workflows.py`** | Workflow engine — SQLite CRUD, template variable expansion, sequential prompt execution, background runner with threading, scheduled execution (daily/weekly), desktop notifications, 4 default templates |
-| **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects (winsound), and in-app toast queue for Streamlit; coordinates workflow completion chimes and timer alerts |
+| **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects (winsound), and in-app toast queue; coordinates workflow completion chimes and timer alerts |
+| **`channels/`** | Messaging channel adapters — Telegram bot (long polling) and Email channel (Gmail polling), with shared config store |
 | **`tools/`** | 19 self-registering tool modules + base class + registry |
 
 ### Data Storage
@@ -208,6 +236,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── processed_files.json    # Tracks indexed documents
 ├── workflows.db            # Workflow definitions, schedules & run history
 ├── timers.sqlite           # Scheduled timer jobs
+├── channels_config.json    # Channel settings (Telegram, Email auto-start)
 ├── vector_store/           # FAISS index for uploaded documents
 ├── gmail/                  # Gmail OAuth tokens
 ├── calendar/               # Calendar OAuth tokens
@@ -263,11 +292,11 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
    ```bash
    python launcher.py
    ```
-   This starts the system tray icon and opens the app at `http://localhost:8501`.
+   This starts the system tray icon and opens the app at `http://localhost:8080`.
 
    Alternatively, run directly without the tray:
    ```bash
-   streamlit run app.py
+   python app_nicegui.py
    ```
 
 > **First launch:** The default brain model (`qwen3:14b`) will be downloaded automatically if not already available. This is a one-time ~9 GB download.
@@ -323,4 +352,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgements
 
-Built with [Streamlit](https://streamlit.io/), [LangGraph](https://langchain-ai.github.io/langgraph/), [LangChain](https://python.langchain.com/), [Ollama](https://ollama.com/), [FAISS](https://github.com/facebookresearch/faiss), [Piper TTS](https://github.com/rhasspy/piper), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and [HuggingFace](https://huggingface.co/).
+Built with [NiceGUI](https://nicegui.io/), [LangGraph](https://langchain-ai.github.io/langgraph/), [LangChain](https://python.langchain.com/), [Ollama](https://ollama.com/), [FAISS](https://github.com/facebookresearch/faiss), [Piper TTS](https://github.com/rhasspy/piper), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and [HuggingFace](https://huggingface.co/).

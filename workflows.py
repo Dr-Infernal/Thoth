@@ -390,52 +390,75 @@ _DAY_MAP = {
 
 
 def _is_due(wf: dict) -> bool:
-    """Check if a scheduled workflow should run now."""
+    """Check if a scheduled workflow should run now.
+
+    Uses a window-based approach: once the scheduled time has passed today
+    (or this week for weekly), the workflow is due — provided it hasn't
+    already run in this window.  This is far more reliable than requiring
+    an exact-minute match, which can be missed if the user saves the
+    schedule at the target minute or if processing delays push the tick
+    past the boundary.
+    """
     sched = _parse_schedule(wf.get("schedule"))
     if not sched or not wf.get("enabled", True):
         return False
 
     now = datetime.now()
-
-    # Must not have run in the last 55 minutes (prevent double-firing)
     last_run = wf.get("last_run")
+
+    # Parse last_run once
+    lr: datetime | None = None
     if last_run:
         try:
             lr = datetime.fromisoformat(last_run)
-            if (now - lr) < timedelta(minutes=55):
-                return False
         except (ValueError, TypeError):
             pass
 
     kind = sched["kind"]
     if kind == "daily":
-        return now.hour == sched["hour"] and now.minute == sched["minute"]
+        # Target time today
+        target = now.replace(
+            hour=sched["hour"], minute=sched["minute"], second=0, microsecond=0
+        )
+        if now < target:
+            return False  # Not yet time today
+        # Has it already run since today's target time?
+        if lr and lr >= target:
+            return False
+        return True
+
     elif kind == "weekly":
         target_day = _DAY_MAP.get(sched["day"])
         if target_day is None:
             return False
-        return (
-            now.weekday() == target_day
-            and now.hour == sched["hour"]
-            and now.minute == sched["minute"]
+        # How many days ago was the target day (0 = today)?
+        days_diff = (now.weekday() - target_day) % 7
+        if days_diff != 0:
+            return False  # Not the right day
+        target = now.replace(
+            hour=sched["hour"], minute=sched["minute"], second=0, microsecond=0
         )
+        if now < target:
+            return False  # Not yet time today
+        if lr and lr >= target:
+            return False
+        return True
+
     elif kind == "interval":
-        if not last_run:
+        if not lr:
             return True  # Never run before → run now
-        try:
-            lr = datetime.fromisoformat(last_run)
-            return (now - lr) >= timedelta(hours=sched["hours"])
-        except (ValueError, TypeError):
-            return True
+        return (now - lr) >= timedelta(hours=sched["hours"])
+
     return False
 
 
 def _scheduler_loop() -> None:
-    """Background loop — checks every 60 s for due workflows."""
+    """Background loop — checks every 30 s for due workflows."""
     import time
 
     from tools import registry as tool_registry
 
+    logger.info("Scheduler loop running – checking every 30 s")
     while True:
         try:
             workflows = list_workflows()
@@ -454,9 +477,9 @@ def _scheduler_loop() -> None:
                         notification=True,
                     )
         except Exception as exc:
-            logger.debug("Scheduler tick error: %s", exc)
+            logger.warning("Scheduler tick error: %s", exc, exc_info=True)
 
-        time.sleep(60)
+        time.sleep(30)
 
 
 def start_workflow_scheduler() -> None:

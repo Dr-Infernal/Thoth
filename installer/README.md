@@ -1,6 +1,6 @@
 # Building the Thoth Windows Installer
 
-This guide explains how to build a distributable Windows installer for Thoth v2.2.
+This guide explains how to build a distributable Windows installer for Thoth v3.0.
 
 ## Architecture
 
@@ -37,7 +37,7 @@ This will:
 2. Download `get-pip.py` (~2.5 MB)
 3. Download Piper TTS engine (~37 MB)
 4. Download default voice — Lessac, US English (~60 MB)
-5. Compile everything into `dist\ThothSetup_2.2.0.exe`
+5. Compile everything into `dist\ThothSetup_3.0.0.exe`
 
 ### Options
 
@@ -63,7 +63,7 @@ C:\Program Files\Thoth\            # Installation directory
 │   ├── Lib\site-packages\          # All pip packages installed here
 │   └── ...
 └── app\                            # Application source code
-    ├── app.py                      # Streamlit frontend
+    ├── app_nicegui.py              # NiceGUI frontend
     ├── agent.py                    # ReAct agent
     ├── memory.py                   # Long-term memory DB + FAISS vector search
     ├── memory_extraction.py        # Background memory extraction from conversations
@@ -74,14 +74,18 @@ C:\Program Files\Thoth\            # Installation directory
     ├── voice.py                    # Speech-to-text (toggle-based, CPU Whisper)
     ├── tts.py                      # Text-to-speech (Piper TTS)
     ├── vision.py                   # Camera/screen capture
+    ├── data_reader.py              # Pandas-based structured data reader
     ├── workflows.py                # Workflow engine + scheduler
     ├── notifications.py             # Unified notification system
-    ├── launcher.py                 # System tray launcher
+    ├── launcher.py                 # System tray + native window + splash screen
     ├── sounds/                     # Notification sound effects
     │   ├── workflow.wav
     │   └── timer.wav
-    ├── .streamlit/                 # Streamlit config
-    │   └── config.toml
+    ├── channels/                   # Messaging channel adapters
+    │   ├── __init__.py
+    │   ├── config.py
+    │   ├── telegram.py
+    │   └── email.py
     ├── requirements.txt
     ├── thoth.ico
     ├── tools/                      # 19 tool modules
@@ -107,6 +111,7 @@ C:\Program Files\Thoth\            # Installation directory
 ├── processed_files.json            # Tracked indexed documents
 ├── workflows.db                    # Workflow definitions, schedules & run history
 ├── timers.sqlite                   # Timer jobs
+├── channels_config.json            # Channel settings (Telegram, Email)
 ├── vector_store/                   # FAISS index for uploaded documents
 ├── gmail/                          # Gmail OAuth tokens
 ├── calendar/                       # Calendar OAuth tokens
@@ -133,15 +138,15 @@ The Inno Setup installer runs these steps:
 
 ## End-User Experience
 
-1. Run `ThothSetup_2.2.0.exe`
+1. Run `ThothSetup_3.0.0.exe`
 2. Follow the wizard — dependencies download and install automatically (5-15 min)
 3. Launch Thoth from Start Menu or Desktop shortcut
-4. The system tray icon appears; the app opens at `http://localhost:8501`
+4. The system tray icon appears; the app opens at `http://localhost:8080`
 5. First launch downloads the default brain model (`qwen3:14b`, ~9 GB one-time)
 
 ## Notes
 
 - **CPU-only PyTorch**: `requirements.txt` uses CPU-only torch. Users with NVIDIA GPUs can upgrade to CUDA torch after install.
 - **Ollama detection**: `install_deps.bat` checks if Ollama is already on PATH and skips the download if so.
-- **Launcher**: Uses `launcher.py` (system tray icon) instead of running Streamlit directly. The tray icon shows voice state and provides graceful shutdown.
+- **Launcher**: Uses `launcher.py` (system tray icon + native window + splash screen) instead of running NiceGUI directly. The tray icon shows app status (running/stopped) and provides graceful shutdown.
 - **Uninstall**: Registered with Windows Add/Remove Programs. The uninstaller removes the installation directory but does **not** delete user data in `~/.thoth/` — users can remove it manually if desired.

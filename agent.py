@@ -181,11 +181,16 @@ AGENT_SYSTEM_PROMPT = (
     "- When the user asks about weather or forecasts, use the weather tools\n"
     "  (get_current_weather, get_weather_forecast). They provide precise data\n"
     "  from Open-Meteo and are faster than web search for weather queries.\n"
-    "- When the user asks you to look at something, see what's in front of them,\n"
-    "  read text from a document or image, or identify an object, use the\n"
-    "  analyze_image tool with source='camera'. When the user asks about what's\n"
-    "  on their screen, monitor, or display, use analyze_image with source='screen'.\n"
-    "  Pass the user's question as the argument.\n"
+    "- You have DIRECT ACCESS to the user's webcam and screen through the\n"
+    "  analyze_image tool. You CAN see — this is not hypothetical. When the user\n"
+    "  says anything like 'what do you see', 'look at this', 'can you see me',\n"
+    "  'what's in front of me', 'describe what you see', or any variation asking\n"
+    "  you to look or see, IMMEDIATELY call analyze_image — do NOT ask for\n"
+    "  clarification, do NOT say you can't see, do NOT ask them to describe it.\n"
+    "  Just call the tool. Use source='camera' by default. Use source='screen'\n"
+    "  when they mention screen, monitor, display, or desktop.\n"
+    "  Pass the user's question as the argument (or 'Describe everything you see'\n"
+    "  if the question is vague like 'what do you see').\n"
     "- When the user asks a math or calculation question, choose the right tool:\n"
     "  * For basic arithmetic, powers, roots, trig, logarithms, factorials, and\n"
     "    combinatorics: use the calculate tool. It is fast, offline, and free.\n"
@@ -542,11 +547,22 @@ def _stream_graph(agent, input_data, config: dict):
     thinking_signalled = False
     _seen_tool_calls: set[str] = set()
 
-    for event in agent.stream(
-        input_data,
-        config=config,
-        stream_mode=["messages", "updates"],
-    ):
+    try:
+        stream_iter = agent.stream(
+            input_data,
+            config=config,
+            stream_mode=["messages", "updates"],
+        )
+    except Exception as exc:
+        if "does not support tools" in str(exc) or "status code: 400" in str(exc):
+            yield ("error", f"{get_current_model()} does not support tool calling. "
+                   "Please switch to a compatible model in Settings → Models.")
+        else:
+            yield ("error", str(exc))
+        return
+
+    try:
+      for event in stream_iter:
         mode, data = event
 
         # ── updates: tool call / tool result events ──────────────────────────
@@ -604,6 +620,13 @@ def _stream_graph(agent, input_data, config: dict):
                 thinking_signalled = False
                 full_answer.append(cleaned)
                 yield ("token", cleaned)
+    except Exception as exc:
+        if "does not support tools" in str(exc) or "status code: 400" in str(exc):
+            yield ("error", f"{get_current_model()} does not support tool calling. "
+                   "Please switch to a compatible model in Settings → Models.")
+        else:
+            yield ("error", str(exc))
+        return
 
     # Check if the graph paused due to an interrupt (destructive tool gate)
     state = agent.get_state(config)

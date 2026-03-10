@@ -136,10 +136,56 @@ class GmailTool(BaseTool):
 
         selected = self._get_selected_operations()
         # Filter to selected operations only
-        return [t for t in all_tools if t.name in selected]
+        tools = [t for t in all_tools if t.name in selected]
+
+        # Wrap each tool so empty results return an explicit message
+        # instead of an empty string (which causes the LLM to hallucinate).
+        return [_wrap_gmail_tool_empty_guard(t) for t in tools]
 
     def execute(self, query: str) -> str:
         return "Use the individual Gmail operations instead."
+
+
+# ── Empty-result guard ───────────────────────────────────────────────────
+
+_EMPTY_MESSAGES: dict[str, str] = {
+    "search_gmail": (
+        "No emails were found matching that query. "
+        "The inbox search returned zero results."
+    ),
+    "get_gmail_message": "No message content was returned.",
+    "get_gmail_thread": "No thread content was returned.",
+}
+_DEFAULT_EMPTY_MSG = "The Gmail tool returned no results."
+
+
+def _wrap_gmail_tool_empty_guard(tool):
+    """Wrap a LangChain Gmail tool so that empty / blank results are
+    replaced with an explicit 'no results' message.  This prevents the
+    LLM from hallucinating fake emails when the API returns nothing."""
+    from langchain_core.tools import StructuredTool
+
+    original_func = tool.func if hasattr(tool, "func") else None
+    if original_func is None:
+        return tool
+
+    empty_msg = _EMPTY_MESSAGES.get(tool.name, _DEFAULT_EMPTY_MSG)
+
+    def _guarded(*args, **kwargs):
+        result = original_func(*args, **kwargs)
+        # Treat None, empty string, empty list, or whitespace-only as empty
+        if not result or (isinstance(result, str) and not result.strip()):
+            return empty_msg
+        # Also catch list-like results that stringified to '[]'
+        if isinstance(result, str) and result.strip() in ("[]", "[]\n", ""):
+            return empty_msg
+        return result
+
+    return StructuredTool.from_function(
+        func=_guarded,
+        name=tool.name,
+        description=tool.description,
+    )
 
 
 registry.register(GmailTool())

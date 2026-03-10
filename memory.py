@@ -78,8 +78,8 @@ _init_db()
 
 def _get_embedding_model():
     """Return the shared HuggingFaceEmbeddings instance from documents.py."""
-    from documents import embedding_model
-    return embedding_model
+    from documents import get_embedding_model
+    return get_embedding_model()
 
 
 def _memory_text(row: dict) -> str:

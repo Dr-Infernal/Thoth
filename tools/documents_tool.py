@@ -36,7 +36,7 @@ class DocumentsTool(BaseTool):
     def get_retriever(self, **kwargs):
         import documents
         from agent import _compressed
-        retriever = documents.vector_store.as_retriever(search_kwargs={"k": 5})
+        retriever = documents.get_vector_store().as_retriever(search_kwargs={"k": 5})
         return _compressed(retriever)
 
 

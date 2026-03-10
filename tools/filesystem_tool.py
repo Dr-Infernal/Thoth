@@ -98,6 +98,12 @@ class FileSystemTool(BaseTool):
         )
         tools = toolkit.get_tools()
 
+        # Wrap each built-in tool to normalise paths the LLM provides.
+        # LLMs frequently pass the workspace folder name as a prefix
+        # (e.g. "ThothWorkspace/file.txt" when root is already
+        # D:\ThothWorkspace), doubling the path.  This wrapper strips it.
+        tools = [_wrap_tool_with_path_fix(t, root) for t in tools]
+
         # Replace the default read_file with our PDF-aware version
         if "read_file" in selected:
             tools = [t for t in tools if t.name != "read_file"]
@@ -111,6 +117,76 @@ class FileSystemTool(BaseTool):
 
 
 _MAX_READ_CHARS = 80_000  # ~24K tokens — main agent trims further via _pre_model_trim
+
+
+def _normalise_path(file_path: str, root_dir: str) -> str:
+    """Strip the workspace folder name from the front of *file_path* if the
+    LLM redundantly included it, and convert absolute paths that fall inside
+    the workspace to relative ones.
+
+    Examples (root_dir = ``D:\\ThothWorkspace``):
+    - ``ThothWorkspace/notes.txt``  →  ``notes.txt``
+    - ``D:\\ThothWorkspace\\notes.txt``  →  ``notes.txt``
+    - ``notes.txt``  →  ``notes.txt``  (unchanged)
+    """
+    import os
+    from pathlib import Path
+
+    fp = file_path.replace("\\", "/").strip().strip("/")
+    root_name = Path(root_dir).name  # e.g. "ThothWorkspace"
+
+    # Strip leading workspace folder name (case-insensitive)
+    if fp.lower().startswith(root_name.lower() + "/"):
+        fp = fp[len(root_name) + 1:]
+    elif fp.lower() == root_name.lower():
+        fp = "."
+
+    # Handle absolute paths inside the workspace
+    try:
+        resolved = Path(fp).resolve()
+        root_resolved = Path(root_dir).resolve()
+        if str(resolved).lower().startswith(str(root_resolved).lower()):
+            rel = os.path.relpath(resolved, root_resolved)
+            fp = rel.replace("\\", "/")
+    except (OSError, ValueError):
+        pass
+
+    return fp
+
+
+def _wrap_tool_with_path_fix(tool, root_dir: str):
+    """Return a copy of *tool* whose invoke/run methods normalise any file
+    path arguments before forwarding to the original implementation."""
+    from langchain_core.tools import StructuredTool
+
+    original_func = tool.func if hasattr(tool, "func") else None
+    if original_func is None:
+        return tool  # can't wrap tools without a plain func
+
+    import inspect
+    sig = inspect.signature(original_func)
+    # Identify which parameters look like paths
+    _path_params = [
+        p.name for p in sig.parameters.values()
+        if "path" in p.name.lower() or "dir" in p.name.lower()
+           or p.name in ("source", "destination")
+    ]
+    if not _path_params:
+        # list_directory uses no named path param — its first arg is dir_path
+        if tool.name == "list_directory":
+            _path_params = list(sig.parameters.keys())[:1]
+
+    def _wrapped(**kwargs):
+        for key in _path_params:
+            if key in kwargs and isinstance(kwargs[key], str):
+                kwargs[key] = _normalise_path(kwargs[key], root_dir)
+        return original_func(**kwargs)
+
+    return StructuredTool.from_function(
+        func=_wrapped,
+        name=tool.name,
+        description=tool.description,
+    )
 
 
 def _make_pdf_aware_read_tool(root_dir: str):
@@ -143,6 +219,7 @@ def _make_pdf_aware_read_tool(root_dir: str):
         if "::" in file_path:
             file_path, sheet_name = file_path.rsplit("::", 1)
 
+        file_path = _normalise_path(file_path, root_dir)
         resolved = Path(root_dir) / file_path
         resolved = resolved.resolve()
 

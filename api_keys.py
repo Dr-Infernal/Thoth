@@ -13,6 +13,13 @@ API_KEY_DEFINITIONS = {
     "Tavily": "TAVILY_API_KEY",
 }
 
+# Telegram Bot credentials – stored the same way but managed
+# in the Channels settings tab rather than the API-Keys tab.
+TELEGRAM_KEY_DEFINITIONS = {
+    "Telegram Bot Token": "TELEGRAM_BOT_TOKEN",
+    "Telegram User ID": "TELEGRAM_USER_ID",
+}
+
 
 def _load_keys() -> dict[str, str]:
     """Load saved keys from disk. Returns {env_var: value}."""
