@@ -17,6 +17,30 @@ Thoth is a **local-first, privacy-focused AI assistant** that runs entirely on y
 
 > **Bottom line:** Cloud AI assistants rent you access to someone else's computer. Thoth gives you your own.
 
+### How is Thoth different from OpenClaw?
+
+[OpenClaw](https://github.com/openclaw/openclaw) is a fantastic open-source project — but it solves a different problem. OpenClaw is a **messaging infrastructure platform**: it routes cloud LLM calls (OpenAI, Anthropic, Google) to 25+ chat surfaces like WhatsApp, Slack, and Discord. The LLM runs in the cloud; the gateway runs on your machine.
+
+Thoth is a **local-compute desktop assistant**: the LLM, voice pipeline, and memory all run on your hardware. Nothing leaves your machine unless you explicitly opt into an online tool.
+
+| | OpenClaw | Thoth |
+|---|---|---|
+| **LLM execution** | Cloud APIs (OpenAI, Anthropic, etc.) | Local via Ollama — your GPU, your data |
+| **Privacy model** | Gateway is local; LLM calls hit cloud servers | Everything local — LLM, voice, memory, conversations |
+| **Ongoing cost** | Free software, but requires paid API keys | Free software **and** free to run — no subscriptions |
+| **Offline capability** | Requires internet for every LLM call | Core features work fully offline |
+| **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Piper TTS — fully offline, 8 voices |
+| **Long-term memory** | Session compaction + pruning | Persistent vector memory — semantic search, auto-extraction, 6 categories |
+| **Tools** | Browser automation, Canvas, Skills platform | 19 tools / 42 sub-ops — Gmail, Calendar, filesystem, vision, charts, Wolfram, and more |
+| **Messaging channels** | 25+ (WhatsApp, Slack, Discord, Teams, Signal, …) | 2 (Telegram, Email) |
+| **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows native (primary), cross-platform capable |
+| **Desktop experience** | macOS menu bar app, WebChat | Native desktop window, system tray, splash screen |
+| **Workflows** | Cron jobs + webhooks | Named multi-step workflows with scheduling, chaining, and template variables |
+| **Setup** | Node.js + cloud API keys + channel config | Python + Ollama — two installs, zero accounts needed |
+
+> **Pick OpenClaw** if you want a cloud-powered assistant that meets you on every chat platform you already use.
+> **Pick Thoth** if you want everything — model, voice, memory, data — running on your own machine with zero cloud dependency and zero recurring cost.
+
 ### Why "Thoth"?
 
 In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, and knowledge — the divine scribe who recorded all human understanding. Like its namesake, this tool is built to gather, organize, and faithfully retrieve knowledge — while keeping everything under your control.
