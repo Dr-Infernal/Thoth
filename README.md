@@ -250,13 +250,26 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 
 ## 💻 System Requirements
 
-| Requirement | Minimum |
+### Minimum
+
+| Requirement | Details |
 |-------------|---------|
 | **OS** | Windows 10/11 (64-bit) |
-| **RAM** | 8 GB (16 GB+ recommended for 14B+ models) |
-| **Disk** | ~2 GB for app + packages, ~5–10 GB for LLM models |
-| **GPU** | Optional — Ollama uses GPU if available (NVIDIA CUDA or AMD ROCm) |
-| **Internet** | Required for installation; optional at runtime (only for online tools) |
+| **Python** | 3.11+ |
+| **RAM** | 8 GB |
+| **Disk** | ~5 GB (app + packages + one small model like `qwen3:8b`) |
+| **GPU** | Not required — Ollama can run on CPU only |
+| **Internet** | Required for installation and model download; optional at runtime |
+
+### Recommended
+
+| Requirement | Details |
+|-------------|---------|
+| **RAM** | 16–32 GB for 14B–30B parameter models |
+| **GPU** | NVIDIA GPU with 8+ GB VRAM (CUDA) — dramatically faster inference |
+| **Disk** | 20+ GB if running multiple or larger models (e.g. `qwen3:30b` is ~18 GB) |
+
+> **Note:** The default model (`qwen3:14b`, ~9 GB) runs acceptably on CPU with 16 GB RAM, but a GPU makes responses significantly faster. Smaller models like `qwen3:8b` (~5 GB) work well on 8 GB RAM machines.
 
 ---
 
