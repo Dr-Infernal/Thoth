@@ -32,14 +32,13 @@ Thoth is a **local-compute desktop assistant**: the LLM, voice pipeline, and mem
 | **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Piper TTS — fully offline, 8 voices |
 | **Long-term memory** | Session compaction + pruning | Persistent vector memory — semantic search, auto-extraction, 6 categories |
 | **Tools** | Browser automation, Canvas, Skills platform | 19 tools / 42 sub-ops — Gmail, Calendar, filesystem, vision, charts, Wolfram, and more |
-| **Messaging channels** | 25+ (WhatsApp, Slack, Discord, Teams, Signal, …) | 2 (Telegram, Email) |
 | **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows native (primary), cross-platform capable |
 | **Desktop experience** | macOS menu bar app, WebChat | Native desktop window, system tray, splash screen |
 | **Workflows** | Cron jobs + webhooks | Named multi-step workflows with scheduling, chaining, and template variables |
 | **Setup** | Node.js + cloud API keys + channel config | Python + Ollama — two installs, zero accounts needed |
 
-> **Pick OpenClaw** if you want a cloud-powered assistant that meets you on every chat platform you already use.
 > **Pick Thoth** if you want everything — model, voice, memory, data — running on your own machine with zero cloud dependency and zero recurring cost.
+> **Pick OpenClaw** if you want a cloud-powered assistant that meets you on every chat platform you already use.
 
 ### Why "Thoth"?
 
