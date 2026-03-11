@@ -1,4 +1,4 @@
-# 𓁀 Thoth — Personal AI Sovereignty
+# 𓁟 Thoth — Personal AI Sovereignty
 
 > 🍎 **macOS support is on the way.** Thoth currently runs on Windows. A native macOS release is in active development — stay tuned.
 
