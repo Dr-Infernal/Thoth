@@ -1486,16 +1486,52 @@ async def index():
     # INTERRUPT DIALOG
     # ══════════════════════════════════════════════════════════════════════
 
-    p.interrupt_dlg = ui.dialog()
+    p.interrupt_dlg = ui.dialog().props("persistent")
 
     def _show_interrupt(data: dict) -> None:
         p.interrupt_dlg.clear()
-        with p.interrupt_dlg, ui.card().classes("w-96"):
-            ui.label("⚠️ Confirmation Required").classes("text-h6 text-warning")
-            ui.markdown(data.get("description", "The agent needs your approval."))
-            with ui.row().classes("w-full justify-end gap-2"):
-                ui.button("❌ Deny", on_click=lambda: (_close_interrupt(False))).props("flat")
-                ui.button("✅ Approve", on_click=lambda: (_close_interrupt(True))).props("color=primary")
+        desc = data.get("description", "The agent needs your approval.")
+        with p.interrupt_dlg, ui.card().classes("q-pa-none").style(
+            "width: 520px; max-width: 90vw; border-radius: 16px; overflow: hidden;"
+            "background: #1a1a2e; border: 1px solid #2a2a4a;"
+        ):
+            # ── Header ──
+            with ui.row().classes("w-full items-center q-pa-md").style(
+                "background: linear-gradient(135deg, #2d1b00 0%, #1a1a2e 100%);"
+                "border-bottom: 1px solid #3d2e00;"
+            ):
+                ui.icon("warning_amber", size="28px", color="amber")
+                ui.label("Confirmation Required").style(
+                    "font-size: 1.15rem; font-weight: 700; color: #f0c040; margin-left: 8px;"
+                )
+            # ── Body ──
+            with ui.column().classes("w-full q-pa-lg"):
+                ui.label("The agent wants to perform the following action:").style(
+                    "font-size: 0.85rem; color: #8888aa; margin-bottom: 8px;"
+                )
+                with ui.element("div").style(
+                    "background: #12121e; border: 1px solid #2a2a4a; border-radius: 10px;"
+                    "padding: 14px 16px; max-height: 260px; overflow-y: auto;"
+                    "font-size: 0.9rem; color: #d0d0e0; line-height: 1.6;"
+                    "word-wrap: break-word; white-space: pre-wrap;"
+                ):
+                    ui.markdown(desc)
+            # ── Footer ──
+            with ui.row().classes("w-full justify-end q-pa-md gap-3").style(
+                "border-top: 1px solid #2a2a4a;"
+            ):
+                ui.button("Deny", on_click=lambda: (_close_interrupt(False))).props(
+                    "flat no-caps"
+                ).style(
+                    "color: #ff6b6b; font-weight: 600; font-size: 0.9rem;"
+                    "padding: 8px 24px; border-radius: 8px;"
+                )
+                ui.button("Approve", on_click=lambda: (_close_interrupt(True))).props(
+                    "unelevated no-caps"
+                ).style(
+                    "background: #2d8a4e; color: white; font-weight: 600;"
+                    "font-size: 0.9rem; padding: 8px 28px; border-radius: 8px;"
+                )
         p.interrupt_dlg.open()
 
     def _close_interrupt(approved: bool) -> None:
