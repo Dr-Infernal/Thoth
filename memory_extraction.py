@@ -64,6 +64,10 @@ Rules:
 - Do NOT extract facts from tool results, web searches, or AI responses
 - Do NOT extract transient requests ("search for X", "tell me about Y")
 - Do NOT extract information the AI already knows from prior context
+- Do NOT extract activity logs that are handled by the tracker tool. Skip
+  any mentions of taking medication, symptoms (headaches, pain levels),
+  exercise sessions, period tracking, mood logs, sleep logs, or other
+  recurring tracked events. The tracker system stores these separately.
 - Return a JSON array of objects with keys: category, subject, content
 - category must be one of: person, preference, fact, event, place, project
 - If there is NOTHING worth remembering, return an empty array: []

@@ -1,8 +1,12 @@
 # 𓁟 Thoth — Private AI Assistant
 
-Thoth is a **local-first, privacy-focused AI assistant** that runs entirely on your machine. It combines a powerful ReAct agent with 19 integrated tools — web search, email, calendar, file management, vision, long-term memory, and more — plus Telegram and Email messaging channels, all powered by a locally-running LLM via [Ollama](https://ollama.com/). No data leaves your machine unless you explicitly use an online tool.
+> 🍎 **macOS support is on the way.** Thoth currently runs on Windows. A native macOS release is in active development — stay tuned.
+
+Thoth is a **local-first, privacy-focused AI assistant** that runs entirely on your machine. It combines a powerful ReAct agent with 20 integrated tools — web search, email, calendar, file management, vision, long-term memory, habit tracking, and more — plus Telegram and Email messaging channels, all powered by a locally-running LLM via [Ollama](https://ollama.com/). No data leaves your machine unless you explicitly use an online tool.
 
 ### Why not just use ChatGPT?
+
+> **Bottom line:** Cloud AI assistants rent you access to someone else's system. Thoth gives you your own.
 
 | | ChatGPT / Claude / Gemini | Thoth |
 |---|---|---|
@@ -15,13 +19,14 @@ Thoth is a **local-first, privacy-focused AI assistant** that runs entirely on y
 | **Voice** | Cloud-processed speech | Local Whisper STT + Piper TTS — never leaves your mic |
 | **Availability** | Requires internet, subject to outages & rate limits | Works offline (core features), no throttling |
 
-> **Bottom line:** Cloud AI assistants rent you access to someone else's computer. Thoth gives you your own.
-
 ### How is Thoth different from OpenClaw?
 
 [OpenClaw](https://github.com/openclaw/openclaw) is a fantastic open-source project — but it solves a different problem. OpenClaw is a **messaging infrastructure platform**: it routes cloud LLM calls (OpenAI, Anthropic, Google) to 25+ chat surfaces like WhatsApp, Slack, and Discord. The LLM runs in the cloud; the gateway runs on your machine.
 
 Thoth is a **local-compute desktop assistant**: the LLM, voice pipeline, and memory all run on your hardware. Nothing leaves your machine unless you explicitly opt into an online tool.
+
+> **Pick Thoth** if you want everything — model, voice, memory, data — running on your own machine with zero cloud dependency and zero recurring cost.
+> **Pick OpenClaw** if you want a cloud-powered assistant that meets you on every chat platform you already use.
 
 | | OpenClaw | Thoth |
 |---|---|---|
@@ -31,16 +36,14 @@ Thoth is a **local-compute desktop assistant**: the LLM, voice pipeline, and mem
 | **Offline capability** | Requires internet for every LLM call | Core features work fully offline |
 | **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Piper TTS — fully offline, 8 voices |
 | **Long-term memory** | Session compaction + pruning | Persistent vector memory — semantic search, auto-extraction, 6 categories |
-| **Tools** | Browser automation, Canvas, Skills platform | 19 tools / 42 sub-ops — Gmail, Calendar, filesystem, vision, charts, Wolfram, and more |
-| **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows native (primary), cross-platform capable |
+| **Tools** | Browser automation, Canvas, Skills platform | 20 tools / 45 sub-ops — Gmail, Calendar, filesystem, vision, habit tracker, charts, Wolfram, and more |
+| **Health & Habit Tracking** | ❌ None | Conversational tracker for meds, symptoms, exercise, periods — with streak, adherence, and trend analysis |
+| **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows native (primary); **macOS coming soon** |
 | **Desktop experience** | macOS menu bar app, WebChat | Native desktop window, system tray, splash screen |
 | **Workflows** | Cron jobs + webhooks | Named multi-step workflows with scheduling, chaining, and template variables |
-| **Setup** | Node.js + cloud API keys + channel config | Python + Ollama — two installs, zero accounts needed |
+| **Setup** | Node.js + cloud API keys + channel config | Python + Ollama (GUI Installer), zero accounts needed |
 
-> **Pick Thoth** if you want everything — model, voice, memory, data — running on your own machine with zero cloud dependency and zero recurring cost.
-> **Pick OpenClaw** if you want a cloud-powered assistant that meets you on every chat platform you already use.
-
-### Why "Thoth"?
+### Why the name "Thoth"?
 
 In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, and knowledge — the divine scribe who recorded all human understanding. Like its namesake, this tool is built to gather, organize, and faithfully retrieve knowledge — while keeping everything under your control.
 
@@ -50,7 +53,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ### 🤖 ReAct Agent Architecture
 - **Autonomous tool use** — the agent decides which tools to call, when, and how many times, based on your question
-- **19 tools / 42 sub-tools** — web search, email, calendar, file management, vision, memory, and more (see [full list below](#-tools-19-tools--42-sub-tools))
+- **20 tools / 45 sub-tools** — web search, email, calendar, file management, vision, memory, habit tracking, and more (see [full list below](#-tools-20-tools--45-sub-tools))
 - **Streaming responses** — tokens stream in real-time with a typing indicator
 - **Thinking indicators** — shows when the model is reasoning before responding
 - **Smart context management** — conversation history is trimmed to 80% of the context window before each LLM call; oversized tool outputs (e.g. large PDF reads) are proportionally shrunk so multi-file workflows fit within context
@@ -104,8 +107,17 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Auto-start** — channels can be set to start automatically when Thoth launches
 - **Settings UI** — configure, start/stop, and manage channels from Settings → Channels tab
 
-### 🖥️ Desktop App
-- **Native window** — runs in a native OS window via pywebview instead of a browser tab; no browser chrome, feels like a real desktop application
+### � Habit & Health Tracker
+- **Conversational tracking** — log medications, symptoms, exercise, periods, mood, sleep, or any recurring activity through natural conversation — *"I took my Lexapro"*, *"Headache level 6"*, *"Period started"*
+- **Auto-detect & confirm** — the agent recognises trackable events and asks *"Want me to log that?"* before writing, so nothing is recorded by accident
+- **3 sub-tools** — `tracker_log` (structured input, auto-creates trackers), `tracker_query` (free-text read-only), `tracker_delete` (destructive, requires confirmation)
+- **7 built-in analyses** — adherence rate, current/longest streaks, numeric stats (mean/min/max/σ), frequency, day-of-week distribution, cycle estimation (for period tracking), and co-occurrence between any two trackers
+- **Trend analysis & charting** — query trends over any time window; results export to CSV automatically, then the agent chains to the Chart tool for interactive Plotly visualisations
+- **Fully local** — all data stored in `~/.thoth/tracker/tracker.db` (SQLite); nothing leaves your machine
+- **Smart memory separation** — tracker data is excluded from the memory system; logging a medication won't pollute your personal knowledge base
+
+### �🖥️ Desktop App
+- **Native window** — runs in a native OS window via pywebview instead of a browser, a real desktop application
 - **Splash screen** — a branded splash screen displays the Thoth logo while the server starts up, then closes automatically when ready
 - **System tray** — `launcher.py` runs a pystray system tray icon showing app status (green = running, grey = stopped) with Open / Quit menu
 - **Auto-restart** — if the native window is closed, re-opening from the tray relaunches it instantly
@@ -121,7 +133,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Inline charts** — interactive Plotly charts rendered inline when the agent visualises data (zoom, hover, pan)
 - **Inline YouTube embeds** — YouTube links in responses are rendered as playable embedded videos
 - **Syntax-highlighted code blocks** — fenced code blocks render with language-aware highlighting and a built-in copy button
-- **Onboarding guide** — first-run welcome message with tool overview and clickable example prompts; `?` button in sidebar to re-show anytime
+- **Onboarding guide** — first-run welcome message with tool overview and clickable example prompts; `👋` button in sidebar to re-show anytime
 - **Startup health check** — verifies Ollama connectivity and model availability on launch
 
 ### 🤖 Brain Model
@@ -140,9 +152,9 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ---
 
-## 🔧 Tools (19 Tools / 42 Sub-tools)
+## 🔧 Tools (20 Tools / 45 Sub-tools)
 
-Thoth's agent has access to 19 tools that expose 42 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
+Thoth's agent has access to 20 tools that expose 45 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
 
 ### Search & Knowledge
 
@@ -164,6 +176,7 @@ Thoth's agent has access to 19 tools that expose 42 individual operations to the
 | **📅 Google Calendar** | View, create, update, move, and delete events (Google OAuth) | OAuth credentials |
 | **📁 Filesystem** | Sandboxed file operations — read, write, copy, move, delete within a workspace folder; reads PDF, CSV, Excel (.xlsx/.xls), JSON/JSONL, and TSV files; structured data files return schema + stats + preview via pandas | None |
 | **⏰ Timer** | Desktop notification timers (max 24h), with list and cancel | None |
+| **📋 Tracker** | Habit/health tracker — log meds, symptoms, exercise, periods; streak, adherence, trend analysis; CSV export | None |
 
 ### Computation & Analysis
 
@@ -180,7 +193,7 @@ Thoth's agent has access to 19 tools that expose 42 individual operations to the
 
 ### Safety & Permissions
 
-- **Destructive operations require confirmation**: `file_delete`, `move_file`, `send_gmail_message`, `move_calendar_event`, `delete_calendar_event`, `delete_memory`
+- **Destructive operations require confirmation**: `file_delete`, `move_file`, `send_gmail_message`, `move_calendar_event`, `delete_calendar_event`, `delete_memory`, `tracker_delete`
 - **Filesystem is sandboxed**: only the configured workspace folder is accessible
 - **Gmail/Calendar operations are tiered**: read, compose/write, and destructive tiers can be toggled independently
 - **Tools can be individually disabled** from Settings to reduce model decision complexity
@@ -207,7 +220,7 @@ Thoth's agent has access to 19 tools that expose 42 individual operations to the
 │   System prompt with TOOL USE, MEMORY, and CITATION guidelines      │
 │   Interrupt mechanism for destructive action confirmation            │
 │                                                                      │
-│   42 LangChain sub-tools from 19 registered tool modules            │
+│   45 LangChain sub-tools from 20 registered tool modules            │
 └───────┬──────────┬──────────┬──────────┬──────────┬─────────────────┘
         │          │          │          │          │
         ▼          ▼          ▼          ▼          ▼
@@ -238,7 +251,7 @@ Thoth's agent has access to 19 tools that expose 42 individual operations to the
 | **`workflows.py`** | Workflow engine — SQLite CRUD, template variable expansion, sequential prompt execution, background runner with threading, scheduled execution (daily/weekly), desktop notifications, 4 default templates |
 | **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects (winsound), and in-app toast queue; coordinates workflow completion chimes and timer alerts |
 | **`channels/`** | Messaging channel adapters — Telegram bot (long polling) and Email channel (Gmail polling), with shared config store |
-| **`tools/`** | 19 self-registering tool modules + base class + registry |
+| **`tools/`** | 20 self-registering tool modules + base class + registry |
 
 ### Data Storage
 
@@ -261,6 +274,9 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── workflows.db            # Workflow definitions, schedules & run history
 ├── timers.sqlite           # Scheduled timer jobs
 ├── channels_config.json    # Channel settings (Telegram, Email auto-start)
+├── tracker/
+│   ├── tracker.db          # Habit/health tracker data (trackers + entries)
+│   └── exports/            # CSV exports from trend analysis queries
 ├── vector_store/           # FAISS index for uploaded documents
 ├── gmail/                  # Gmail OAuth tokens
 ├── calendar/               # Calendar OAuth tokens
@@ -365,6 +381,8 @@ For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credent
    - *"Remember that my mom's birthday is March 15"* → saves to Memory
    - *"Read the file report.pdf in my workspace"* → uses Filesystem
    - *"What's on my screen right now?"* → uses Vision (screen capture)
+   - *"I took my Lexapro"* → asks to log, then saves to Tracker
+   - *"Show my headache trends this month"* → uses Tracker + Chart
    - *"Set a timer for 10 minutes"* → uses Timer with desktop notification
    - *"What did I ask about taxes last week?"* → uses Conversation Search
 4. **Open ⚙️ Settings** to configure models, enable/disable tools, and set up integrations

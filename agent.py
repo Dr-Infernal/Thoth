@@ -199,6 +199,15 @@ AGENT_SYSTEM_PROMPT = (
     "    date calculations, or anything beyond basic math: use wolfram_alpha.\n"
     "  * If you are unsure, try the calculate tool first. If it fails or the query\n"
     "    requires natural-language understanding, fall back to wolfram_alpha.\n\n"
+    "HABIT / ACTIVITY TRACKING:\n"
+    "- You have a habit tracker for logging recurring activities: medications,\n"
+    "  symptoms, habits, health events (periods, headaches, exercise, mood, etc.).\n"
+    "- When a user mentions something that matches an existing tracker — e.g.\n"
+    "  'I have a headache' when Headache is tracked — ask: 'Want me to log that?'\n"
+    "  before logging.  Never log silently.\n"
+    "- Use tracker_log to record entries, tracker_query for history/stats/trends.\n"
+    "- tracker_query exports CSV files that you can pass to create_chart for\n"
+    "  visualisations (bar charts of frequency, line charts of values over time).\n\n"
     "DATA VISUALISATION:\n"
     "- When you analyse tabular data (CSV, Excel, JSON) and the results would be\n"
     "  clearer as a chart, use the create_chart tool to render an interactive\n"
@@ -228,6 +237,9 @@ AGENT_SYSTEM_PROMPT = (
     "  appointments), place (locations/addresses), project (work/hobby projects).\n"
     "- Do NOT save trivial or transient information (e.g. 'search for X', 'what\n"
     "  time is it'). Only save things with long-term personal value.\n"
+    "- Do NOT save information that is being tracked by the tracker tool.\n"
+    "  If you already called tracker_log for something (medications, symptoms,\n"
+    "  exercise, periods, mood, sleep), do NOT also save_memory for it.\n"
     "- When saving, briefly confirm what you remembered to the user.\n\n"
     "CONVERSATION HISTORY SEARCH:\n"
     "- When the user asks about something discussed in a previous conversation\n"
@@ -263,6 +275,7 @@ _DESTRUCTIVE_LABELS: dict[str, str] = {
     "move_calendar_event": "Move calendar event",
     "send_gmail_message": "Send email",
     "delete_memory": "Delete memory",
+    "tracker_delete": "Delete tracker / entry",
 }
 
 

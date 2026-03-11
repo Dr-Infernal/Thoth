@@ -2,9 +2,30 @@
 
 ---
 
-## v3.0.0 — NiceGUI & Messaging Channels
+## v3.0.0 — NiceGUI, Messaging Channels & Habit Tracker
 
-Complete frontend rewrite from Streamlit to NiceGUI, plus new messaging channel adapters for Telegram and Email.
+Complete frontend rewrite from Streamlit to NiceGUI, new messaging channel adapters for Telegram and Email, and a conversational habit/health tracking system.
+
+### 📋 Habit & Health Tracker
+
+A new conversational tracker for logging and analysing recurring activities — medications, symptoms, exercise, periods, mood, sleep, or anything you want to track over time.
+
+#### Tracking
+- **Natural-language logging** — tell the agent *"I took my Lexapro"* or *"Headache level 6"* and it offers to log the entry; no forms or dashboards needed
+- **Auto-create trackers** — trackers are created on first mention; supports boolean, numeric, duration, and categorical types
+- **Backfill** — log entries with a past timestamp: *"I took my meds at 8am"*
+- **3 sub-tools** — `tracker_log` (structured input), `tracker_query` (free-text read-only), `tracker_delete` (destructive, requires confirmation via interrupt)
+
+#### Analysis
+- **7 built-in analyses** — adherence rate, current/longest streaks, numeric stats (mean/min/max/σ), frequency (per week/month), day-of-week distribution, cycle estimation (period tracking), co-occurrence between any two trackers
+- **Trend queries** — *"Show my headache trends this month"* returns stats + exports CSV for charting
+- **Chart chaining** — CSV exports are passed to the existing Chart tool for interactive Plotly visualisations (bar, line, scatter, etc.)
+- **Co-occurrence** — *"Do headaches correlate with my period?"* compares two trackers within a configurable time window
+
+#### Privacy & Integration
+- **Fully local** — SQLite database at `~/.thoth/tracker/tracker.db`; CSV exports in `~/.thoth/tracker/exports/`
+- **Memory separation** — tracker data is excluded from the memory extraction system; logging meds won't pollute your personal knowledge base
+- **Agent prompt integration** — system prompt instructs the agent to confirm before logging and to chain to `create_chart` for visual outputs
 
 ### 🎯 Context-Size Capping
 

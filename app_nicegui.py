@@ -102,7 +102,7 @@ _EXAMPLE_PROMPTS = [
     "Summarize the latest AI research papers",
     "What do you remember about me?",
     "Read and summarize report.pdf in my workspace",
-    "Send a Telegram message to Mom saying I'll be late",
+    "Send an email to Mom saying I'll be home at 5",
     "What am I looking at? (with camera)",
 ]
 
@@ -590,6 +590,18 @@ async def index():
             flex: 1;
             min-width: 0;
             overflow: hidden;
+            /* Override Quasar QScrollArea's user-select: none */
+            -webkit-user-select: text;
+            user-select: text;
+            cursor: default;
+        }
+        .thoth-msg-body .thoth-msg,
+        .thoth-msg-body p,
+        .thoth-msg-body li,
+        .thoth-msg-body td,
+        .thoth-msg-body th,
+        .thoth-msg-body span:not(.thoth-msg-name):not(.thoth-msg-stamp) {
+            cursor: text;
         }
         .thoth-msg-body .nicegui-code pre {
             white-space: pre-wrap;
@@ -2621,7 +2633,7 @@ async def index():
                 state.show_onboarding = True
                 _rebuild_main()
 
-            ui.button("?", on_click=_show_help).props("flat dense")
+            ui.button("👋", on_click=_show_help).props("flat dense")
 
     # ── Thread list builder ──────────────────────────────────────────────
 
@@ -2902,7 +2914,7 @@ async def index():
         for msg in state.messages:
             _add_chat_message(msg)
 
-        # Onboarding (triggered by ? button)
+        # Onboarding (triggered by 👋 button)
         if state.show_onboarding:
             with p.chat_container:
                 with ui.element("div").classes("thoth-msg-row"):
