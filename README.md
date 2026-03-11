@@ -126,7 +126,8 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ### 🖥️ Desktop App
 - **Native window** — runs in a native OS window via pywebview instead of a browser, a real desktop application
-- **Splash screen** — a branded splash screen displays the Thoth logo while the server starts up, then closes automatically when ready
+- **Splash screen** — two-tier startup splash: tkinter GUI (dark background, gold Thoth logo, animated loading indicator) with automatic console fallback for environments where tkinter isn't available; self-closes when the server is ready
+- **First-launch setup wizard** — on first install, a guided wizard walks you through selecting and downloading brain + vision models before the app starts
 - **System tray** — `launcher.py` runs a pystray system tray icon showing app status (green = running, grey = stopped) with Open / Quit menu
 - **Auto-restart** — if the native window is closed, re-opening from the tray relaunches it instantly
 
@@ -148,7 +149,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Dynamic model switching** — choose any Ollama-supported model from the Settings panel
 - **39 curated tool-capable models** — Qwen, Llama, Mistral, Nemotron, and more — only models that support tool calling are included
 - **Tool-support validation** — downloaded models not in the curated list are flagged with a ⚠️ warning; selecting one triggers a live tool-call check and auto-reverts if the model can't use tools
-- **Automatic download** — selecting a model you haven't pulled yet triggers an in-app download with live progress
+- **Download buttons** — models not yet downloaded show an explicit Download button with live progress; no automatic downloads on selection
 - **Configurable context window** — 4K to 256K tokens via selector; if you choose a value that exceeds the model's native maximum, trimming and the token counter automatically use the model's actual limit and a toast notification explains the cap
 - **Local indicators** — models marked ✅ (downloaded) or ⬇️ (needs download)
 
@@ -243,7 +244,7 @@ Thoth's agent has access to 20 tools that expose 45 individual operations to the
 
 | File | Purpose |
 |------|---------|
-| **`app_nicegui.py`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (11 tabs), file attachment handling, streaming event loop with error recovery, export, voice bar |
+| **`app_nicegui.py`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (11 tabs), file attachment handling, streaming event loop with error recovery, export, voice bar, first-launch setup wizard, centralized logging configuration |
 | **`agent.py`** | LangGraph ReAct agent — system prompt, pre-model context trimming with proportional tool-output shrinking, streaming event generator, interrupt handling for destructive actions, live token usage reporting, contextual compression |
 | **`threads.py`** | SQLite-backed thread metadata and `SqliteSaver` checkpointer for persisting LangGraph conversation state |
 | **`memory.py`** | Long-term memory with SQLite CRUD and FAISS semantic vector search — save, search, list, update, delete, count across 6 categories; auto-rebuilds vector index on mutations |
@@ -253,7 +254,7 @@ Thoth's agent has access to 20 tools that expose 45 individual operations to the
 | **`tts.py`** | Piper TTS integration — engine + default voice bundled with installer, additional voices downloaded on demand, streaming sentence-by-sentence playback |
 | **`vision.py`** | Camera/screen capture via OpenCV/MSS, image analysis via Ollama vision models |
 | **`data_reader.py`** | Shared pandas-based reader for CSV, TSV, Excel, JSON, JSONL — returns schema + stats + preview rows |
-| **`launcher.py`** | Desktop launcher — system tray (pystray), native window management (pywebview), splash screen (tkinter subprocess), manages NiceGUI server lifecycle |
+| **`launcher.py`** | Desktop launcher — system tray (pystray), native window management (pywebview), two-tier splash screen (tkinter with console fallback), manages NiceGUI server lifecycle; structured logging to `~/.thoth/thoth_app.log` |
 | **`api_keys.py`** | API key management — load/save/apply from `~/.thoth/api_keys.json` |
 | **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts personal facts, deduplicates against existing memories (cosine > 0.85), runs on startup + every 6 hours |
 | **`workflows.py`** | Workflow engine — SQLite CRUD, template variable expansion, sequential prompt execution, background runner with threading, scheduled execution (daily/weekly), desktop notifications, 4 default templates |
@@ -282,6 +283,8 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── workflows.db            # Workflow definitions, schedules & run history
 ├── timers.sqlite           # Scheduled timer jobs
 ├── channels_config.json    # Channel settings (Telegram, Email auto-start)
+├── thoth_app.log           # Application log (structured, timestamped)
+├── splash.log              # Splash screen diagnostic log
 ├── tracker/
 │   ├── tracker.db          # Habit/health tracker data (trackers + entries)
 │   └── exports/            # CSV exports from trend analysis queries
@@ -362,7 +365,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
    python app_nicegui.py
    ```
 
-> **First launch:** The default brain model (`qwen3:14b`) will be downloaded automatically if not already available. This is a one-time ~9 GB download.
+> **First launch:** A setup wizard will guide you through selecting and downloading brain and vision models. The default brain model (`qwen3:14b`, ~9 GB) is recommended.
 
 ---
 
