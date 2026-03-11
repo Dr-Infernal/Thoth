@@ -107,7 +107,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Auto-start** — channels can be set to start automatically when Thoth launches
 - **Settings UI** — configure, start/stop, and manage channels from Settings → Channels tab
 
-### � Habit & Health Tracker
+### 📋 Habit & Health Tracker
 - **Conversational tracking** — log medications, symptoms, exercise, periods, mood, sleep, or any recurring activity through natural conversation — *"I took my Lexapro"*, *"Headache level 6"*, *"Period started"*
 - **Auto-detect & confirm** — the agent recognises trackable events and asks *"Want me to log that?"* before writing, so nothing is recorded by accident
 - **3 sub-tools** — `tracker_log` (structured input, auto-creates trackers), `tracker_query` (free-text read-only), `tracker_delete` (destructive, requires confirmation)
@@ -116,7 +116,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Fully local** — all data stored in `~/.thoth/tracker/tracker.db` (SQLite); nothing leaves your machine
 - **Smart memory separation** — tracker data is excluded from the memory system; logging a medication won't pollute your personal knowledge base
 
-### �🖥️ Desktop App
+### 🖥️ Desktop App
 - **Native window** — runs in a native OS window via pywebview instead of a browser, a real desktop application
 - **Splash screen** — a branded splash screen displays the Thoth logo while the server starts up, then closes automatically when ready
 - **System tray** — `launcher.py` runs a pystray system tray icon showing app status (green = running, grey = stopped) with Open / Quit menu
