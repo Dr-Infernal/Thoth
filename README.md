@@ -6,6 +6,8 @@ Thoth is a **local-first AI assistant built for personal AI sovereignty** — yo
 
 > Governments are investing billions to keep AI infrastructure within their borders. Thoth applies the same principle to the individual — your compute, your data, your choice of model, **accountable to no one but you.**
 
+https://github.com/user-attachments/assets/7967e18d-a417-4ca5-b2d7-0fca45975ed7
+
 ### Why not just use ChatGPT?
 
 | | ChatGPT / Claude / Gemini | Thoth |
