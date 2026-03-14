@@ -1644,23 +1644,35 @@ async def index():
             ui.separator()
             with ui.column().classes("w-full gap-2"):
                 def dl_md():
-                    data = _export_as_markdown(name, msgs).encode("utf-8")
-                    ui.download(data, f"{name}.md")
-                    p.export_dlg.close()
+                    try:
+                        data = _export_as_markdown(name, msgs).encode("utf-8")
+                        fname = f"{name}.md"
+                        p.export_dlg.close()
+                        ui.download(data, fname)
+                    except Exception as exc:
+                        log.exception("Export markdown failed")
+                        ui.notify(f"Export failed: {exc}", type="negative")
 
                 def dl_txt():
-                    data = _export_as_text(name, msgs).encode("utf-8")
-                    ui.download(data, f"{name}.txt")
-                    p.export_dlg.close()
+                    try:
+                        data = _export_as_text(name, msgs).encode("utf-8")
+                        fname = f"{name}.txt"
+                        p.export_dlg.close()
+                        ui.download(data, fname)
+                    except Exception as exc:
+                        log.exception("Export text failed")
+                        ui.notify(f"Export failed: {exc}", type="negative")
 
                 def dl_pdf():
                     try:
                         data = _export_as_pdf(name, msgs)
-                        ui.download(data, f"{name}.pdf")
+                        fname = f"{name}.pdf"
                         p.export_dlg.close()
+                        ui.download(data, fname)
                     except ImportError:
                         ui.notify("PDF export requires `fpdf2`. Run: pip install fpdf2", type="negative")
                     except Exception as exc:
+                        log.exception("Export PDF failed")
                         ui.notify(f"PDF export failed: {exc}", type="negative")
 
                 ui.button("📄 Markdown", on_click=dl_md).classes("w-full")
