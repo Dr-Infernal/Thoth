@@ -1632,6 +1632,29 @@ async def index():
 
     p.export_dlg = ui.dialog()
 
+    def _save_export(data: bytes, filename: str) -> None:
+        """Deliver an export file to the user.
+
+        In native mode (pywebview) blob downloads are silently ignored on
+        macOS WebKit, so we write directly to ~/Downloads and notify.
+        In browser mode we use the normal ``ui.download()`` API.
+        """
+        if "--native" in sys.argv:
+            dl_dir = Path.home() / "Downloads"
+            dl_dir.mkdir(parents=True, exist_ok=True)
+            dest = dl_dir / filename
+            # Avoid overwriting — append (1), (2), … if needed
+            counter = 1
+            while dest.exists():
+                stem = Path(filename).stem
+                suffix = Path(filename).suffix
+                dest = dl_dir / f"{stem} ({counter}){suffix}"
+                counter += 1
+            dest.write_bytes(data)
+            ui.notify(f"Saved to {dest}", type="positive")
+        else:
+            ui.download(data, filename)
+
     def _open_export() -> None:
         if not state.messages:
             ui.notify("Nothing to export.", type="warning")
@@ -1648,7 +1671,7 @@ async def index():
                         data = _export_as_markdown(name, msgs).encode("utf-8")
                         fname = f"{name}.md"
                         p.export_dlg.close()
-                        ui.download(data, fname)
+                        _save_export(data, fname)
                     except Exception as exc:
                         log.exception("Export markdown failed")
                         ui.notify(f"Export failed: {exc}", type="negative")
@@ -1658,7 +1681,7 @@ async def index():
                         data = _export_as_text(name, msgs).encode("utf-8")
                         fname = f"{name}.txt"
                         p.export_dlg.close()
-                        ui.download(data, fname)
+                        _save_export(data, fname)
                     except Exception as exc:
                         log.exception("Export text failed")
                         ui.notify(f"Export failed: {exc}", type="negative")
@@ -1668,7 +1691,7 @@ async def index():
                         data = _export_as_pdf(name, msgs)
                         fname = f"{name}.pdf"
                         p.export_dlg.close()
-                        ui.download(data, fname)
+                        _save_export(data, fname)
                     except ImportError:
                         ui.notify("PDF export requires `fpdf2`. Run: pip install fpdf2", type="negative")
                     except Exception as exc:
