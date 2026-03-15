@@ -1,4 +1,4 @@
-"""Thoth v3.0.0 — Comprehensive Test Suite
+"""Thoth v3.1.0 — Comprehensive Test Suite
 
 Validates that all modules import cleanly, key functions exist,
 config round-trips work, DB connectivity works, and the NiceGUI

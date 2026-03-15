@@ -2,6 +2,35 @@
 
 ---
 
+## v3.1.0 — macOS Support & Kokoro TTS
+
+Cross-platform macOS support and a complete TTS engine migration from Piper to Kokoro.
+
+### 🍎 macOS Support
+
+- **Native macOS installer** — `Start Thoth.command` — double-click in Finder to install and launch; auto-installs Homebrew, Python 3.12, and Ollama if not present
+- **Apple Silicon & Intel** — works on M1/M2/M3/M4 and Intel Macs (macOS 12+)
+- **Thoth.app bundle** — auto-generated `.app` with option to copy to /Applications for Dock/Launchpad access
+- **CI-built macOS zip** — GitHub Actions builds the macOS release on a real macOS runner with correct Unix permissions
+- **Cross-platform codebase** — all Python modules updated to work on both Windows and macOS (platform-specific imports, path handling, sound playback)
+
+### 🔊 Kokoro TTS (replaces Piper)
+
+- **New TTS engine** — Kokoro TTS via ONNX Runtime replaces Piper TTS on all platforms
+- **Cross-platform** — Kokoro runs natively on Windows, macOS (Apple Silicon & Intel), and Linux — Piper only worked on Windows/Linux
+- **10 built-in voices** — 5 American (4 female, 1 male), 3 American male, 1 British female, 1 British male (up from 8 Piper voices)
+- **Auto-download** — model files (~169 MB) are downloaded automatically on first TTS use; no bundling required in the installer
+- **Same streaming UX** — sentence-by-sentence playback, mic gating, code block skipping — all preserved
+- **Smaller installer** — Windows installer reduced from ~90 MB to ~30 MB (Piper engine + voice no longer bundled)
+
+### 🛠️ Infrastructure
+
+- **CI updated** — GitHub Actions `ci.yml` now includes a `build-mac-release` job that builds the macOS zip on `macos-latest` and uploads as an artifact
+- **Test suite** — 205 tests passing (added Kokoro TTS tests, all platforms)
+- **Windows installer** — Piper download steps removed from `build_installer.ps1` and `thoth_setup.iss`
+
+---
+
 ## v3.0.0 — NiceGUI, Messaging Channels & Habit Tracker
 
 Complete frontend rewrite from Streamlit to NiceGUI, new messaging channel adapters for Telegram and Email, and a conversational habit/health tracking system.
@@ -332,8 +361,8 @@ Fully local, hands-free voice interaction:
 
 Neural speech synthesis, fully offline:
 
-- **Piper TTS engine** — bundled with installer (engine + default voice); additional voices downloaded from HuggingFace on demand
-- **8 voices** — US and British English, male and female variants
+- **Piper TTS engine** — bundled with installer at the time (engine + default voice); additional voices downloaded from HuggingFace on demand *(replaced by Kokoro TTS in v3.1.0)*
+- **8 voices** — US and British English, male and female variants *(expanded to 10 voices with Kokoro in v3.1.0)*
 - **Streaming playback** — responses spoken sentence-by-sentence as tokens stream in
 - **Smart truncation** — long responses are summarized aloud with full text in the app
 - **Code block skipping** — TTS intelligently skips fenced code blocks
@@ -378,7 +407,7 @@ The Settings dialog has been expanded from a simple panel to a **9-tab dialog**:
 6. **📅 Calendar** — OAuth setup (shared credentials with Gmail), authentication, operation tiers
 7. **🔧 Utilities** — toggle Timer, URL Reader, Calculator, Weather tools
 8. **🧠 Memory** — enable/disable, browse stored memories, search, filter by category, bulk delete
-9. **🎛️ Preferences** — voice input (wake word, Whisper model, sensitivity), TTS (voice selection, Piper install, speed)
+9. **🏛️ Preferences** — voice input (wake word, Whisper model, sensitivity), TTS (voice selection, speed) *(TTS engine changed to Kokoro in v3.1.0)*
 
 ### 🖥️ System Tray Launcher
 
@@ -404,7 +433,7 @@ All user data now lives in `~/.thoth/`:
 - `timers.sqlite` — scheduled timer jobs (new)
 - `gmail/` — Gmail OAuth tokens (new)
 - `calendar/` — Calendar OAuth tokens (new)
-- `piper/` — Piper TTS engine and voice models (new)
+- `piper/` — Piper TTS engine and voice models *(replaced by `kokoro/` in v3.1.0)*
 
 ### 🧹 Codebase Changes
 

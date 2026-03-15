@@ -4,15 +4,13 @@ This guide explains how to build a distributable Windows installer for Thoth v3.
 
 ## Architecture
 
-The installer (~90 MB) bundles the embedded Python runtime, app source code, and the Piper TTS engine with a default voice so text-to-speech works offline out of the box. Ollama and Python packages are downloaded at install time.
+The installer (~30 MB) bundles the embedded Python runtime and app source code. Kokoro TTS model files (~169 MB) are auto-downloaded on first use. Ollama and Python packages are downloaded at install time.
 
 | Bundled in .exe | Downloaded at install time |
 |----------------|---------------------------|
 | Python 3.13 embeddable (~15 MB) | Ollama (~120 MB) |
 | App source code + tools (~200 KB) | Python packages via pip (~2 GB) |
-| get-pip.py (~2.5 MB) | |
-| Piper TTS engine (~37 MB) | Additional TTS voices (~60 MB each, on demand) |
-| Default voice: Lessac (~60 MB) | |
+| get-pip.py (~2.5 MB) | Kokoro TTS model + voices (~169 MB, auto on first TTS use) |
 
 ## Prerequisites
 
@@ -20,7 +18,7 @@ The installer (~90 MB) bundles the embedded Python runtime, app source code, and
    Download: https://jrsoftware.org/isdl.php  
    Ensure `ISCC.exe` is installed (default: `C:\Program Files (x86)\Inno Setup 6\`)
 
-2. **Internet connection** — the build script downloads Python embeddable, get-pip.py, Piper TTS engine, and the default voice
+2. **Internet connection** — the build script downloads Python embeddable and get-pip.py
 
 3. **Icon file** — `thoth.ico` in the project root  
    If you don't have one, remove the `SetupIconFile` and `IconFilename` lines in `thoth_setup.iss`.
@@ -35,9 +33,7 @@ The installer (~90 MB) bundles the embedded Python runtime, app source code, and
 This will:
 1. Download Python 3.13 embeddable package (~15 MB)
 2. Download `get-pip.py` (~2.5 MB)
-3. Download Piper TTS engine (~37 MB)
-4. Download default voice — Lessac, US English (~60 MB)
-5. Compile everything into `dist\ThothSetup_3.0.0.exe`
+3. Compile everything into `dist\ThothSetup_3.1.0.exe`
 
 ### Options
 
@@ -72,7 +68,7 @@ C:\Program Files\Thoth\            # Installation directory
     ├── threads.py                  # Thread/conversation persistence
     ├── api_keys.py                 # API key management
     ├── voice.py                    # Speech-to-text (toggle-based, CPU Whisper)
-    ├── tts.py                      # Text-to-speech (Piper TTS)
+    ├── tts.py                      # Text-to-speech (Kokoro TTS)
     ├── vision.py                   # Camera/screen capture
     ├── data_reader.py              # Pandas-based structured data reader
     ├── workflows.py                # Workflow engine + scheduler
@@ -115,7 +111,7 @@ C:\Program Files\Thoth\            # Installation directory
 ├── vector_store/                   # FAISS index for uploaded documents
 ├── gmail/                          # Gmail OAuth tokens
 ├── calendar/                       # Calendar OAuth tokens
-└── piper/                          # Piper TTS engine & voices
+└── kokoro/                         # Kokoro TTS model & voice data (auto-downloaded)
 ```
 
 Ollama is installed system-wide via its official installer.
@@ -126,7 +122,7 @@ Ollama is installed system-wide via its official installer.
 
 The Inno Setup installer runs these steps:
 
-1. **Extract files** — embedded Python, app source, scripts, Piper TTS + default voice (to `~/.thoth/piper/`)
+1. **Extract files** — embedded Python, app source, scripts
 2. **Run `install_deps.bat`** which:
    - Patches the Python `._pth` file to enable pip and site-packages
    - Installs pip via `get-pip.py`
@@ -138,7 +134,7 @@ The Inno Setup installer runs these steps:
 
 ## End-User Experience
 
-1. Run `ThothSetup_3.0.0.exe`
+1. Run `ThothSetup_3.1.0.exe`
 2. Follow the wizard — dependencies download and install automatically (5-15 min)
 3. Launch Thoth from Start Menu or Desktop shortcut
 4. The system tray icon appears; the app opens at `http://localhost:8080`

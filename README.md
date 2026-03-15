@@ -1,7 +1,5 @@
 # 𓁟 Thoth — Personal AI Sovereignty
 
-> 🍎 **macOS support is on the way.** Thoth currently runs on Windows. A native macOS release is in active development — stay tuned.
-
 Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It runs entirely on your machine, combining a powerful ReAct agent with 20 integrated tools — web search, email, calendar, file management, vision, long-term memory, habit tracking, and more — plus Telegram and Email messaging channels, all powered by a locally-running LLM via [Ollama](https://ollama.com/). No data leaves your machine unless you explicitly use an online tool.
 
 > Governments are investing billions to keep AI infrastructure within their borders. Thoth applies the same principle to the individual — your compute, your data, your choice of model, **accountable to no one but you.**
@@ -18,7 +16,7 @@ https://github.com/user-attachments/assets/7967e18d-a417-4ca5-b2d7-0fca45975ed7
 | **Memory** | Limited, opaque, provider-controlled | You control what's remembered, searchable, deletable |
 | **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, webcam |
 | **Customisation** | Pick a model, write a system prompt | Swap models freely, build multi-step workflows, schedule tasks |
-| **Voice** | Cloud-processed speech | Local Whisper STT + Piper TTS — never leaves your mic |
+| **Voice** | Cloud-processed speech | Local Whisper STT + Kokoro TTS — never leaves your mic |
 | **Availability** | Requires internet, subject to outages & rate limits | Works offline (core features), no throttling |
 
 > **Bottom line:** Cloud AI assistants rent you access to someone else’s system. Thoth gives you **personal AI sovereignty** — your own models, your own data, zero dependency on any provider.
@@ -44,11 +42,11 @@ Thoth is a **local-compute desktop assistant**: the LLM, voice pipeline, and mem
 | **Privacy model** | Gateway is local; LLM calls hit cloud servers | Everything local — LLM, voice, memory, conversations |
 | **Ongoing cost** | Free software, but requires paid API keys | Free software **and** free to run — no subscriptions |
 | **Offline capability** | Requires internet for every LLM call | Core features work fully offline |
-| **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Piper TTS — fully offline, 8 voices |
+| **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Kokoro TTS — fully offline, 10 voices |
 | **Long-term memory** | Session compaction + pruning | Persistent vector memory — semantic search, auto-extraction, 6 categories |
 | **Tools** | Browser automation, Canvas, Skills platform | 20 tools / 45 sub-ops — Gmail, Calendar, filesystem, vision, habit tracker, charts, Wolfram, and more |
 | **Health & Habit Tracking** | ❌ None | Conversational tracker for meds, symptoms, exercise, periods — with streak, adherence, and trend analysis |
-| **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows native (primary); **macOS coming soon** |
+| **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows & macOS |
 | **Desktop experience** | macOS menu bar app, WebChat | Native desktop window, system tray, splash screen |
 | **Workflows** | Cron jobs + webhooks | Named multi-step workflows with scheduling, chaining, and template variables |
 | **Setup** | Node.js + cloud API keys + channel config | Python + Ollama (GUI Installer), zero accounts needed |
@@ -87,8 +85,8 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **4-state pipeline** — stopped → listening → transcribing → muted, with clean state transitions
 - **Local speech-to-text** — transcription via faster-whisper (tiny/base/small/medium models), CPU-only int8 quantization, no cloud APIs
 - **Voice-aware responses** — voice input is tagged so the agent knows you're speaking and responds conversationally
-- **Neural TTS** — high-quality text-to-speech via Piper TTS, fully offline
-- **8 voice options** — US and British English, male and female variants
+- **Neural TTS** — high-quality text-to-speech via Kokoro TTS, fully offline
+- **10 voice options** — US and British English, male and female variants
 - **Streaming TTS** — responses are spoken sentence-by-sentence as they stream in
 - **Mic gating** — microphone is automatically muted during TTS playback to prevent echo and feedback loops
 - **Hands-free mode** — combine voice input + TTS for a fully conversational experience
@@ -253,14 +251,14 @@ Thoth's agent has access to 20 tools that expose 45 individual operations to the
 | **`models.py`** | Ollama model management — listing, downloading, switching models, context size configuration with automatic model-max capping |
 | **`documents.py`** | Document ingestion — PDF/DOCX/TXT loading, chunking, FAISS embedding and storage |
 | **`voice.py`** | Local STT pipeline — toggle-based 4-state machine (stopped/listening/transcribing/muted) with faster-whisper CPU-only int8 transcription |
-| **`tts.py`** | Piper TTS integration — engine + default voice bundled with installer, additional voices downloaded on demand, streaming sentence-by-sentence playback |
+| **`tts.py`** | Kokoro TTS integration — cross-platform neural TTS, model auto-downloaded on first use (~169 MB), 10 built-in voices, streaming sentence-by-sentence playback |
 | **`vision.py`** | Camera/screen capture via OpenCV/MSS, image analysis via Ollama vision models |
 | **`data_reader.py`** | Shared pandas-based reader for CSV, TSV, Excel, JSON, JSONL — returns schema + stats + preview rows |
 | **`launcher.py`** | Desktop launcher — system tray (pystray), native window management (pywebview), two-tier splash screen (tkinter with console fallback), manages NiceGUI server lifecycle; structured logging to `~/.thoth/thoth_app.log` |
 | **`api_keys.py`** | API key management — load/save/apply from `~/.thoth/api_keys.json` |
 | **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts personal facts, deduplicates against existing memories (cosine > 0.85), runs on startup + every 6 hours |
 | **`workflows.py`** | Workflow engine — SQLite CRUD, template variable expansion, sequential prompt execution, background runner with threading, scheduled execution (daily/weekly), desktop notifications, 4 default templates |
-| **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects (winsound), and in-app toast queue; coordinates workflow completion chimes and timer alerts |
+| **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue; coordinates workflow completion chimes and timer alerts |
 | **`channels/`** | Messaging channel adapters — Telegram bot (long polling) and Email channel (Gmail polling), with shared config store |
 | **`tools/`** | 20 self-registering tool modules + base class + registry |
 
@@ -293,7 +291,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── vector_store/           # FAISS index for uploaded documents
 ├── gmail/                  # Gmail OAuth tokens
 ├── calendar/               # Calendar OAuth tokens
-└── piper/                  # Piper TTS engine & voice models
+└── kokoro/                 # Kokoro TTS model & voice data
 ```
 
 > Override the data directory by setting the `THOTH_DATA_DIR` environment variable.
@@ -306,7 +304,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 
 | Requirement | Details |
 |-------------|---------|
-| **OS** | Windows 10/11 (64-bit) |
+| **OS** | Windows 10/11 (64-bit) or macOS 12+ (Apple Silicon & Intel) |
 | **Python** | 3.11+ |
 | **RAM** | 8 GB |
 | **Disk** | ~5 GB (app + packages + one small model like `qwen3:8b`) |
@@ -422,4 +420,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgements
 
-Built with [NiceGUI](https://nicegui.io/), [LangGraph](https://langchain-ai.github.io/langgraph/), [LangChain](https://python.langchain.com/), [Ollama](https://ollama.com/), [FAISS](https://github.com/facebookresearch/faiss), [Piper TTS](https://github.com/rhasspy/piper), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and [HuggingFace](https://huggingface.co/).
+Built with [NiceGUI](https://nicegui.io/), [LangGraph](https://langchain-ai.github.io/langgraph/), [LangChain](https://python.langchain.com/), [Ollama](https://ollama.com/), [FAISS](https://github.com/facebookresearch/faiss), [Kokoro TTS](https://github.com/thewh1teagle/kokoro-onnx), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and [HuggingFace](https://huggingface.co/).

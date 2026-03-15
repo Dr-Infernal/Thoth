@@ -1,18 +1,17 @@
 ; =============================================================================
-; Thoth v3.0.0 – Inno Setup Script
-; Installer: bundles embedded Python + app source code + Piper TTS engine
-; + default voice. Downloads Ollama and Python packages at install time.
+; Thoth v3.1.0 – Inno Setup Script
+; Installer: bundles embedded Python + app source code.
+; Downloads Ollama and Python packages (incl. Kokoro TTS) at install time.
 ; =============================================================================
 ;
 ; Prerequisites (placed in installer\build\ by build_installer.ps1):
 ;   build\python\          – Extracted Python embeddable package
 ;   build\get-pip.py       – pip bootstrap script
-;   build\piper\           – Piper TTS engine + default voice
 ;
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "3.0.0"
+#define MyAppVersion   "3.1.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -100,8 +99,6 @@ Source: "build\python\*";              DestDir: "{app}\python"; Flags: ignorever
 
 ; ── get-pip.py ───────────────────────────────────────────────────────────────
 Source: "build\get-pip.py";            DestDir: "{app}"; Flags: ignoreversion
-; ── Piper TTS engine + default voice ────────────────────────────────────────────
-Source: "build\piper\*";               DestDir: "{%USERPROFILE}\.thoth\piper"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; ── Launcher & helper scripts ────────────────────────────────────────────────
 Source: "launch_thoth.bat";            DestDir: "{app}"; Flags: ignoreversion
 Source: "launch_thoth.vbs";            DestDir: "{app}"; Flags: ignoreversion

@@ -9,6 +9,7 @@ api_keys.json
 
 # Installer build artifacts
 installer/build/
+installer/build_mac_release.ps1
 dist/
 
 # User data (created at runtime)
