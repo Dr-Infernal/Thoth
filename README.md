@@ -4,6 +4,8 @@ Thoth is a **local-first AI assistant built for personal AI sovereignty** — yo
 
 > Governments are investing billions to keep AI infrastructure within their borders. Thoth applies the same principle to the individual — your compute, your data, your choice of model, **accountable to no one but you.**
 
+> **🖥️ One-click install on Windows & macOS** — download, run, done. No terminal, no Docker, no config files. [Get it here.](https://github.com/siddsachar/Thoth/releases)
+
 https://github.com/user-attachments/assets/7967e18d-a417-4ca5-b2d7-0fca45975ed7
 
 ### Why not just use ChatGPT?
@@ -25,7 +27,7 @@ https://github.com/user-attachments/assets/7967e18d-a417-4ca5-b2d7-0fca45975ed7
 
 Most open-source AI assistants are **developer tools disguised as products** — CLI-first, config-file-driven, Linux-only, and held together with Docker, YAML, and `.env` files. Getting them running means cloning repos, editing configs, wiring up databases, and debugging dependency conflicts before you can ask a single question.
 
-**Thoth is different.** One-click installer, native desktop GUI, works on Windows out of the box, zero accounts required. Install it, launch it, start talking. No terminal expertise needed, no Docker, no YAML — just a private AI assistant that works.
+**Thoth is different.** One-click installer, native desktop GUI, works out of the box on Windows and macOS, zero accounts required. Install it, launch it, start talking. No terminal expertise needed, no Docker, no YAML — just a private AI assistant that works.
 
 ### How is Thoth different from OpenClaw?
 
@@ -154,7 +156,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Local indicators** — models marked ✅ (downloaded) or ⬇️ (needs download)
 
 ### 🔔 Notifications
-- **Desktop notifications** — workflow completions and timer expirations trigger a Windows desktop notification with timestamp
+- **Desktop notifications** — workflow completions and timer expirations trigger a desktop notification with timestamp
 - **Sound effects** — distinct audio chimes for workflow completion (two-tone C5→E5) and timer alerts (5-beep A5), played asynchronously
 - **In-app toasts** — transient toast messages appear in the UI with contextual emoji icons
 - **Unified system** — all notification channels (desktop, sound, toast) fire from a single `notify()` call, keeping notification logic consistent across features
@@ -325,7 +327,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 
 ## 📦 Installation (From Source)
 
-> **Most open-source assistants require Docker, YAML configs, and terminal expertise.** Thoth installs in one click with the [Windows installer](https://github.com/siddsachar/Thoth/releases) — or five commands from source:
+> **Most open-source assistants require Docker, YAML configs, and terminal expertise.** Thoth installs in one click with the [Windows installer or macOS launcher](https://github.com/siddsachar/Thoth/releases) — or five commands from source:
 
 1. **Install [Ollama](https://ollama.com/)** — download and install the Ollama runtime
 
