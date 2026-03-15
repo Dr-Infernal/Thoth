@@ -1,6 +1,6 @@
 # Building the Thoth Windows Installer
 
-This guide explains how to build a distributable Windows installer for Thoth v3.0.
+This guide explains how to build a distributable Windows installer for Thoth v3.1.0.
 
 ## Architecture
 
