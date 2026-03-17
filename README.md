@@ -97,18 +97,18 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Mic gating** — microphone is automatically muted during TTS playback to prevent echo and feedback loops
 - **Hands-free mode** — combine voice input + TTS for a fully conversational experience
 
-### �️ Shell Access
+### 🖥️ Shell Access
 - **Full shell access** — the agent can run shell commands on your machine — install packages, manage git repos, run scripts, inspect processes, and automate system tasks through natural conversation
 - **Persistent sessions** — `cd`, environment variables, and other state persists across commands within a conversation; each thread gets its own isolated shell session
 - **3-tier safety classification** — every command is classified as *safe* (runs automatically), *moderate* (requires user confirmation), or *blocked* (rejected outright); safety rules are applied before execution
 - **Safe commands run instantly** — `ls`, `pwd`, `cat`, `git status`, `pip list`, `echo`, and similar read-only commands execute without interruption
 - **Dangerous commands require approval** — destructive or system-modifying commands (`rm`, `chmod`, `kill`, `pip install`, `brew`, `apt`) trigger the interrupt mechanism so you can accept or reject before execution
 - **Blocked by default** — high-risk commands (`shutdown`, `reboot`, `mkfs`, `:(){ :|:& };:`) are rejected outright and never reach the shell
-- **Background workflow safe** — shell commands are automatically blocked when running inside a background workflow to prevent unattended destructive actions
+- **Background workflow safe** — commands that require approval are automatically blocked when running inside a background workflow to prevent unattended destructive actions; safe (read-only) commands still execute normally
 - **Inline terminal panel** — command output appears in a collapsible terminal panel in the chat UI with clear and history controls
 - **History persistence** — command history is saved per-thread in `~/.thoth/shell_history.json` and reloaded when you revisit a conversation
 
-### �👁️ Vision
+### 👁️ Vision
 - **Camera analysis** — capture and analyze images from your webcam in real-time
 - **Screen capture** — take screenshots and ask questions about what's on your screen
 - **Configurable vision model** — choose from popular vision models (gemma3, llava, etc.)
