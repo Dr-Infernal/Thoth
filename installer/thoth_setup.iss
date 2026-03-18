@@ -93,6 +93,7 @@ Source: "..\tools\weather_tool.py";    DestDir: "{app}\app\tools"; Flags: ignore
 Source: "..\tools\web_search_tool.py"; DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\wikipedia_tool.py";  DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\wolfram_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
+Source: "..\tools\browser_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\shell_tool.py";      DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\youtube_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 
