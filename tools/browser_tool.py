@@ -503,6 +503,23 @@ class BrowserSession:
 
                 # Launch failed — check if we have retries left
                 err = self._launch_error
+
+                # Auto-install Chromium if the binary is missing
+                if err and "executable doesn't exist" in str(err).lower():
+                    logger.warning("Chromium binary not found — running "
+                                   "'playwright install chromium'...")
+                    try:
+                        import sys as _sys
+                        subprocess.run(
+                            [_sys.executable, "-m", "playwright", "install",
+                             "chromium"],
+                            check=True, capture_output=True, timeout=300,
+                        )
+                        logger.info("Chromium installed successfully")
+                    except Exception as install_exc:
+                        logger.error("Chromium auto-install failed: %s",
+                                     install_exc)
+
                 if attempt < _MAX_RETRIES:
                     logger.warning("Browser launch failed (attempt %d): %s",
                                    attempt + 1, err)

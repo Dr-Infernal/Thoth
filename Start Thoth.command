@@ -231,6 +231,11 @@ pip install -r "$REQUIREMENTS" 2>&1 | while IFS= read -r line; do
 done
 ok "Python packages installed"
 
+# Install Playwright Chromium browser binary (needed for browser tool)
+info "Installing Playwright Chromium browser..."
+python -m playwright install chromium 2>&1 | tail -1
+ok "Playwright Chromium installed"
+
 # ── 5. Save project location ────────────────────────────────────────────────
 mkdir -p "$THOTH_HOME"
 echo "$PROJECT_DIR" > "$THOTH_HOME/thoth_home"

@@ -137,6 +137,14 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
+:: ── 6. Install Playwright Chromium browser ──────────────────────────────────
+echo Installing Playwright Chromium browser...
+"%PYTHON%" -m playwright install chromium >> "%LOG%" 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo WARNING: Playwright browser install failed. Browser tool may not work. >> "%LOG%" 2>&1
+    echo WARNING: Playwright browser install failed. Browser tool will auto-install on first use.
+)
+
 echo.
 echo =========================================
 echo  Setup complete!
