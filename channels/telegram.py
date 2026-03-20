@@ -56,6 +56,7 @@ BOT_COMMANDS = [
 # ──────────────────────────────────────────────────────────────────────
 _app: Application | None = None         # Telegram Application instance
 _running = False                        # Whether the polling loop is active
+_bot_loop: asyncio.AbstractEventLoop | None = None  # Loop the bot was started on
 _pending_interrupts: dict[int, dict] = {}  # {chat_id: interrupt_data}
 
 
@@ -452,7 +453,7 @@ async def start_bot() -> bool:
 
     Returns True on success, False if not configured or already running.
     """
-    global _app, _running
+    global _app, _running, _bot_loop
 
     if _running:
         log.info("Telegram bot is already running")
@@ -486,6 +487,7 @@ async def start_bot() -> bool:
     await _app.start()
     await _app.updater.start_polling(drop_pending_updates=True)
 
+    _bot_loop = asyncio.get_running_loop()
     _running = True
     log.info("Telegram bot started (polling)")
     return True
@@ -493,7 +495,7 @@ async def start_bot() -> bool:
 
 async def stop_bot() -> None:
     """Stop the Telegram bot gracefully."""
-    global _app, _running
+    global _app, _running, _bot_loop
 
     if not _running or _app is None:
         return
@@ -507,4 +509,28 @@ async def stop_bot() -> None:
     finally:
         _running = False
         _app = None
+        _bot_loop = None
         log.info("Telegram bot stopped")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Outbound messages (called by the task engine)
+# ──────────────────────────────────────────────────────────────────────
+def send_outbound(chat_id: int, text: str) -> None:
+    """Send a message to a Telegram chat from *outside* the handler context.
+
+    Called synchronously by ``tasks._deliver_to_channel()``.
+    The bot's httpx HTTP client is bound to the loop it was created on,
+    so we schedule the send on that same loop via *run_coroutine_threadsafe*.
+    """
+    if not _running or _app is None:
+        raise RuntimeError("Telegram bot is not running — cannot deliver message")
+    if _bot_loop is None or not _bot_loop.is_running():
+        raise RuntimeError("Telegram bot event loop is not available")
+
+    async def _send():
+        for chunk in _split_message(text):
+            await _app.bot.send_message(chat_id=chat_id, text=chunk)
+
+    future = asyncio.run_coroutine_threadsafe(_send(), _bot_loop)
+    future.result(timeout=30)

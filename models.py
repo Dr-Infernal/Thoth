@@ -92,6 +92,29 @@ def get_llm() -> ChatOllama:
     return _llm_instance
 
 
+_override_llm_cache: dict[tuple[str, int], ChatOllama] = {}
+
+
+def get_llm_for(model_name: str, num_ctx: int | None = None) -> ChatOllama:
+    """Return a ChatOllama for a specific model (not the global singleton).
+
+    *num_ctx* defaults to ``min(model_native_max, user_global_setting)``
+    so we never request more context than the user configured **or** more
+    than the model supports.  Results are cached per (model, ctx) pair.
+    """
+    if num_ctx is None:
+        model_max = get_model_max_context(model_name)
+        if model_max is not None:
+            num_ctx = min(model_max, _num_ctx)
+        else:
+            num_ctx = _num_ctx
+    key = (model_name, num_ctx)
+    if key not in _override_llm_cache:
+        logger.info("Creating override LLM: model=%s, num_ctx=%s", model_name, num_ctx)
+        _override_llm_cache[key] = ChatOllama(model=model_name, num_ctx=num_ctx)
+    return _override_llm_cache[key]
+
+
 def get_model_max_context(model_name: str | None = None) -> int | None:
     """Query Ollama for the model's native max context length.
 

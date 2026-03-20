@@ -2,6 +2,99 @@
 
 ---
 
+## v3.5.0 — Task Engine, Channel Delivery & Configurable Compression
+
+Complete rewrite of the automation engine — workflows and timers are replaced by a unified **Task Engine** with APScheduler, 7 schedule types, per-task model override, channel delivery (Telegram / Email), persistent run history, a redesigned home screen dashboard, and configurable retrieval compression.
+
+### ⚡ Task Engine (replaces Workflows + Timer)
+
+The old `workflows.py` + `timer_tool.py` are replaced by a single `tasks.py` module backed by APScheduler.
+
+- **7 schedule types** — `daily`, `weekly`, `weekdays`, `weekends`, `interval` (minutes), `cron` (full cron expression), `delay_minutes` (one-shot quick timer with notify-only)
+- **SQLite persistence** — `tasks.db` with `tasks` + `task_runs` tables; all schedule formats, delivery config, and model override stored per task
+- **Auto-migration** — on first launch, existing `workflows.db` entries are migrated to `tasks.db` automatically; old daily/weekly schedules map to the new types
+- **APScheduler integration** — tasks are registered as APScheduler jobs on startup; fire times, pause/resume, and next-run queries come from the scheduler directly
+- **Per-task model override** — each task can specify a different LLM; the engine loads the override model, runs the task, then restores the default; retry fallback if the override model fails (HTTP 500)
+- **Template variables** — `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}` expanded at runtime in prompt steps
+- **5 default templates** — Daily Briefing, Research Summary, Email Digest, Weekly Review, and Quick Reminder (new)
+- **Run history persistence** — `task_runs` rows survive task deletion (no FK cascade); `get_recent_runs()` uses LEFT JOIN + COALESCE so history displays even after the parent task is removed
+- **Status tracking** — each run records `status` (`completed` / `failed` / `completed_delivery_failed`), `status_message`, `task_name`, and `task_icon` columns
+
+### 📋 Task Tool (replaces Timer Tool)
+
+New `tools/task_tool.py` with 5 sub-tools (up from 3 in the old timer):
+
+- `task_create` — create a scheduled task with any of the 7 trigger types
+- `task_list` — list all tasks with next fire times
+- `task_update` — update task name, prompts, schedule, delivery, or model override
+- `task_run_now` — execute a task immediately
+- `task_delete` — delete a task (requires user confirmation via interrupt gate)
+
+### 📡 Channel Delivery
+
+Tasks can now deliver their output to a messaging channel after execution.
+
+- **`delivery_channel`** + **`delivery_target`** fields on each task — supports `telegram` (chat ID) and `email` (address + subject)
+- **`_validate_delivery()`** — pre-flight check ensures the channel is configured and reachable before the task runs
+- **`_deliver_to_channel()`** — sends the task's last LLM response to the configured channel; returns `(status, message)` tuple
+- **`completed_delivery_failed`** status — task succeeds but delivery fails (channel error, empty response, etc.)
+- **Telegram `send_outbound(chat_id, text)`** — new method on the Telegram channel; captures the bot event loop; RuntimeError guard for missing loop
+- **Email `send_outbound(to, subject, body)`** — new method on the Email channel; sends via Gmail OAuth
+
+### 🏠 Dashboard Redesign
+
+- **Tabbed home screen** — two tabs: **⚡ Tasks** (task tiles with edit/run/delete) and **📋 Activity** (monitoring panel)
+- **Task Edit dialog** — inline editor for name, icon, prompts, schedule, delivery channel, and model override
+- **Activity panel** — 5 sections: Running Now (progress + spinner), Upcoming (next fire times from APScheduler), Recent Runs (last 10 with ✅/❌/⏳ icons), Memory Extraction status, Channel status (🟢/🔴)
+- **Settings Workflows tab removed** — 12 → 11 settings tabs; task management moved to the home screen
+- **Wider layout** — `max-w-5xl` → `max-w-7xl` for better use of wide screens
+
+### 🔍 Configurable Retrieval Compression
+
+Retrieval-based tools (Documents, Wikipedia, Arxiv, Web Search) now support 3 compression modes, selectable from Settings → Search:
+
+- **Smart** (default) — `EmbeddingsFilter` with cosine similarity threshold 0.5; fast, no extra LLM call; preserves source metadata and citations
+- **Deep** — `LLMChainExtractor`; sends each retrieved document through the LLM for precise extraction; slower but highest relevance
+- **Off** — no compression; returns raw retrieved chunks as-is
+
+Global config stored in `tools_config.json` under the `"global"` key via `registry.get_global_config()` / `set_global_config()`.
+
+### 🐛 Bug Fixes
+
+- **Model override 500 errors** — retry fallback when per-task model fails to load
+- **Context size cap** — `get_llm_for()` uses `min(model_max, user_setting)` to prevent context overflows
+- **Model swap during override tasks** — `_model_override_var` ContextVar propagates override model name to `_get_compressor()` and `_do_summarize()`, preventing GPU model eviction
+- **Delivery content bug** — `invoke_agent()` returns `str`, not `dict`; fixed `isinstance(result, dict)` check that was always False
+- **Empty delivery** — tasks now deliver even when `last_response` is empty (falls back to status message)
+- **Telegram error propagation** — `send_outbound` now properly raises on failure instead of silently swallowing errors
+- **Email error propagation** — same fix for the Email channel
+
+### 🧪 Tests
+
+- **408 PASS**, 0 FAIL, 2 WARN (up from 322)
+- 4 new test sections: Task Tool (§21, 11 tests), Activity Tab (§22, 10 tests), Channel Delivery (§23, 20 tests), Task Engine + Compression (§24–25, 45 tests)
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`tasks.py`** | **New** — unified task engine replacing `workflows.py` + `timer_tool.py` |
+| **`tools/task_tool.py`** | **New** — 5 sub-tools for task CRUD + execute |
+| **`tools/timer_tool.py`** | **Deleted** — subsumed by `task_tool.py` |
+| **`agent.py`** | `_model_override_var` ContextVar; `_get_compressor()` rewritten with 3 modes (Smart/Deep/Off); `EmbeddingsFilter` import; multi-interrupt support |
+| **`app_nicegui.py`** | Tabbed home screen (Tasks + Activity); Task Edit dialog; Settings tabs 12→11; Retrieval Compression selector; wider layout |
+| **`channels/telegram.py`** | New `send_outbound()` with RuntimeError guard |
+| **`channels/email.py`** | New `send_outbound()` via Gmail OAuth |
+| **`models.py`** | `get_llm_for()` context cap with `min(model_max, user_setting)` |
+| **`prompts.py`** | Removed timer instructions; added TASKS & REMINDERS section (~45 lines) |
+| **`tools/registry.py`** | Global config: `get_global_config()` / `set_global_config()` |
+| **`tools/__init__.py`** | `timer_tool` → `task_tool` import swap |
+| **`memory_extraction.py`** | New `get_extraction_status()` |
+| **`installer/thoth_setup.iss`** | `workflows.py` → `tasks.py`, `timer_tool.py` → `task_tool.py` |
+| **`test_suite.py`** | 4 new sections (§21–25), 86 new tests |
+
+---
+
 ## v3.4.0 — Browser Automation
 
 Full browser automation via Playwright, giving the agent the ability to navigate websites, click elements, fill forms, and manage tabs in a visible Chromium window — plus browser snapshot compression for long browsing sessions and a fix for the gold color regression.

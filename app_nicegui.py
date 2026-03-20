@@ -91,12 +91,17 @@ from voice import get_voice_service, get_available_whisper_sizes
 from tts import TTSService, VOICE_CATALOG
 from vision import VisionService, POPULAR_VISION_MODELS, list_cameras
 from tools.vision_tool import set_vision_service
-from memory_extraction import run_extraction, start_periodic_extraction, set_active_thread
-from workflows import (
-    list_workflows, create_workflow, update_workflow,
-    delete_workflow, duplicate_workflow,
-    run_workflow_background, get_running_workflows, get_run_history,
-    seed_default_workflows, start_workflow_scheduler,
+from memory_extraction import run_extraction, start_periodic_extraction, set_active_thread, get_extraction_status
+from tasks import (
+    list_tasks, create_task, update_task, delete_task,
+    duplicate_task, get_task,
+    run_task_background,
+    get_running_tasks,
+    get_recent_runs,
+    get_next_fire_times,
+    get_run_history,
+    seed_default_tasks,
+    start_task_scheduler,
 )
 from notifications import drain_toasts
 import memory as memory_db
@@ -1669,6 +1674,12 @@ async def index():
     # ── Resume after interrupt ───────────────────────────────────────────
 
     async def _resume_after_interrupt(approved: bool) -> None:
+        pending = state.pending_interrupt
+        # Extract interrupt IDs for multi-interrupt resume
+        interrupt_ids = None
+        if isinstance(pending, list) and len(pending) > 1:
+            interrupt_ids = [item.get("__interrupt_id") for item in pending
+                            if isinstance(item, dict) and item.get("__interrupt_id")]
         state.pending_interrupt = None
         state.is_generating = True
         state.stop_event = threading.Event()   # fresh event per generation
@@ -1687,6 +1698,7 @@ async def index():
         def _sync():
             try:
                 for ev in resume_stream_agent(enabled_tools, config, approved,
+                                              interrupt_ids=interrupt_ids,
                                               stop_event=stop_event):
                     if stop_event.is_set():
                         break
@@ -1863,9 +1875,11 @@ async def index():
 
     p.interrupt_dlg = ui.dialog().props("persistent")
 
-    def _show_interrupt(data: dict) -> None:
+    def _show_interrupt(data) -> None:
         p.interrupt_dlg.clear()
-        desc = data.get("description", "The agent needs your approval.")
+        # Normalize: agent now yields a list of interrupt dicts
+        items = data if isinstance(data, list) else [data]
+        plural = len(items) > 1
         with p.interrupt_dlg, ui.card().classes("q-pa-none").style(
             "width: 520px; max-width: 90vw; border-radius: 16px; overflow: hidden;"
             "background: #1a1a2e; border: 1px solid #2a2a4a;"
@@ -1876,12 +1890,18 @@ async def index():
                 "border-bottom: 1px solid #3d2e00;"
             ):
                 ui.icon("warning_amber", size="28px", color="amber")
-                ui.label("Confirmation Required").style(
+                title = f"Confirm {len(items)} Actions" if plural else "Confirmation Required"
+                ui.label(title).style(
                     "font-size: 1.15rem; font-weight: 700; color: #f0c040; margin-left: 8px;"
                 )
             # ── Body ──
             with ui.column().classes("w-full q-pa-lg"):
-                ui.label("The agent wants to perform the following action:").style(
+                subtitle = (
+                    "The agent wants to perform the following actions:"
+                    if plural else
+                    "The agent wants to perform the following action:"
+                )
+                ui.label(subtitle).style(
                     "font-size: 0.85rem; color: #8888aa; margin-bottom: 8px;"
                 )
                 with ui.element("div").style(
@@ -1890,8 +1910,14 @@ async def index():
                     "font-size: 0.9rem; color: #d0d0e0; line-height: 1.6;"
                     "word-wrap: break-word; white-space: pre-wrap;"
                 ):
-                    ui.markdown(desc, extras=['code-friendly', 'fenced-code-blocks', 'tables'])
+                    for i, item in enumerate(items):
+                        desc = item.get("description", "Unknown action") if isinstance(item, dict) else str(item)
+                        if plural:
+                            ui.markdown(f"**{i + 1}.** {desc}", extras=['code-friendly', 'fenced-code-blocks', 'tables'])
+                        else:
+                            ui.markdown(desc, extras=['code-friendly', 'fenced-code-blocks', 'tables'])
             # ── Footer ──
+            btn_label = f"Approve All ({len(items)})" if plural else "Approve"
             with ui.row().classes("w-full justify-end q-pa-md gap-3").style(
                 "border-top: 1px solid #2a2a4a;"
             ):
@@ -1901,7 +1927,7 @@ async def index():
                     "color: #ff6b6b; font-weight: 600; font-size: 0.9rem;"
                     "padding: 8px 24px; border-radius: 8px;"
                 )
-                ui.button("Approve", on_click=lambda: (_close_interrupt(True))).props(
+                ui.button(btn_label, on_click=lambda: (_close_interrupt(True))).props(
                     "unelevated no-caps"
                 ).style(
                     "background: #2d8a4e; color: white; font-weight: 600;"
@@ -1993,6 +2019,394 @@ async def index():
         p.export_dlg.open()
 
     # ══════════════════════════════════════════════════════════════════════
+    # TASK EDIT DIALOG
+    # ══════════════════════════════════════════════════════════════════════
+
+    p.task_dlg = ui.dialog().props("persistent")
+
+    def _show_task_dialog(task: dict | None, on_done) -> None:
+        """Open the task editor dialog.
+
+        *task=None* → create mode (blank fields).
+        *task=dict* → edit mode (pre-populated).
+        """
+        is_new = task is None
+        title = "New Task" if is_new else "Edit Task"
+
+        # Editable data holders
+        _name = task["name"] if task else ""
+        _icon = task["icon"] if task else "⚡"
+        _desc = task.get("description", "") if task else ""
+        _enabled = task.get("enabled", True) if task else True
+        _model_ov = task.get("model_override") or "" if task else ""
+        _prompts_data: list[str] = list(task["prompts"]) if task else [""]
+
+        # Parse schedule
+        _current_sched = (task.get("schedule") or "") if task else ""
+        if _current_sched.startswith("daily"):
+            _sched_mode = "Daily"
+        elif _current_sched.startswith("weekly"):
+            _sched_mode = "Weekly"
+        elif _current_sched.startswith("interval_minutes"):
+            _sched_mode = "Interval (min)"
+        elif _current_sched.startswith("interval"):
+            _sched_mode = "Interval (hrs)"
+        elif _current_sched.startswith("cron"):
+            _sched_mode = "Cron"
+        else:
+            _sched_mode = "Manual"
+
+        _sched_time = "08:00"
+        _sched_day = "mon"
+        _sched_interval = "1"
+        _sched_cron = ""
+        _FULL_TO_ABBR = {
+            "monday": "mon", "tuesday": "tue", "wednesday": "wed",
+            "thursday": "thu", "friday": "fri", "saturday": "sat",
+            "sunday": "sun",
+        }
+        if _current_sched.startswith("daily:"):
+            _sched_time = _current_sched.split(":", 1)[1]
+        elif _current_sched.startswith("weekly:"):
+            parts = _current_sched.split(":")
+            if len(parts) >= 3:
+                raw_day = parts[1].lower()
+                _sched_day = _FULL_TO_ABBR.get(raw_day, raw_day[:3] if len(raw_day) > 3 else raw_day)
+                _sched_time = f"{parts[2]}:{parts[3]}" if len(parts) >= 4 else "08:00"
+        elif _current_sched.startswith("interval_minutes:"):
+            _sched_interval = _current_sched.split(":", 1)[1]
+        elif _current_sched.startswith("interval:"):
+            _sched_interval = _current_sched.split(":", 1)[1]
+        elif _current_sched.startswith("cron:"):
+            _sched_cron = _current_sched.split(":", 1)[1]
+
+        # Parse delivery
+        _del_channel = (task.get("delivery_channel") or "") if task else ""
+        _del_target = (task.get("delivery_target") or "") if task else ""
+
+        p.task_dlg.clear()
+        with p.task_dlg, ui.card().classes("q-pa-none").style(
+            "width: 860px; max-width: 92vw; height: 90vh; max-height: 94vh;"
+            "border-radius: 16px; overflow: hidden;"
+            "background: #1a1a2e; border: 1px solid #2a2a4a;"
+            "display: flex; flex-direction: column;"
+        ):
+            # ── Header ──
+            with ui.row().classes("w-full items-center q-pa-md").style(
+                "background: linear-gradient(135deg, #2d1b00 0%, #1a1a2e 100%);"
+                "border-bottom: 1px solid #3d2e00;"
+            ):
+                ui.icon("edit_note", size="28px", color="amber")
+                ui.label(title).style(
+                    "font-size: 1.15rem; font-weight: 700; color: #f0c040; margin-left: 8px;"
+                )
+
+            # ── Body (scrollable) ──
+            with ui.scroll_area().style("flex: 1; min-height: 0;"):
+                with ui.column().classes("w-full q-pa-lg gap-3"):
+                    # Name + Icon row
+                    with ui.row().classes("w-full items-center gap-2"):
+                        _wf_icon_opts = list(_ICON_OPTIONS)
+                        if _icon not in _wf_icon_opts:
+                            _wf_icon_opts.insert(0, _icon)
+                        icon_sel = ui.select(
+                            label="Icon", options=_wf_icon_opts, value=_icon,
+                        ).classes("w-20")
+                        name_input = ui.input(
+                            "Name", value=_name,
+                        ).classes("flex-grow")
+
+                    desc_input = ui.input(
+                        "Description (optional)", value=_desc,
+                    ).classes("w-full")
+
+                    # Enabled toggle
+                    enabled_switch = ui.switch(
+                        "Enabled", value=_enabled,
+                    )
+
+                    # Model override dropdown
+                    _local = list_local_models()
+                    _compat = [m for m in _local if is_tool_compatible(m)]
+                    _default_label = f"Default ({get_current_model()})"
+                    _model_options = [_default_label] + sorted(_compat)
+                    _model_val = _model_ov if _model_ov in _compat else _default_label
+                    model_sel = ui.select(
+                        _model_options, value=_model_val, label="Model",
+                    ).classes("w-full").tooltip(
+                        "Choose which LLM runs this task. "
+                        "Only tool-compatible models are listed."
+                    )
+
+                    ui.separator()
+
+                    # Prompts editor
+                    ui.label("Prompts (executed in order)").style(
+                        "font-weight: 600; font-size: 0.9rem; color: #d0d0e0;"
+                    )
+                    ui.label(
+                        "Leave empty for notification-only tasks (reminders). "
+                        "Variables: {{date}}, {{day}}, {{time}}, {{month}}, {{year}}"
+                    ).style("font-size: 0.75rem; color: #666;")
+
+                    prompt_inputs: list[ui.textarea] = []
+                    prompt_container = ui.column().classes("w-full")
+
+                    def _rebuild_prompts():
+                        for i, ta in enumerate(prompt_inputs):
+                            if i < len(_prompts_data):
+                                _prompts_data[i] = ta.value
+                        prompt_container.clear()
+                        prompt_inputs.clear()
+                        with prompt_container:
+                            for i, p_text in enumerate(_prompts_data):
+                                with ui.row().classes("w-full items-start gap-1"):
+                                    ta = ui.textarea(
+                                        f"Step {i+1}", value=p_text,
+                                    ).classes("flex-grow")
+                                    prompt_inputs.append(ta)
+                                    if len(_prompts_data) > 1:
+                                        def _remove(idx=i):
+                                            for j, _ta in enumerate(prompt_inputs):
+                                                if j < len(_prompts_data):
+                                                    _prompts_data[j] = _ta.value
+                                            _prompts_data.pop(idx)
+                                            _rebuild_prompts()
+                                        ui.button(
+                                            icon="close", on_click=_remove,
+                                        ).props("flat dense round")
+
+                            def _add():
+                                for j, _ta in enumerate(prompt_inputs):
+                                    if j < len(_prompts_data):
+                                        _prompts_data[j] = _ta.value
+                                _prompts_data.append("")
+                                _rebuild_prompts()
+
+                            ui.button("＋ Add step", on_click=_add).props("flat dense")
+
+                    _rebuild_prompts()
+
+                    ui.separator()
+
+                    # Schedule section
+                    ui.label("Schedule").style(
+                        "font-weight: 600; font-size: 0.9rem; color: #d0d0e0;"
+                    )
+
+                    sched_options = ["Manual", "Daily", "Weekly", "Interval (hrs)", "Interval (min)", "Cron"]
+                    day_options = {
+                        "mon": "Monday", "tue": "Tuesday", "wed": "Wednesday",
+                        "thu": "Thursday", "fri": "Friday", "sat": "Saturday",
+                        "sun": "Sunday",
+                    }
+
+                    with ui.column().classes("w-full gap-2"):
+                        sched_sel = ui.select(
+                            label="Type", options=sched_options, value=_sched_mode,
+                        ).classes("w-48")
+
+                        sched_time_input = ui.input(
+                            label="Time", value=_sched_time,
+                        ).classes("w-28").props('mask="##:##" placeholder="HH:MM"')
+                        sched_time_input.visible = _sched_mode in ("Daily", "Weekly")
+
+                        sched_day_sel = ui.select(
+                            label="Day", options=day_options, value=_sched_day,
+                        ).classes("w-36")
+                        sched_day_sel.visible = _sched_mode == "Weekly"
+
+                        sched_interval_input = ui.input(
+                            label="Every", value=_sched_interval,
+                        ).classes("w-28")
+                        sched_interval_input.visible = _sched_mode in ("Interval (hrs)", "Interval (min)")
+
+                        sched_cron_input = ui.input(
+                            label="Cron expression", value=_sched_cron,
+                        ).classes("w-full")
+                        sched_cron_input.visible = _sched_mode == "Cron"
+
+                    def _on_sched_change(e):
+                        sched_time_input.visible = e.value in ("Daily", "Weekly")
+                        sched_day_sel.visible = e.value == "Weekly"
+                        sched_interval_input.visible = e.value in ("Interval (hrs)", "Interval (min)")
+                        sched_cron_input.visible = e.value == "Cron"
+
+                    sched_sel.on_value_change(_on_sched_change)
+
+                    ui.separator()
+
+                    # Delivery (collapsed)
+                    with ui.expansion("📡 Delivery channel (optional)").classes("w-full"):
+                        ui.label(
+                            "Optionally send task output via Telegram or email. "
+                            "Desktop notification always fires."
+                        ).style("font-size: 0.75rem; color: #666;")
+                        del_ch_sel = ui.select(
+                            label="Channel",
+                            options=["", "telegram", "email"],
+                            value=_del_channel,
+                        ).classes("w-48")
+                        del_tgt_input = ui.input(
+                            "Target (chat ID or email)", value=_del_target,
+                        ).classes("w-full")
+
+                    # Run history (edit mode only)
+                    if not is_new:
+                        runs = get_run_history(task["id"], limit=5)
+                        if runs:
+                            with ui.expansion("📜 Recent runs").classes("w-full"):
+                                for r in runs:
+                                    r_icon = "✅" if r["status"] == "completed" else (
+                                        "🔄" if r["status"] == "running" else "❌"
+                                    )
+                                    started = datetime.fromisoformat(
+                                        r["started_at"]
+                                    ).strftime("%b %d, %I:%M %p")
+                                    ui.label(
+                                        f"{r_icon} {started} — "
+                                        f"{r['steps_done']}/{r['steps_total']} steps"
+                                    ).classes("text-xs")
+
+            # ── Footer ──
+            with ui.row().classes("w-full items-center q-pa-md gap-2").style(
+                "border-top: 1px solid #2a2a4a;"
+            ):
+                # Left cluster — duplicate + delete (edit only)
+                if not is_new:
+                    def _dup_task():
+                        duplicate_task(task["id"])
+                        p.task_dlg.close()
+                        on_done()
+
+                    def _del_task():
+                        delete_task(task["id"])
+                        p.task_dlg.close()
+                        on_done()
+
+                    ui.button("📋 Duplicate", on_click=_dup_task).props(
+                        "flat no-caps"
+                    ).style("font-size: 0.85rem;")
+                    ui.button("🗑️ Delete", on_click=_del_task).props(
+                        "flat no-caps"
+                    ).style("color: #ff6b6b; font-size: 0.85rem;")
+
+                # Spacer
+                ui.element("div").classes("flex-grow")
+
+                # Right cluster — cancel + save
+                def _cancel():
+                    p.task_dlg.close()
+
+                ui.button("Cancel", on_click=_cancel).props(
+                    "flat no-caps"
+                ).style(
+                    "color: #8888aa; font-weight: 600; font-size: 0.9rem;"
+                    "padding: 8px 20px; border-radius: 8px;"
+                )
+
+                def _save():
+                    # Sync prompt textareas
+                    for j, _ta in enumerate(prompt_inputs):
+                        if j < len(_prompts_data):
+                            _prompts_data[j] = _ta.value
+                    clean_prompts = [pp for pp in _prompts_data if pp.strip()]
+
+                    # Build schedule string
+                    sv = sched_sel.value
+                    final_schedule = None
+                    if sv == "Daily":
+                        t = sched_time_input.value.strip() or "08:00"
+                        final_schedule = f"daily:{t}"
+                    elif sv == "Weekly":
+                        t = sched_time_input.value.strip() or "08:00"
+                        d = sched_day_sel.value or "mon"
+                        final_schedule = f"weekly:{d}:{t}"
+                    elif sv == "Interval (hrs)":
+                        v = sched_interval_input.value.strip() or "1"
+                        final_schedule = f"interval:{v}"
+                    elif sv == "Interval (min)":
+                        v = sched_interval_input.value.strip() or "30"
+                        final_schedule = f"interval_minutes:{v}"
+                    elif sv == "Cron":
+                        v = sched_cron_input.value.strip()
+                        if v:
+                            final_schedule = f"cron:{v}"
+
+                    cur_name = name_input.value.strip() or "New Task"
+                    cur_icon = icon_sel.value or "⚡"
+                    cur_desc = desc_input.value.strip()
+                    cur_enabled = enabled_switch.value
+                    cur_del_ch = del_ch_sel.value or None
+                    cur_del_tgt = del_tgt_input.value.strip() or None
+                    _default_label = f"Default ({get_current_model()})"
+                    cur_model_ov = model_sel.value if model_sel.value != _default_label else None
+
+                    try:
+                        if is_new:
+                            # Determine notify_only: no prompts = notification only
+                            _notify_only = len(clean_prompts) == 0
+                            create_task(
+                                name=cur_name,
+                                prompts=clean_prompts,
+                                description=cur_desc,
+                                icon=cur_icon,
+                                schedule=final_schedule,
+                                notify_only=_notify_only,
+                                delivery_channel=cur_del_ch,
+                                delivery_target=cur_del_tgt,
+                                model_override=cur_model_ov,
+                            )
+                            if not cur_enabled:
+                                # Task was just created; we need its ID to disable
+                                all_t = list_tasks()
+                                if all_t:
+                                    newest = all_t[-1]
+                                    update_task(newest["id"], enabled=False)
+                            ui.notify("✅ Task created", type="positive")
+                        else:
+                            updates = {}
+                            if cur_name != task["name"]:
+                                updates["name"] = cur_name
+                            if cur_icon != task["icon"]:
+                                updates["icon"] = cur_icon
+                            if cur_desc != (task.get("description") or ""):
+                                updates["description"] = cur_desc
+                            if clean_prompts != task["prompts"]:
+                                updates["prompts"] = clean_prompts
+                            if final_schedule != task.get("schedule"):
+                                updates["schedule"] = final_schedule
+                            if cur_enabled != task.get("enabled", True):
+                                updates["enabled"] = cur_enabled
+                            if cur_del_ch != task.get("delivery_channel"):
+                                updates["delivery_channel"] = cur_del_ch
+                            if cur_del_tgt != task.get("delivery_target"):
+                                updates["delivery_target"] = cur_del_tgt
+                            if cur_model_ov != (task.get("model_override") or None):
+                                updates["model_override"] = cur_model_ov
+
+                            if updates:
+                                update_task(task["id"], **updates)
+                                ui.notify("💾 Saved", type="positive")
+                            else:
+                                ui.notify("No changes.", type="info")
+                    except ValueError as ve:
+                        ui.notify(str(ve), type="negative")
+                        return
+
+                    p.task_dlg.close()
+                    on_done()
+
+                ui.button("Save", on_click=_save).props(
+                    "unelevated no-caps"
+                ).style(
+                    "background: #2d8a4e; color: white; font-weight: 600;"
+                    "font-size: 0.9rem; padding: 8px 28px; border-radius: 8px;"
+                )
+
+        p.task_dlg.open()
+
+    # ══════════════════════════════════════════════════════════════════════
     # SETTINGS DIALOG
     # ══════════════════════════════════════════════════════════════════════
 
@@ -2026,7 +2440,6 @@ async def index():
                             tab_models = ui.tab("Models", icon="smart_toy")
                             tab_mem = ui.tab("Memory", icon="psychology")
                             tab_voice = ui.tab("Voice", icon="mic")
-                            tab_wf = ui.tab("Workflows", icon="bolt")
                             tab_fs = ui.tab("System", icon="terminal")
                             tab_tracker = ui.tab("Tracker", icon="checklist")
                             tab_docs = ui.tab("Documents", icon="description")
@@ -2058,8 +2471,6 @@ async def index():
                                 _build_tracker_tab()
                             with ui.tab_panel(tab_mem).classes("px-6 py-4"):
                                 _build_memory_tab()
-                            with ui.tab_panel(tab_wf).classes("px-6 py-4"):
-                                _build_workflows_tab()
                             with ui.tab_panel(tab_voice).classes("px-6 py-4"):
                                 _build_voice_tab()
                             with ui.tab_panel(tab_channels).classes("px-6 py-4"):
@@ -2339,6 +2750,23 @@ async def index():
         ).tooltip("Allow the agent to capture images from your webcam.")
 
     def _build_tools_tab() -> None:
+        # ── Retrieval Compression selector ────────────────────────────
+        ui.label("⚡ Retrieval Compression").classes("text-h6")
+        ui.label(
+            "Controls how search results are filtered before reaching the model. "
+            "Smart uses the local embedding model (fast, no extra LLM calls). "
+            "Deep sends each result through the LLM for extraction (slow but thorough). "
+            "Off passes raw results straight through."
+        ).classes("text-grey-6 text-sm")
+        _comp_options = {"smart": "Smart (fast)", "deep": "Deep (LLM)", "off": "Off"}
+        ui.select(
+            label="Compression mode",
+            options=_comp_options,
+            value=tool_registry.get_global_config("compression_mode", "smart"),
+            on_change=lambda e: tool_registry.set_global_config("compression_mode", e.value),
+        ).classes("w-60")
+        ui.separator().classes("q-my-md")
+
         ui.label("🔍 Search & Knowledge Tools").classes("text-h6")
         ui.label(
             "Enable or disable search and knowledge tools. "
@@ -2986,200 +3414,6 @@ async def index():
             with ui.row().classes("w-full"):
                 ui.button("🗑️ Delete all memories", on_click=_delete_all_memories).props("flat color=negative")
 
-    def _build_workflows_tab() -> None:
-        ui.label("⚡ Workflows").classes("text-h6")
-        ui.label(
-            "Create reusable prompt workflows — multi-step sequences that run in a fresh "
-            "conversation thread. Each step sees the output of the previous one, so you can "
-            "chain research → summarise → action. "
-            "Workflows always run in the background — results appear as a conversation "
-            "in the sidebar and trigger a desktop notification when complete. "
-            "Destructive operations (file delete, send email, etc.) are automatically excluded "
-            "from background workflow runs. "
-            "Template variables: {{date}}, {{day}}, {{time}}, {{month}}, {{year}} — "
-            "replaced at runtime. Set a workflow to run on a daily or weekly schedule."
-        ).classes("text-grey-6 text-sm")
-
-        wf_container = ui.column().classes("w-full")
-
-        def _refresh_wf():
-            wf_container.clear()
-            wf_list = list_workflows()
-            with wf_container:
-                if not wf_list:
-                    ui.label("No workflows yet.").classes("text-grey-6")
-                for wf in wf_list:
-                    _build_single_workflow(wf, _refresh_wf)
-
-        def _create_new():
-            create_workflow(name="New Workflow", prompts=[""], description="", icon="⚡")
-            _refresh_wf()
-
-        ui.button("＋ New Workflow", on_click=_create_new).classes("w-full")
-        _refresh_wf()
-
-    def _build_single_workflow(wf: dict, refresh_fn) -> None:
-        """Build the editor for a single workflow inside an expansion."""
-        with ui.expansion(f"{wf['icon']} {wf['name']}").classes("w-full"):
-            name_input = ui.input("Name", value=wf["name"]).classes("w-full")
-            # Ensure the workflow's current icon is in the options list
-            _wf_icon_opts = list(_ICON_OPTIONS)
-            if wf["icon"] not in _wf_icon_opts:
-                _wf_icon_opts.insert(0, wf["icon"])
-            icon_sel = ui.select(label="Icon", options=_wf_icon_opts, value=wf["icon"]).classes("w-32")
-            desc_input = ui.input("Description", value=wf.get("description") or "").classes("w-full")
-
-            ui.label("Prompts (executed in order)").classes("font-bold text-sm mt-2")
-            prompts_data = list(wf["prompts"])
-            prompt_inputs: list[ui.textarea] = []
-            prompt_container = ui.column().classes("w-full")
-
-            def _rebuild_prompts():
-                # Save current values
-                for i, ta in enumerate(prompt_inputs):
-                    if i < len(prompts_data):
-                        prompts_data[i] = ta.value
-                prompt_container.clear()
-                prompt_inputs.clear()
-                with prompt_container:
-                    for i, p_text in enumerate(prompts_data):
-                        with ui.row().classes("w-full items-start gap-1"):
-                            ta = ui.textarea(f"Step {i+1}", value=p_text).classes("flex-grow")
-                            prompt_inputs.append(ta)
-                            if len(prompts_data) > 1:
-                                def _remove(idx=i):
-                                    for j, _ta in enumerate(prompt_inputs):
-                                        if j < len(prompts_data):
-                                            prompts_data[j] = _ta.value
-                                    prompts_data.pop(idx)
-                                    _rebuild_prompts()
-                                ui.button(icon="close", on_click=_remove).props("flat dense round")
-
-                    def _add():
-                        for j, _ta in enumerate(prompt_inputs):
-                            if j < len(prompts_data):
-                                prompts_data[j] = _ta.value
-                        prompts_data.append("")
-                        _rebuild_prompts()
-
-                    ui.button("＋ Add step", on_click=_add).props("flat dense")
-
-            _rebuild_prompts()
-
-            # Schedule
-            sched_options = ["Manual only", "Daily", "Weekly"]
-            current_sched = wf.get("schedule") or ""
-            if current_sched.startswith("daily"):
-                sched_idx = "Daily"
-            elif current_sched.startswith("weekly"):
-                sched_idx = "Weekly"
-            else:
-                sched_idx = "Manual only"
-
-            # Parse existing time / day from schedule string
-            _sched_time = "08:00"
-            _sched_day = "mon"
-            if current_sched.startswith("daily:"):
-                _sched_time = current_sched.split(":", 1)[1]  # "08:00"
-            elif current_sched.startswith("weekly:"):
-                parts = current_sched.split(":")
-                if len(parts) >= 3:
-                    _sched_day = parts[1]
-                    _sched_time = f"{parts[2]}:{parts[3]}" if len(parts) >= 4 else "08:00"
-
-            day_options = {
-                "mon": "Monday",
-                "tue": "Tuesday",
-                "wed": "Wednesday",
-                "thu": "Thursday",
-                "fri": "Friday",
-                "sat": "Saturday",
-                "sun": "Sunday",
-            }
-
-            with ui.row().classes("items-center gap-2"):
-                sched_sel = ui.select(label="Schedule", options=sched_options, value=sched_idx).classes("w-48")
-
-                sched_time_input = ui.input(label="Time", value=_sched_time).classes("w-28").props('mask="##:##" placeholder="HH:MM"')
-                sched_time_input.visible = sched_idx in ("Daily", "Weekly")
-
-                sched_day_sel = ui.select(label="Day", options=day_options, value=_sched_day).classes("w-36")
-                sched_day_sel.visible = sched_idx == "Weekly"
-
-            def _on_sched_change(e):
-                sched_time_input.visible = e.value in ("Daily", "Weekly")
-                sched_day_sel.visible = e.value == "Weekly"
-
-            sched_sel.on_value_change(_on_sched_change)
-
-            # Last run
-            if wf.get("last_run"):
-                try:
-                    lr = datetime.fromisoformat(wf["last_run"])
-                    ui.label(f"Last run: {lr.strftime('%b %d, %Y at %I:%M %p')}").classes("text-xs text-grey-6")
-                except (ValueError, TypeError):
-                    pass
-
-            # Action buttons
-            with ui.row().classes("w-full gap-2 mt-2"):
-                def _save():
-                    for j, _ta in enumerate(prompt_inputs):
-                        if j < len(prompts_data):
-                            prompts_data[j] = _ta.value
-                    updates = {}
-                    if name_input.value != wf["name"]:
-                        updates["name"] = name_input.value
-                    if icon_sel.value != wf["icon"]:
-                        updates["icon"] = icon_sel.value
-                    if desc_input.value != (wf.get("description") or ""):
-                        updates["description"] = desc_input.value
-                    clean_prompts = [p for p in prompts_data if p.strip()]
-                    if clean_prompts != wf["prompts"]:
-                        updates["prompts"] = clean_prompts
-
-                    # Schedule
-                    sv = sched_sel.value
-                    final_schedule = None
-                    if sv == "Daily":
-                        t = sched_time_input.value.strip() or "08:00"
-                        final_schedule = f"daily:{t}"
-                    elif sv == "Weekly":
-                        t = sched_time_input.value.strip() or "08:00"
-                        d = sched_day_sel.value or "mon"
-                        final_schedule = f"weekly:{d}:{t}"
-                    if final_schedule != wf.get("schedule"):
-                        updates["schedule"] = final_schedule
-
-                    if updates:
-                        update_workflow(wf["id"], **updates)
-                        ui.notify("💾 Saved", type="positive")
-                        refresh_fn()
-                    else:
-                        ui.notify("No changes.", type="info")
-
-                ui.button("💾 Save", on_click=_save)
-
-                def _dup():
-                    duplicate_workflow(wf["id"])
-                    refresh_fn()
-
-                ui.button("📋 Duplicate", on_click=_dup).props("flat")
-
-                def _del():
-                    delete_workflow(wf["id"])
-                    refresh_fn()
-
-                ui.button("🗑️ Delete", on_click=_del).props("flat color=negative")
-
-            # Run history
-            runs = get_run_history(wf["id"], limit=3)
-            if runs:
-                with ui.expansion("📜 Recent runs"):
-                    for r in runs:
-                        icon = "✅" if r["status"] == "completed" else ("🔄" if r["status"] == "running" else "❌")
-                        started = datetime.fromisoformat(r["started_at"]).strftime("%b %d, %I:%M %p")
-                        ui.label(f"{icon} {started} — {r['steps_done']}/{r['steps_total']} steps").classes("text-xs")
-
     def _build_voice_tab() -> None:
         ui.label("🎤 Voice Input").classes("text-h6")
         ui.label(
@@ -3550,7 +3784,7 @@ async def index():
             return
         p.thread_container.clear()
         threads = _list_threads()
-        running_tids = get_running_workflows()
+        running_tids = get_running_tasks()
 
         def _fmt_ts(iso_str: str) -> str:
             """Format ISO timestamp to short readable form, e.g. 'Mar 09, 5:08 PM'."""
@@ -3721,7 +3955,7 @@ async def index():
     # MAIN CONTENT AREA
     # ══════════════════════════════════════════════════════════════════════
 
-    p.main_col = ui.column().classes("w-full max-w-5xl mx-auto px-4 no-wrap").style(
+    p.main_col = ui.column().classes("w-full max-w-7xl mx-auto px-4 no-wrap").style(
         "height: calc(100vh - 16px); overflow: hidden;"
     )
 
@@ -3735,87 +3969,357 @@ async def index():
             else:
                 _build_chat()
 
+    # ── Activity panel content ──────────────────────────────────────────
+
+    def _build_activity_content(container) -> None:
+        """Render the Activity tab content inside *container*."""
+        with ui.scroll_area().classes("w-full h-full"):
+            with ui.column().classes("w-full q-pa-sm gap-0"):
+
+                # ── Header with refresh button ───────────────────────────
+                with ui.row().classes("w-full items-center justify-between"):
+                    ui.label("📋 Activity").classes("text-h5")
+                    def _refresh_activity():
+                        container.clear()
+                        with container:
+                            _build_activity_content(container)
+                    ui.button(icon="refresh", on_click=_refresh_activity).props(
+                        "flat round size=sm"
+                    ).tooltip("Refresh")
+
+                # ── 1. Running Now ────────────────────────────────────────
+                ui.separator().classes("q-my-sm")
+                ui.label("▶ Running Now").classes("text-subtitle1 font-bold")
+                running = get_running_tasks()
+                if running:
+                    for _tid, info in running.items():
+                        with ui.card().classes("w-full q-my-xs").style(
+                            "padding: 0.6rem 0.8rem;"
+                        ):
+                            with ui.row().classes("w-full items-center no-wrap gap-2"):
+                                ui.spinner("dots", size="1.2em", color="amber")
+                                ui.label(info.get("name", "Task")).classes("font-bold")
+                                ui.space()
+                                step = info.get("step", 0)
+                                total = info.get("total", 0)
+                                if total > 0:
+                                    ui.label(f"Step {step}/{total}").classes(
+                                        "text-xs text-grey-6"
+                                    )
+                                    ui.linear_progress(
+                                        value=step / total, show_value=False
+                                    ).classes("w-24").props("color=amber")
+                else:
+                    ui.label("No tasks currently running.").classes(
+                        "text-grey-6 text-sm q-ml-sm"
+                    )
+
+                # ── 2. Upcoming ───────────────────────────────────────────
+                ui.separator().classes("q-my-sm")
+                ui.label("📅 Upcoming").classes("text-subtitle1 font-bold")
+                upcoming = get_next_fire_times(8)
+                if upcoming:
+                    for item in upcoming:
+                        with ui.row().classes(
+                            "w-full items-center no-wrap gap-2 q-py-xs"
+                        ):
+                            ui.label(item["task_icon"]).classes("text-lg")
+                            ui.label(item["task_name"]).classes("font-bold")
+                            ui.space()
+                            try:
+                                dt = datetime.fromisoformat(item["next_run"])
+                                ui.label(dt.strftime("%b %d, %I:%M %p")).classes(
+                                    "text-xs text-grey-6"
+                                )
+                            except (ValueError, TypeError):
+                                ui.label(item["next_run"]).classes(
+                                    "text-xs text-grey-6"
+                                )
+                else:
+                    ui.label("No upcoming scheduled tasks.").classes(
+                        "text-grey-6 text-sm q-ml-sm"
+                    )
+
+                # ── 3. Recent Runs ────────────────────────────────────────
+                ui.separator().classes("q-my-sm")
+                ui.label("🕐 Recent Runs").classes("text-subtitle1 font-bold")
+                recent = get_recent_runs(10)
+                if recent:
+                    for run in recent:
+                        status = run.get("status", "unknown")
+                        if status == "completed":
+                            s_icon, s_color = "check_circle", "positive"
+                        elif status == "completed_delivery_failed":
+                            s_icon, s_color = "warning", "warning"
+                        elif status == "failed":
+                            s_icon, s_color = "error", "negative"
+                        else:
+                            s_icon, s_color = "pending", "grey-6"
+                        with ui.column().classes("w-full gap-0 q-py-xs"):
+                            with ui.row().classes(
+                                "w-full items-center no-wrap gap-2"
+                            ):
+                                ui.label(run.get("task_icon", "⚡")).classes("text-lg")
+                                ui.label(run.get("task_name", "?")).classes("font-bold")
+                                ui.icon(s_icon).classes(f"text-{s_color}").props(
+                                    "size=xs"
+                                )
+                                ui.space()
+                                started = run.get("started_at", "")
+                                if started:
+                                    try:
+                                        dt = datetime.fromisoformat(started)
+                                        ui.label(dt.strftime("%b %d, %I:%M %p")).classes(
+                                            "text-xs text-grey-6"
+                                        )
+                                    except (ValueError, TypeError):
+                                        pass
+                            status_msg = run.get("status_message", "")
+                            if status_msg:
+                                msg_color = "warning" if "failed" in status else "grey-6"
+                                ui.label(status_msg).classes(
+                                    f"text-xs text-{msg_color} q-ml-lg"
+                                )
+                else:
+                    ui.label("No task runs yet.").classes(
+                        "text-grey-6 text-sm q-ml-sm"
+                    )
+
+                # ── 4. Memory Extraction ─────────────────────────────────
+                ui.separator().classes("q-my-sm")
+                ui.label("🧠 Memory Extraction").classes("text-subtitle1 font-bold")
+                mem_status = get_extraction_status()
+                last_ext = mem_status.get("last_extraction")
+                if last_ext:
+                    try:
+                        dt = datetime.fromisoformat(last_ext)
+                        interval_h = int(mem_status.get("interval_hours", 6))
+                        ui.label(
+                            f"Last run: {dt.strftime('%b %d, %I:%M %p')} · "
+                            f"Runs every {interval_h}h"
+                        ).classes("text-sm q-ml-sm")
+                    except (ValueError, TypeError):
+                        ui.label(f"Last run: {last_ext}").classes(
+                            "text-sm q-ml-sm"
+                        )
+                else:
+                    ui.label("Not yet run — starts automatically.").classes(
+                        "text-grey-6 text-sm q-ml-sm"
+                    )
+
+                # ── 5. Channels ──────────────────────────────────────────
+                ui.separator().classes("q-my-sm")
+                ui.label("📡 Channels").classes("text-subtitle1 font-bold")
+                from channels.telegram import (
+                    is_configured as tg_ok, is_running as tg_on,
+                )
+                from channels.email import (
+                    is_configured as em_ok, is_running as em_on,
+                    get_last_error as em_err,
+                )
+                _any_channel = False
+                if tg_ok():
+                    _any_channel = True
+                    dot = "🟢" if tg_on() else "🔴"
+                    lbl = "Running" if tg_on() else "Stopped"
+                    ui.label(f"{dot} Telegram — {lbl}").classes(
+                        "text-sm q-ml-sm"
+                    )
+                if em_ok():
+                    _any_channel = True
+                    dot = "🟢" if em_on() else "🔴"
+                    lbl = "Running" if em_on() else "Stopped"
+                    err = em_err()
+                    if err:
+                        lbl += f" — {err}"
+                    ui.label(f"{dot} Email — {lbl}").classes(
+                        "text-sm q-ml-sm"
+                    )
+                if not _any_channel:
+                    ui.label("No channels configured.").classes(
+                        "text-grey-6 text-sm q-ml-sm"
+                    )
+
     # ── Home screen ──────────────────────────────────────────────────────
 
     def _build_home() -> None:
-        with ui.scroll_area().classes("w-full flex-grow"):
-            # Title
-            ui.html(
-                '<div style="text-align:center; padding-top:2rem;">'
-                '<h1 style="color: gold;">𓁟 Thoth</h1></div>',
-                sanitize=False,
-            )
+        # ── Logo ─────────────────────────────────────────────────────────
+        ui.html(
+            '<div style="text-align:center; padding-top:1.2rem; padding-bottom:0.2rem;">'
+            '<h1 style="color: gold;">𓁟 Thoth</h1></div>',
+            sanitize=False,
+        )
 
-            if state.show_onboarding:
-                with ui.card().classes("w-full"):
-                    with ui.row().classes("w-full justify-between items-center"):
-                        ui.label("")  # spacer
-                        def _dismiss_help():
-                            state.show_onboarding = False
+        # ── Tab toggle ───────────────────────────────────────────────────
+        with ui.tabs().classes("w-full shrink-0").props(
+            "no-caps inline-label active-color=amber indicator-color=amber "
+            "align=center"
+        ).style("border-bottom: 1px solid rgba(255,255,255,0.08);") as home_tabs:
+            tasks_tab = ui.tab("Tasks", icon="bolt")
+            activity_tab = ui.tab("Activity", icon="assessment")
+
+        # ── Tab panels ───────────────────────────────────────────────────
+        with ui.tab_panels(home_tabs, value=tasks_tab).classes(
+            "w-full flex-grow"
+        ).style("overflow: hidden;"):
+
+            # ── Tasks panel ──────────────────────────────────────────────
+            with ui.tab_panel(tasks_tab).classes("h-full").style("padding: 0;"):
+                with ui.scroll_area().classes("w-full h-full"):
+
+                    if state.show_onboarding:
+                        with ui.card().classes("w-full"):
+                            with ui.row().classes("w-full justify-between items-center"):
+                                ui.label("")  # spacer
+                                def _dismiss_help():
+                                    state.show_onboarding = False
+                                    _mark_onboarding_seen()
+                                    _rebuild_main()
+                                ui.button(icon="close", on_click=_dismiss_help).props("flat dense round size=sm")
+                            ui.markdown(_WELCOME_MESSAGE, extras=['code-friendly', 'fenced-code-blocks', 'tables'])
+                            ui.separator()
+                            ui.label("💡 Try asking me something:").classes("font-bold")
+                            with ui.row().classes("w-full flex-wrap gap-2"):
+                                for prompt in _EXAMPLE_PROMPTS:
+                                    def _try(p=prompt):
+                                        state.show_onboarding = False
+                                        _mark_onboarding_seen()
+                                        asyncio.create_task(_send_message(p))
+
+                                    ui.button(prompt, on_click=_try).props("flat dense outline").style(
+                                        "text-transform: none;"
+                                    )
+                        if _is_first_run():
                             _mark_onboarding_seen()
-                            _rebuild_main()
-                        ui.button(icon="close", on_click=_dismiss_help).props("flat dense round size=sm")
-                    ui.markdown(_WELCOME_MESSAGE, extras=['code-friendly', 'fenced-code-blocks', 'tables'])
+                    else:
+                        ui.html(
+                            '<p style="text-align:center; font-size:1.1rem; opacity:0.6;">'
+                            'Select a conversation from the sidebar or start a new one.</p>',
+                            sanitize=False,
+                        )
+
+                    # Task tiles
+                    home_tasks = list_tasks()
+
+                    def _refresh_home_tiles():
+                        """Callback after task dialog save — rebuild the whole home screen."""
+                        _rebuild_main()
+
                     ui.separator()
-                    ui.label("💡 Try asking me something:").classes("font-bold")
-                    with ui.row().classes("w-full flex-wrap gap-2"):
-                        for prompt in _EXAMPLE_PROMPTS:
-                            def _try(p=prompt):
-                                state.show_onboarding = False
-                                _mark_onboarding_seen()
-                                asyncio.create_task(_send_message(p))
+                    with ui.row().classes("w-full items-center justify-between"):
+                        ui.label("⚡ Tasks").classes("text-h5")
+                        ui.button("New Task", icon="add", on_click=lambda: _show_task_dialog(
+                            None, _refresh_home_tiles,
+                        )).props("outline dense no-caps color=amber").style(
+                            "font-weight: 600; font-size: 0.95rem;"
+                        )
 
-                            ui.button(prompt, on_click=_try).props("flat dense outline").style(
-                                "text-transform: none;"
-                            )
-                if _is_first_run():
-                    _mark_onboarding_seen()
-            else:
-                ui.html(
-                    '<p style="text-align:center; font-size:1.1rem; opacity:0.6;">'
-                    'Select a conversation from the sidebar or start a new one.</p>',
-                    sanitize=False,
-                )
+                    if home_tasks:
+                        with ui.element("div").classes("w-full").style(
+                            "display: grid;"
+                            "grid-template-columns: repeat(auto-fill, minmax(192px, 1fr));"
+                            "gap: 1rem;"
+                        ):
+                            for tk in home_tasks:
+                                _is_disabled = not tk.get("enabled", True)
+                                card_style = "opacity: 0.45;" if _is_disabled else ""
+                                with ui.card().classes("h-full").style(card_style):
+                                    ui.label(tk["icon"]).classes("text-h3 text-center w-full")
+                                    ui.label(tk["name"]).classes("font-bold text-center w-full")
+                                    if tk.get("description"):
+                                        ui.label(tk["description"]).classes(
+                                            "text-xs text-grey-6 text-center w-full"
+                                        )
+                                    # Info line: step count + last run + schedule badge
+                                    prompts = tk.get("prompts") or []
+                                    info = f"{len(prompts)} step{'s' if len(prompts) != 1 else ''}"
+                                    if tk.get("last_run"):
+                                        try:
+                                            lr = datetime.fromisoformat(tk["last_run"])
+                                            info += f" · Last: {lr.strftime('%b %d')}"
+                                        except (ValueError, TypeError):
+                                            pass
+                                    sched = tk.get("schedule") or ""
+                                    if sched.startswith("daily"):
+                                        info += " · 📅 Daily"
+                                    elif sched.startswith("weekly"):
+                                        info += " · 📅 Weekly"
+                                    elif sched.startswith("interval"):
+                                        info += " · 🔁 Interval"
+                                    elif sched.startswith("cron"):
+                                        info += " · ⏱️ Cron"
+                                    if tk.get("notify_only"):
+                                        info = "🔔 Reminder"
+                                        if sched:
+                                            if sched.startswith("daily"):
+                                                info += " · 📅 Daily"
+                                            elif sched.startswith("weekly"):
+                                                info += " · 📅 Weekly"
+                                    ui.label(info).classes("text-xs text-grey-6 text-center w-full")
 
-            # Workflow tiles
-            home_workflows = list_workflows()
-            if home_workflows:
-                ui.separator()
-                ui.label("⚡ Workflows").classes("text-h5")
-                ui.label("Create and manage workflows in ⚙️ Settings → ⚡ Workflows").classes("text-xs text-grey-6")
-                with ui.row().classes("w-full flex-wrap gap-4"):
-                    for wf in home_workflows:
-                        with ui.card().classes("w-48"):
-                            ui.label(wf["icon"]).classes("text-h3 text-center w-full")
-                            ui.label(wf["name"]).classes("font-bold text-center w-full")
-                            if wf.get("description"):
-                                ui.label(wf["description"]).classes("text-xs text-grey-6 text-center w-full")
-                            step_label = f"{len(wf['prompts'])} step{'s' if len(wf['prompts']) != 1 else ''}"
-                            if wf.get("last_run"):
-                                try:
-                                    lr = datetime.fromisoformat(wf["last_run"])
-                                    step_label += f" · Last: {lr.strftime('%b %d')}"
-                                except (ValueError, TypeError):
-                                    pass
-                            sched = wf.get("schedule") or ""
-                            if sched.startswith("daily"):
-                                step_label += " · 📅 Daily"
-                            elif sched.startswith("weekly"):
-                                step_label += " · 📅 Weekly"
-                            ui.label(step_label).classes("text-xs text-grey-6 text-center w-full")
+                                    # Toolbar row: toggle, edit, run
+                                    with ui.row().classes(
+                                        "w-full items-center justify-between mt-1"
+                                    ):
+                                        def _toggle_enabled(e, t=tk):
+                                            update_task(t["id"], enabled=e.value)
+                                            _refresh_home_tiles()
 
-                            def _run_wf(w=wf):
-                                wf_tid = uuid.uuid4().hex[:12]
-                                wf_name = f"⚡ {w['name']} — {datetime.now().strftime('%b %d, %I:%M %p')}"
-                                _save_thread_meta(wf_tid, wf_name)
-                                bg_tools = [t.name for t in tool_registry.get_enabled_tools()]
-                                run_workflow_background(w["id"], wf_tid, bg_tools, start_step=0, notification=True)
-                                ui.notify(f"⚡ {w['name']} started — you'll be notified when done.", type="positive")
-                                _rebuild_thread_list()
+                                        ui.switch(
+                                            "", value=tk.get("enabled", True),
+                                            on_change=_toggle_enabled,
+                                        ).props("dense").tooltip(
+                                            "Enabled" if tk.get("enabled", True) else "Disabled"
+                                        )
 
-                            ui.button("▶ Run", on_click=_run_wf).classes("w-full").props("color=primary")
+                                        def _edit(t=tk):
+                                            _show_task_dialog(t, _refresh_home_tiles)
 
-        # Home screen has no input — add a simple prompt input
+                                        ui.button(
+                                            icon="edit", on_click=_edit,
+                                        ).props("flat dense round size=sm").tooltip("Edit")
+
+                                        def _run_tk(t=tk):
+                                            tid = uuid.uuid4().hex[:12]
+                                            t_name = (
+                                                f"⚡ {t['name']} — "
+                                                f"{datetime.now().strftime('%b %d, %I:%M %p')}"
+                                            )
+                                            _save_thread_meta(tid, t_name)
+                                            bg_tools = [
+                                                tl.name
+                                                for tl in tool_registry.get_enabled_tools()
+                                            ]
+                                            run_task_background(
+                                                t["id"], tid, bg_tools,
+                                                start_step=0, notification=True,
+                                            )
+                                            ui.notify(
+                                                f"⚡ {t['name']} started — "
+                                                f"you'll be notified when done.",
+                                                type="positive",
+                                            )
+                                            _rebuild_thread_list()
+
+                                        run_btn = ui.button(
+                                            icon="play_arrow", on_click=_run_tk,
+                                        ).props("round color=green size=sm").tooltip(
+                                            "Run now"
+                                        )
+                                        if _is_disabled:
+                                            run_btn.disable()
+                    else:
+                        ui.label("No tasks yet — click + New Task to get started.").classes(
+                            "text-grey-6 text-sm q-mt-sm"
+                        )
+
+            # ── Activity panel ───────────────────────────────────────────
+            with ui.tab_panel(activity_tab).classes("h-full").style("padding: 0;"):
+                activity_container = ui.column().classes("w-full h-full")
+                with activity_container:
+                    _build_activity_content(activity_container)
+
+        # Home screen input row
         with ui.row().classes("w-full items-end gap-2 shrink-0 py-2"):
             home_input = ui.input(placeholder="Ask anything to start a conversation…").classes(
                 "flex-grow"
@@ -3834,7 +4338,7 @@ async def index():
 
     def _build_chat() -> None:
         # Header
-        running_wfs = get_running_workflows()
+        running_wfs = get_running_tasks()
         bg = running_wfs.get(state.thread_id)
 
         with ui.row().classes("w-full items-center shrink-0"):
@@ -4210,7 +4714,7 @@ async def on_startup():
     await asyncio.to_thread(start_periodic_extraction)
 
     _set("⚡ Loading workflows…")
-    await asyncio.to_thread(lambda: (seed_default_workflows(), start_workflow_scheduler()))
+    await asyncio.to_thread(lambda: (seed_default_tasks(), start_task_scheduler()))
 
     # ── Auto-start channels ──────────────────────────────────────────────────
     _set("📡 Starting channels…")

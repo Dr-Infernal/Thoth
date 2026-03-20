@@ -1,6 +1,6 @@
 # Building the Thoth Windows Installer
 
-This guide explains how to build a distributable Windows installer for Thoth v3.4.0.
+This guide explains how to build a distributable Windows installer for Thoth v3.5.0.
 
 ## Architecture
 
@@ -33,7 +33,7 @@ The installer (~30 MB) bundles the embedded Python runtime and app source code. 
 This will:
 1. Download Python 3.13 embeddable package (~15 MB)
 2. Download `get-pip.py` (~2.5 MB)
-3. Compile everything into `dist\ThothSetup_3.4.0.exe`
+3. Compile everything into `dist\ThothSetup_3.5.0.exe`
 
 ### Options
 
@@ -71,7 +71,7 @@ C:\Program Files\Thoth\            # Installation directory
     ├── tts.py                      # Text-to-speech (Kokoro TTS)
     ├── vision.py                   # Camera/screen capture
     ├── data_reader.py              # Pandas-based structured data reader
-    ├── workflows.py                # Workflow engine + scheduler
+    ├── tasks.py                    # Task engine + APScheduler
     ├── notifications.py             # Unified notification system
     ├── launcher.py                 # System tray + native window + splash screen
     ├── sounds/                     # Notification sound effects
@@ -84,7 +84,7 @@ C:\Program Files\Thoth\            # Installation directory
     │   └── email.py
     ├── requirements.txt
     ├── thoth.ico
-    ├── tools/                      # 19 tool modules
+    ├── tools/                      # 20 tool modules
     │   ├── __init__.py
     │   ├── base.py
     │   ├── registry.py
@@ -105,8 +105,7 @@ C:\Program Files\Thoth\            # Installation directory
 ├── vision_settings.json            # Vision model & camera selection
 ├── voice_settings.json             # Whisper model size preference
 ├── processed_files.json            # Tracked indexed documents
-├── workflows.db                    # Workflow definitions, schedules & run history
-├── timers.sqlite                   # Timer jobs
+├── tasks.db                        # Task definitions, schedules, run history & delivery config
 ├── channels_config.json            # Channel settings (Telegram, Email)
 ├── vector_store/                   # FAISS index for uploaded documents
 ├── gmail/                          # Gmail OAuth tokens
@@ -134,7 +133,7 @@ The Inno Setup installer runs these steps:
 
 ## End-User Experience
 
-1. Run `ThothSetup_3.4.0.exe`
+1. Run `ThothSetup_3.5.0.exe`
 2. Follow the wizard — dependencies download and install automatically (5-15 min)
 3. Launch Thoth from Start Menu or Desktop shortcut
 4. The system tray icon appears; the app opens at `http://localhost:8080`

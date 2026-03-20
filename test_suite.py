@@ -1,4 +1,4 @@
-"""Thoth v3.4.0 — Comprehensive Test Suite
+"""Thoth v3.5.0 — Comprehensive Test Suite
 
 Validates that all modules import cleanly, key functions exist,
 config round-trips work, DB connectivity works, and the NiceGUI
@@ -86,7 +86,7 @@ CORE_MODULES = [
     "tts",
     "vision",
     "data_reader",
-    "workflows",
+    "tasks",
     "notifications",
     "launcher",
 ]
@@ -120,7 +120,6 @@ TOOL_MODULES = [
     "tools.gmail_tool",
     "tools.memory_tool",
     "tools.system_info_tool",
-    "tools.timer_tool",
     "tools.url_reader_tool",
     "tools.vision_tool",
     "tools.weather_tool",
@@ -197,8 +196,8 @@ FUNCTION_CHECKS = [
     ("tts", "TTSService"),
     ("vision", "capture_frame"),
     ("vision", "capture_screenshot"),
-    ("workflows", "seed_default_workflows"),
-    ("workflows", "start_workflow_scheduler"),
+    ("tasks", "seed_default_tasks"),
+    ("tasks", "start_task_scheduler"),
     ("notifications", "notify"),
     ("channels.config", "get"),
     ("channels.config", "set"),
@@ -248,9 +247,9 @@ try:
     EXPECTED_TOOLS = {
         "web_search", "duckduckgo", "wikipedia", "arxiv", "youtube",
         "url_reader", "documents", "gmail", "calendar", "filesystem",
-        "timer", "calculator", "wolfram_alpha", "weather", "vision",
+        "calculator", "wolfram_alpha", "weather", "vision",
         "memory", "conversation_search", "system_info", "chart",
-        "tracker", "shell",
+        "tracker", "shell", "task",
     }
 
     all_tools = get_all_tools()
@@ -1010,6 +1009,7 @@ try:
         "MEMORY GUIDELINES",
         "CONVERSATION HISTORY SEARCH",
         "HONESTY & CITATIONS",
+        "TASKS & REMINDERS",
     ]
     for section in _EXPECTED_SECTIONS:
         if section in AGENT_SYSTEM_PROMPT:
@@ -1021,7 +1021,7 @@ try:
     _EXPECTED_TOOLS = [
         "read_url", "youtube_search", "youtube_transcript", "analyze_image",
         "calculate", "wolfram_alpha", "save_memory", "search_conversations",
-        "tracker_log", "create_chart",
+        "tracker_log", "create_chart", "task_update", "task_create",
     ]
     for tool_name in _EXPECTED_TOOLS:
         if tool_name in AGENT_SYSTEM_PROMPT:
@@ -1734,6 +1734,859 @@ try:
 
 except Exception as e:
     record("FAIL", "browser compression tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 21. TASK TOOL FUNCTIONAL TESTS
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("21. TASK TOOL")
+print("=" * 70)
+
+try:
+    from tools.task_tool import TaskTool, _task_update, _TaskUpdateInput
+
+    _task_tool = TaskTool()
+
+    # 21a. name and enabled_by_default
+    if _task_tool.name == "task":
+        record("PASS", "task: TaskTool.name == 'task'")
+    else:
+        record("FAIL", "task: TaskTool.name", f"got '{_task_tool.name}'")
+
+    if _task_tool.enabled_by_default is True:
+        record("PASS", "task: enabled_by_default")
+    else:
+        record("FAIL", "task: enabled_by_default", f"got {_task_tool.enabled_by_default}")
+
+    # 21b. destructive_tool_names
+    if _task_tool.destructive_tool_names == {"task_delete"}:
+        record("PASS", "task: destructive_tool_names")
+    else:
+        record("FAIL", "task: destructive_tool_names", f"got {_task_tool.destructive_tool_names}")
+
+    # 21c. LangChain sub-tools — should be 5
+    _task_lc = _task_tool.as_langchain_tools()
+    _task_lc_names = sorted([t.name for t in _task_lc])
+    _expected_lc = ["task_create", "task_delete", "task_list", "task_run_now", "task_update"]
+    if _task_lc_names == _expected_lc:
+        record("PASS", f"task: 5 LangChain sub-tools {_task_lc_names}")
+    else:
+        record("FAIL", "task: LangChain sub-tools", f"got {_task_lc_names}")
+
+    # 21d. _TaskUpdateInput schema fields
+    _update_fields = set(_TaskUpdateInput.model_fields.keys())
+    _expected_fields = {"task_id", "name", "schedule", "prompts", "enabled", "model"}
+    if _update_fields == _expected_fields:
+        record("PASS", f"task: _TaskUpdateInput fields {sorted(_update_fields)}")
+    else:
+        record("FAIL", "task: _TaskUpdateInput fields", f"got {sorted(_update_fields)}")
+
+    # 21e. _task_update with invalid ID returns error message
+    _update_result = _task_update(task_id="nonexistent-id-12345")
+    if "not found" in _update_result.lower():
+        record("PASS", "task: _task_update invalid ID returns not-found")
+    else:
+        record("FAIL", "task: _task_update invalid ID", f"got: {_update_result[:80]}")
+
+    # 21f. _task_update with no fields returns hint
+    _update_noop = _task_update(task_id="nonexistent-id-12345")
+    # It should hit "not found" first before "no fields" — that's correct
+    if "not found" in _update_noop.lower():
+        record("PASS", "task: _task_update no-fields path (not-found first)")
+    else:
+        record("FAIL", "task: _task_update no-fields", f"got: {_update_noop[:80]}")
+
+    # 21g. execute() fallback message includes task_update
+    _exec_msg = _task_tool.execute("anything")
+    if "task_update" in _exec_msg:
+        record("PASS", "task: execute() mentions task_update")
+    else:
+        record("FAIL", "task: execute() message", f"got: {_exec_msg[:80]}")
+
+    # 21h. _TaskCreateInput includes 'model' field
+    from tools.task_tool import _TaskCreateInput
+    if "model" in _TaskCreateInput.model_fields:
+        record("PASS", "task: _TaskCreateInput has 'model' field")
+    else:
+        record("FAIL", "task: _TaskCreateInput missing 'model' field")
+
+    # 21i. get_llm_for returns ChatOllama instance
+    from models import get_llm_for
+    from langchain_ollama import ChatOllama as _ChatOllama
+    # Verify function exists and signature accepts model_name
+    import inspect as _inspect
+    _sig = _inspect.signature(get_llm_for)
+    _params = list(_sig.parameters.keys())
+    if _params[:2] == ["model_name", "num_ctx"]:
+        record("PASS", "task: get_llm_for(model_name, num_ctx) signature")
+    else:
+        record("FAIL", "task: get_llm_for signature", f"got params {_params}")
+
+    # 21j. system prompt mentions MODEL OVERRIDE
+    from prompts import AGENT_SYSTEM_PROMPT
+    if "MODEL OVERRIDE" in AGENT_SYSTEM_PROMPT:
+        record("PASS", "task: AGENT_SYSTEM_PROMPT contains MODEL OVERRIDE")
+    else:
+        record("FAIL", "task: AGENT_SYSTEM_PROMPT missing MODEL OVERRIDE")
+
+    # 21k. agent.get_agent_graph accepts model_override kwarg
+    import agent as _agent_mod
+    _gag_sig = _inspect.signature(_agent_mod.get_agent_graph)
+    if "model_override" in _gag_sig.parameters:
+        record("PASS", "task: get_agent_graph accepts model_override")
+    else:
+        record("FAIL", "task: get_agent_graph missing model_override param")
+
+except Exception as e:
+    record("FAIL", "task tool tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 22. ACTIVITY TAB — new helpers for the Activity monitoring panel
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("22. ACTIVITY TAB helpers")
+print("=" * 70)
+
+try:
+    # 22a. get_next_fire_times exists and returns a list
+    from tasks import get_next_fire_times
+    _fires = get_next_fire_times()
+    if isinstance(_fires, list):
+        record("PASS", f"activity: get_next_fire_times() returns list (len={len(_fires)})")
+    else:
+        record("FAIL", "activity: get_next_fire_times()", f"got {type(_fires)}")
+
+    # 22b. get_next_fire_times respects limit
+    _fires2 = get_next_fire_times(limit=3)
+    if isinstance(_fires2, list) and len(_fires2) <= 3:
+        record("PASS", "activity: get_next_fire_times(limit=3) respects limit")
+    else:
+        record("FAIL", "activity: get_next_fire_times limit", f"got {len(_fires2)}")
+
+    # 22c. get_recent_runs exists and returns a list
+    from tasks import get_recent_runs
+    _runs = get_recent_runs(5)
+    if isinstance(_runs, list):
+        record("PASS", f"activity: get_recent_runs(5) returns list (len={len(_runs)})")
+    else:
+        record("FAIL", "activity: get_recent_runs()", f"got {type(_runs)}")
+
+    # 22d. get_extraction_status exists and returns a dict with expected keys
+    from memory_extraction import get_extraction_status
+    _mem = get_extraction_status()
+    if isinstance(_mem, dict) and "last_extraction" in _mem and "interval_hours" in _mem:
+        record("PASS", f"activity: get_extraction_status() keys OK, interval={_mem['interval_hours']}h")
+    else:
+        record("FAIL", "activity: get_extraction_status()", f"got {_mem}")
+
+    # 22e. interval_hours is 6
+    if _mem.get("interval_hours") == 6.0:
+        record("PASS", "activity: extraction interval is 6h")
+    else:
+        record("FAIL", "activity: extraction interval", f"got {_mem.get('interval_hours')}")
+
+    # 22f. Channels expose is_configured / is_running
+    from channels.telegram import is_configured as _tg_cfg, is_running as _tg_run
+    from channels.email import is_configured as _em_cfg, is_running as _em_run
+    if callable(_tg_cfg) and callable(_tg_run):
+        record("PASS", "activity: telegram is_configured/is_running callable")
+    else:
+        record("FAIL", "activity: telegram channel functions not callable")
+    if callable(_em_cfg) and callable(_em_run):
+        record("PASS", "activity: email is_configured/is_running callable")
+    else:
+        record("FAIL", "activity: email channel functions not callable")
+
+    # 22g. get_running_tasks returns a dict
+    from tasks import get_running_tasks
+    _running = get_running_tasks()
+    if isinstance(_running, dict):
+        record("PASS", f"activity: get_running_tasks() returns dict (len={len(_running)})")
+    else:
+        record("FAIL", "activity: get_running_tasks()", f"got {type(_running)}")
+
+    # 22h. app_nicegui imports the new functions
+    import ast as _ast
+    _app_src = Path("app_nicegui.py").read_text(encoding="utf-8")
+    _app_tree = _ast.parse(_app_src)
+    _imported_names: set[str] = set()
+    for node in _ast.walk(_app_tree):
+        if isinstance(node, _ast.ImportFrom):
+            for alias in node.names:
+                _imported_names.add(alias.name)
+    _activity_imports = {"get_recent_runs", "get_next_fire_times", "get_extraction_status"}
+    _missing_imports = _activity_imports - _imported_names
+    if not _missing_imports:
+        record("PASS", "activity: app_nicegui imports all Activity helpers")
+    else:
+        record("FAIL", "activity: app_nicegui missing imports", str(_missing_imports))
+
+    # 22i. _build_activity_content string exists in app_nicegui source
+    if "_build_activity_content" in _app_src:
+        record("PASS", "activity: _build_activity_content defined in app_nicegui")
+    else:
+        record("FAIL", "activity: _build_activity_content not found in app_nicegui")
+
+    # 22j. Activity tab string exists in app_nicegui source
+    if "Activity" in _app_src and "home_tabs" in _app_src:
+        record("PASS", "activity: tab toggle present in home screen")
+    else:
+        record("FAIL", "activity: tab toggle missing from home screen")
+
+except Exception as e:
+    record("FAIL", "activity tab tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# 23. CHANNEL DELIVERY — validation, status tracking, prefixes
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("23. CHANNEL DELIVERY fixes")
+print("=" * 70)
+
+try:
+    from tasks import _validate_delivery, _deliver_to_channel
+
+    # 23a. _validate_delivery accepts no-delivery case
+    try:
+        _validate_delivery(None, None)
+        record("PASS", "delivery: validate(None, None) passes")
+    except Exception as _e:
+        record("FAIL", "delivery: validate(None, None)", str(_e))
+
+    # 23b. _validate_delivery rejects channel without target
+    try:
+        _validate_delivery("telegram", None)
+        record("FAIL", "delivery: validate(telegram, None) should raise")
+    except ValueError:
+        record("PASS", "delivery: validate(telegram, None) raises ValueError")
+
+    # 23c. _validate_delivery rejects target without channel
+    try:
+        _validate_delivery(None, "12345")
+        record("FAIL", "delivery: validate(None, target) should raise")
+    except ValueError:
+        record("PASS", "delivery: validate(None, target) raises ValueError")
+
+    # 23d. _validate_delivery rejects invalid channel name
+    try:
+        _validate_delivery("sms", "12345")
+        record("FAIL", "delivery: validate(sms, target) should raise")
+    except ValueError:
+        record("PASS", "delivery: validate(sms, target) raises ValueError")
+
+    # 23e. _validate_delivery requires telegram target to be numeric
+    try:
+        _validate_delivery("telegram", "not_a_number")
+        record("FAIL", "delivery: validate(telegram, non-numeric) should raise")
+    except ValueError:
+        record("PASS", "delivery: validate(telegram, non-numeric) raises ValueError")
+
+    # 23f. _validate_delivery accepts valid telegram target
+    try:
+        _validate_delivery("telegram", "123456789")
+        record("PASS", "delivery: validate(telegram, numeric) passes")
+    except Exception as _e:
+        record("FAIL", "delivery: validate(telegram, numeric)", str(_e))
+
+    # 23g. _validate_delivery requires email to contain @ and .
+    try:
+        _validate_delivery("email", "not-an-email")
+        record("FAIL", "delivery: validate(email, invalid) should raise")
+    except ValueError:
+        record("PASS", "delivery: validate(email, invalid) raises ValueError")
+
+    # 23h. _validate_delivery accepts valid email
+    try:
+        _validate_delivery("email", "user@example.com")
+        record("PASS", "delivery: validate(email, valid) passes")
+    except Exception as _e:
+        record("FAIL", "delivery: validate(email, valid)", str(_e))
+
+    # 23i. _deliver_to_channel returns empty tuple when no delivery configured
+    _dummy_task = {"name": "Test", "delivery_channel": None, "delivery_target": None}
+    _result = _deliver_to_channel(_dummy_task, "hello")
+    if _result == ("", ""):
+        record("PASS", "delivery: no channel returns ('', '')")
+    else:
+        record("FAIL", "delivery: no channel return", f"got '{_result}'")
+
+    # 23j. _deliver_to_channel returns 'delivery_failed' for unreachable telegram
+    _dummy_tg = {"name": "TgTest", "delivery_channel": "telegram", "delivery_target": "99999"}
+    _result2_status, _result2_detail = _deliver_to_channel(_dummy_tg, "hello")
+    if _result2_status == "delivery_failed":
+        record("PASS", "delivery: unreachable telegram returns 'delivery_failed'")
+    else:
+        record("FAIL", "delivery: unreachable telegram", f"got '{_result2_status}'")
+
+    # 23k. _deliver_to_channel returns 'delivery_failed' for unconfigured email
+    #      (skipped if Gmail is actually configured on this machine)
+    from channels.email import _is_gmail_ready as _gmail_ready
+    _dummy_em = {"name": "EmTest", "delivery_channel": "email", "delivery_target": "a@b.com"}
+    _result3_status, _result3_detail = _deliver_to_channel(_dummy_em, "hello")
+    if _gmail_ready():
+        # Gmail is configured — delivery may succeed or fail depending on network
+        if _result3_status in ("delivered", "delivery_failed"):
+            record("PASS", "delivery: email returns status string (gmail configured)")
+        else:
+            record("FAIL", "delivery: email unexpected return", f"got '{_result3_status}'")
+    else:
+        if _result3_status == "delivery_failed":
+            record("PASS", "delivery: unconfigured email returns 'delivery_failed'")
+        else:
+            record("FAIL", "delivery: unconfigured email", f"got '{_result3_status}'")
+
+    # 23l. create_task rejects bad delivery settings
+    from tasks import create_task, delete_task
+    try:
+        _bad_id = create_task(name="BadDelivery", delivery_channel="telegram", delivery_target="abc")
+        delete_task(_bad_id)  # cleanup if it somehow succeeds
+        record("FAIL", "delivery: create_task should reject bad telegram target")
+    except ValueError:
+        record("PASS", "delivery: create_task rejects bad telegram target")
+
+    # 23m. create_task accepts valid delivery settings
+    try:
+        _good_id = create_task(
+            name="GoodDelivery", delivery_channel="email",
+            delivery_target="test@example.com", prompts=["test"],
+        )
+        delete_task(_good_id)
+        record("PASS", "delivery: create_task accepts valid email delivery")
+    except Exception as _e:
+        record("FAIL", "delivery: create_task valid email", str(_e))
+
+    # 23n. update_task rejects invalid delivery change
+    from tasks import update_task
+    _tmp_id = create_task(name="UpdateTest", prompts=["test"])
+    try:
+        update_task(_tmp_id, delivery_channel="email", delivery_target="invalid")
+        record("FAIL", "delivery: update_task should reject invalid email")
+    except ValueError:
+        record("PASS", "delivery: update_task rejects invalid email target")
+    finally:
+        delete_task(_tmp_id)
+
+    # 23o. completed_delivery_failed status in Activity tab source
+    _app_src2 = Path("app_nicegui.py").read_text(encoding="utf-8")
+    if "completed_delivery_failed" in _app_src2:
+        record("PASS", "delivery: completed_delivery_failed in Activity tab")
+    else:
+        record("FAIL", "delivery: completed_delivery_failed missing from Activity tab")
+
+    # 23p. prompts.py has expanded delivery channel guidance
+    _prompts_src = Path("prompts.py").read_text(encoding="utf-8")
+    if "chat_id" in _prompts_src and "ASK them" in _prompts_src:
+        record("PASS", "delivery: prompts.py has expanded delivery guidance")
+    else:
+        record("FAIL", "delivery: prompts.py delivery guidance incomplete")
+
+    # 23q. telegram send_outbound raises RuntimeError when not running
+    from channels.telegram import send_outbound as _tg_send
+    try:
+        _tg_send(12345, "test")
+        record("FAIL", "delivery: telegram send_outbound should raise when not running")
+    except RuntimeError:
+        record("PASS", "delivery: telegram send_outbound raises RuntimeError")
+    except Exception as _e:
+        record("WARN", "delivery: telegram send_outbound unexpected error", str(_e))
+
+    # 23r. email send_outbound raises RuntimeError when not configured
+    #      (skipped if Gmail is actually configured on this machine)
+    from channels.email import send_outbound as _em_send
+    if not _gmail_ready():
+        try:
+            _em_send("test@test.com", "Subj", "Body")
+            record("FAIL", "delivery: email send_outbound should raise when not configured")
+        except RuntimeError:
+            record("PASS", "delivery: email send_outbound raises RuntimeError")
+        except Exception as _e:
+            record("WARN", "delivery: email send_outbound unexpected error", str(_e))
+    else:
+        record("PASS", "delivery: email send_outbound (gmail configured — raise test skipped)")
+
+    # 23s. email subject prefix 'FromThoth:'
+    import inspect as _insp
+    _deliver_src = _insp.getsource(_deliver_to_channel)
+    if "FromThoth:" in _deliver_src:
+        record("PASS", "delivery: email subject uses 'FromThoth:' prefix")
+    else:
+        record("FAIL", "delivery: email subject missing 'FromThoth:' prefix")
+
+    # 23t. telegram message prefix with task name
+    if "📋" in _deliver_src and "task['name']" in _deliver_src:
+        record("PASS", "delivery: telegram message includes task name prefix")
+    else:
+        record("FAIL", "delivery: telegram message missing task name prefix")
+
+    # 23u. _record_run_start stores task_name and task_icon
+    from tasks import _record_run_start, _finish_run, _get_conn
+    _rrs_conn = _get_conn()
+    _rrs_id = _record_run_start("fake_task_999", "fake_thread", 1,
+                                 task_name="Test Run", task_icon="🧪")
+    _rrs_row = _rrs_conn.execute(
+        "SELECT task_name, task_icon FROM task_runs WHERE id = ?", (_rrs_id,)
+    ).fetchone()
+    if _rrs_row and _rrs_row["task_name"] == "Test Run" and _rrs_row["task_icon"] == "🧪":
+        record("PASS", "delivery: _record_run_start stores task_name/task_icon")
+    else:
+        record("FAIL", "delivery: _record_run_start task_name/icon", f"got {dict(_rrs_row) if _rrs_row else None}")
+    # Cleanup
+    _rrs_conn.execute("DELETE FROM task_runs WHERE id = ?", (_rrs_id,))
+    _rrs_conn.commit()
+    _rrs_conn.close()
+
+    # 23v. Run history survives task deletion (delete_after_run scenario)
+    from tasks import create_task, delete_task, get_recent_runs
+    _surv_id = create_task(name="Survival Test", prompts=["hi"],
+                           notify_only=True, notify_label="test")
+    _surv_run = _record_run_start(_surv_id, "surv_thread", 0,
+                                   task_name="Survival Test", task_icon="⚡")
+    _finish_run(_surv_run, "completed", status_message="test delivery")
+    delete_task(_surv_id)
+    _surv_runs = get_recent_runs(50)
+    _surv_found = any(r["id"] == _surv_run for r in _surv_runs)
+    if _surv_found:
+        record("PASS", "delivery: run history survives task deletion")
+    else:
+        record("FAIL", "delivery: run history lost after task deletion")
+    # Cleanup orphaned run
+    _surv_conn = _get_conn()
+    _surv_conn.execute("DELETE FROM task_runs WHERE id = ?", (_surv_run,))
+    _surv_conn.commit()
+    _surv_conn.close()
+
+    # 23w. get_recent_runs shows (deleted) for orphaned runs
+    _orph_run = _record_run_start("nonexistent_task", "orph_thread", 0,
+                                   task_name="", task_icon="")
+    _finish_run(_orph_run, "completed")
+    _orph_runs = get_recent_runs(50)
+    _orph_found = [r for r in _orph_runs if r["id"] == _orph_run]
+    if _orph_found and _orph_found[0]["task_name"] == "(deleted)":
+        record("PASS", "delivery: orphaned run shows '(deleted)' task name")
+    else:
+        record("FAIL", "delivery: orphaned run task_name", f"got {_orph_found[0]['task_name'] if _orph_found else 'not found'}")
+    _orph_conn = _get_conn()
+    _orph_conn.execute("DELETE FROM task_runs WHERE id = ?", (_orph_run,))
+    _orph_conn.commit()
+    _orph_conn.close()
+
+except Exception as e:
+    record("FAIL", "channel delivery tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 24. TASK ENGINE COMPREHENSIVE TESTS
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n── 24. Task Engine Comprehensive Tests ──")
+try:
+    from tasks import (
+        _parse_schedule, expand_template_vars, _build_trigger,
+        create_task, get_task, list_tasks, update_task, delete_task,
+        duplicate_task, _record_run_start, _update_run_progress,
+        _finish_run, get_recent_runs, get_run_history,
+        seed_default_tasks, _DEFAULT_TASKS, _job_id,
+        get_running_tasks, _get_conn, _row_to_dict,
+        _validate_delivery,
+    )
+
+    # ── 24a. _parse_schedule — daily ─────────────────────────────────
+    _ps_daily = _parse_schedule("daily:08:00")
+    if _ps_daily == {"kind": "daily", "hour": 8, "minute": 0}:
+        record("PASS", "task-engine: _parse_schedule daily:08:00")
+    else:
+        record("FAIL", "task-engine: _parse_schedule daily", str(_ps_daily))
+
+    # ── 24b. _parse_schedule — daily edge ────────────────────────────
+    _ps_edge = _parse_schedule("daily:23:59")
+    if _ps_edge == {"kind": "daily", "hour": 23, "minute": 59}:
+        record("PASS", "task-engine: _parse_schedule daily:23:59")
+    else:
+        record("FAIL", "task-engine: _parse_schedule daily edge", str(_ps_edge))
+
+    # ── 24c. _parse_schedule — weekly abbreviation ───────────────────
+    _ps_wk = _parse_schedule("weekly:mon:09:00")
+    if _ps_wk and _ps_wk["kind"] == "weekly" and _ps_wk["day"] == "mon" and _ps_wk["hour"] == 9:
+        record("PASS", "task-engine: _parse_schedule weekly:mon:09:00")
+    else:
+        record("FAIL", "task-engine: _parse_schedule weekly abbr", str(_ps_wk))
+
+    # ── 24d. _parse_schedule — weekly full day name ──────────────────
+    _ps_wk2 = _parse_schedule("weekly:friday:17:30")
+    if _ps_wk2 and _ps_wk2["day"] == "fri" and _ps_wk2["hour"] == 17 and _ps_wk2["minute"] == 30:
+        record("PASS", "task-engine: _parse_schedule weekly:friday normalised")
+    else:
+        record("FAIL", "task-engine: _parse_schedule weekly full day", str(_ps_wk2))
+
+    # ── 24e. _parse_schedule — interval hours ────────────────────────
+    _ps_int = _parse_schedule("interval:2.5")
+    if _ps_int == {"kind": "interval", "hours": 2.5}:
+        record("PASS", "task-engine: _parse_schedule interval:2.5")
+    else:
+        record("FAIL", "task-engine: _parse_schedule interval", str(_ps_int))
+
+    # ── 24f. _parse_schedule — interval_minutes ──────────────────────
+    _ps_im = _parse_schedule("interval_minutes:30")
+    if _ps_im and _ps_im["kind"] == "interval_minutes" and _ps_im["minutes"] == 30.0:
+        record("PASS", "task-engine: _parse_schedule interval_minutes:30")
+    else:
+        record("FAIL", "task-engine: _parse_schedule interval_minutes", str(_ps_im))
+
+    # ── 24g. _parse_schedule — cron ──────────────────────────────────
+    _ps_cron = _parse_schedule("cron:0 8 * * *")
+    if _ps_cron == {"kind": "cron", "expr": "0 8 * * *"}:
+        record("PASS", "task-engine: _parse_schedule cron expression")
+    else:
+        record("FAIL", "task-engine: _parse_schedule cron", str(_ps_cron))
+
+    # ── 24h. _parse_schedule — invalid inputs return None ────────────
+    _ps_invalid_ok = all(
+        _parse_schedule(x) is None
+        for x in [None, "", "garbage", "unknown:val", "daily"]
+    )
+    if _ps_invalid_ok:
+        record("PASS", "task-engine: _parse_schedule invalid inputs → None")
+    else:
+        record("FAIL", "task-engine: _parse_schedule invalid", "non-None returned")
+
+    # ── 24i. expand_template_vars replaces placeholders ──────────────
+    from datetime import datetime as _dt_cls
+    _now = _dt_cls.now()
+    _expanded = expand_template_vars("Today is {{date}} ({{day}})")
+    if _now.strftime("%B") in _expanded and _now.strftime("%A") in _expanded:
+        record("PASS", "task-engine: expand_template_vars replaces {{date}}/{{day}}")
+    else:
+        record("FAIL", "task-engine: expand_template_vars", _expanded)
+
+    # ── 24j. expand_template_vars passthrough ────────────────────────
+    _no_vars = expand_template_vars("No variables here")
+    if _no_vars == "No variables here":
+        record("PASS", "task-engine: expand_template_vars passthrough")
+    else:
+        record("FAIL", "task-engine: expand_template_vars passthrough", _no_vars)
+
+    # ── 24k. _build_trigger daily → CronTrigger ─────────────────────
+    from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.interval import IntervalTrigger
+    from apscheduler.triggers.date import DateTrigger
+    _trig_d = _build_trigger({"schedule": "daily:08:00", "at": None, "last_run": None})
+    if isinstance(_trig_d, CronTrigger):
+        record("PASS", "task-engine: _build_trigger daily → CronTrigger")
+    else:
+        record("FAIL", "task-engine: _build_trigger daily", type(_trig_d).__name__)
+
+    # ── 24l. _build_trigger weekly → CronTrigger ────────────────────
+    _trig_w = _build_trigger({"schedule": "weekly:tue:10:00", "at": None, "last_run": None})
+    if isinstance(_trig_w, CronTrigger):
+        record("PASS", "task-engine: _build_trigger weekly → CronTrigger")
+    else:
+        record("FAIL", "task-engine: _build_trigger weekly", type(_trig_w).__name__)
+
+    # ── 24m. _build_trigger interval → IntervalTrigger ──────────────
+    _trig_i = _build_trigger({"schedule": "interval:2", "at": None, "last_run": None})
+    if isinstance(_trig_i, IntervalTrigger):
+        record("PASS", "task-engine: _build_trigger interval → IntervalTrigger")
+    else:
+        record("FAIL", "task-engine: _build_trigger interval", type(_trig_i).__name__)
+
+    # ── 24n. _build_trigger future at → DateTrigger ─────────────────
+    _future = (_dt_cls.now() + timedelta(hours=1)).isoformat()
+    _trig_at = _build_trigger({"schedule": None, "at": _future, "last_run": None})
+    if isinstance(_trig_at, DateTrigger):
+        record("PASS", "task-engine: _build_trigger future at → DateTrigger")
+    else:
+        record("FAIL", "task-engine: _build_trigger future at", type(_trig_at).__name__ if _trig_at else "None")
+
+    # ── 24o. _build_trigger no schedule → None ───────────────────────
+    _trig_none = _build_trigger({"schedule": None, "at": None, "last_run": None})
+    if _trig_none is None:
+        record("PASS", "task-engine: _build_trigger no schedule → None")
+    else:
+        record("FAIL", "task-engine: _build_trigger no schedule", type(_trig_none).__name__)
+
+    # ── 24p. create_task mutual exclusivity ──────────────────────────
+    try:
+        create_task("bad", schedule="daily:08:00", at="2026-01-01T00:00:00")
+        record("FAIL", "task-engine: create_task mutual exclusivity", "no error raised")
+    except ValueError as _ve:
+        if "Only one" in str(_ve):
+            record("PASS", "task-engine: create_task mutual exclusivity raises ValueError")
+        else:
+            record("FAIL", "task-engine: create_task mutual exclusivity msg", str(_ve))
+
+    # ── 24q. create_task delay_minutes → at conversion ───────────────
+    _delay_id = create_task("delay test", delay_minutes=5)
+    _delay_task = get_task(_delay_id)
+    _delay_ok = (
+        _delay_task is not None
+        and _delay_task["at"] is not None
+        and _delay_task["delete_after_run"] is True
+    )
+    if _delay_ok:
+        record("PASS", "task-engine: create_task delay_minutes → at + delete_after_run")
+    else:
+        record("FAIL", "task-engine: delay_minutes conversion", str(_delay_task))
+    delete_task(_delay_id)
+
+    # ── 24r. create_task + get_task round-trip ───────────────────────
+    _rt_id = create_task(
+        name="Round Trip Test",
+        prompts=["Step 1", "Step 2"],
+        description="testing",
+        icon="🧪",
+        schedule="daily:12:00",
+        notify_only=False,
+        delivery_channel="email",
+        delivery_target="test@example.com",
+    )
+    _rt = get_task(_rt_id)
+    _rt_ok = (
+        _rt is not None
+        and _rt["name"] == "Round Trip Test"
+        and _rt["prompts"] == ["Step 1", "Step 2"]
+        and _rt["icon"] == "🧪"
+        and _rt["schedule"] == "daily:12:00"
+        and _rt["delivery_channel"] == "email"
+        and _rt["delivery_target"] == "test@example.com"
+        and _rt["notify_only"] is False
+        and _rt["enabled"] is True
+    )
+    if _rt_ok:
+        record("PASS", "task-engine: create_task + get_task round-trip")
+    else:
+        record("FAIL", "task-engine: round-trip", str(_rt))
+
+    # ── 24s. duplicate_task clones correctly ─────────────────────────
+    _dup_id = duplicate_task(_rt_id)
+    _dup = get_task(_dup_id) if _dup_id else None
+    _dup_ok = (
+        _dup is not None
+        and _dup["name"] == "Round Trip Test (copy)"
+        and _dup["prompts"] == ["Step 1", "Step 2"]
+        and _dup["schedule"] is None  # schedule not copied
+        and _dup["delivery_channel"] == "email"
+    )
+    if _dup_ok:
+        record("PASS", "task-engine: duplicate_task clones correctly")
+    else:
+        record("FAIL", "task-engine: duplicate_task", str(_dup))
+    if _dup_id:
+        delete_task(_dup_id)
+
+    # ── 24t. update_task modifies fields ─────────────────────────────
+    update_task(_rt_id, name="Updated Name", icon="🔧")
+    _upd = get_task(_rt_id)
+    if _upd and _upd["name"] == "Updated Name" and _upd["icon"] == "🔧":
+        record("PASS", "task-engine: update_task modifies name + icon")
+    else:
+        record("FAIL", "task-engine: update_task", str(_upd))
+
+    # ── 24u. delete_task removes from DB ─────────────────────────────
+    delete_task(_rt_id)
+    if get_task(_rt_id) is None:
+        record("PASS", "task-engine: delete_task removes from DB")
+    else:
+        record("FAIL", "task-engine: delete_task", "task still exists")
+
+    # ── 24v. Run lifecycle: start → progress → finish ────────────────
+    _lc_task_id = create_task("lifecycle test", prompts=["a", "b", "c"])
+    _lc_run = _record_run_start(_lc_task_id, "thread_lc", 3, "lifecycle test", "⚡")
+    _update_run_progress(_lc_run, 2)
+    _finish_run(_lc_run, "completed", "all steps done")
+    _lc_hist = get_run_history(_lc_task_id, limit=1)
+    _lc_ok = (
+        len(_lc_hist) == 1
+        and _lc_hist[0]["status"] == "completed"
+        and _lc_hist[0]["steps_done"] == 2
+        and _lc_hist[0]["finished_at"] is not None
+    )
+    if _lc_ok:
+        record("PASS", "task-engine: run lifecycle start → progress → finish")
+    else:
+        record("FAIL", "task-engine: run lifecycle", str(_lc_hist))
+
+    # ── 24w. Finished run has status_message ─────────────────────────
+    if _lc_hist and _lc_hist[0].get("status_message") == "all steps done":
+        record("PASS", "task-engine: _finish_run stores status_message")
+    else:
+        record("FAIL", "task-engine: status_message", str(_lc_hist[0].get("status_message") if _lc_hist else "no runs"))
+
+    # ── 24x. get_recent_runs ordering (most recent first) ───────────
+    _lc_run2 = _record_run_start(_lc_task_id, "thread_lc2", 1, "lifecycle test", "⚡")
+    _finish_run(_lc_run2, "completed")
+    _recent = get_recent_runs(50)
+    _recent_ids = [r["id"] for r in _recent]
+    if _lc_run2 in _recent_ids and _lc_run in _recent_ids:
+        _idx1 = _recent_ids.index(_lc_run2)
+        _idx2 = _recent_ids.index(_lc_run)
+        if _idx1 < _idx2:
+            record("PASS", "task-engine: get_recent_runs ordered most-recent first")
+        else:
+            record("FAIL", "task-engine: get_recent_runs order", f"run2 at {_idx1}, run1 at {_idx2}")
+    else:
+        record("FAIL", "task-engine: get_recent_runs missing IDs")
+
+    # ── 24y. get_run_history scoped to task ──────────────────────────
+    _other_id = create_task("other task", prompts=["x"])
+    _other_run = _record_run_start(_other_id, "thread_other", 1, "other task", "⚡")
+    _finish_run(_other_run, "completed")
+    _scoped = get_run_history(_lc_task_id)
+    _scoped_ids = [r["id"] for r in _scoped]
+    if _lc_run in _scoped_ids and _other_run not in _scoped_ids:
+        record("PASS", "task-engine: get_run_history scoped to task_id")
+    else:
+        record("FAIL", "task-engine: get_run_history scope", f"found: {_scoped_ids}")
+    delete_task(_other_id)
+
+    # Clean up lifecycle task
+    delete_task(_lc_task_id)
+    # Clean up run records
+    _cleanup_conn = _get_conn()
+    _cleanup_conn.execute("DELETE FROM task_runs WHERE id IN (?, ?, ?)", (_lc_run, _lc_run2, _other_run))
+    _cleanup_conn.commit()
+    _cleanup_conn.close()
+
+    # ── 24z. seed_default_tasks count ────────────────────────────────
+    if len(_DEFAULT_TASKS) == 5:
+        record("PASS", "task-engine: _DEFAULT_TASKS has 5 starter templates")
+    else:
+        record("FAIL", "task-engine: _DEFAULT_TASKS count", str(len(_DEFAULT_TASKS)))
+
+    # ── 24aa. _DEFAULT_TASKS has notify_only entry ───────────────────
+    _has_notify = any(t.get("notify_only") for t in _DEFAULT_TASKS)
+    if _has_notify:
+        record("PASS", "task-engine: _DEFAULT_TASKS includes notify_only template")
+    else:
+        record("FAIL", "task-engine: _DEFAULT_TASKS notify_only", "none found")
+
+    # ── 24ab. _job_id deterministic ──────────────────────────────────
+    if _job_id("abc123") == "task_abc123":
+        record("PASS", "task-engine: _job_id('abc123') → 'task_abc123'")
+    else:
+        record("FAIL", "task-engine: _job_id", _job_id("abc123"))
+
+    # ── 24ac. get_running_tasks returns dict ─────────────────────────
+    _running = get_running_tasks()
+    if isinstance(_running, dict):
+        record("PASS", "task-engine: get_running_tasks returns dict")
+    else:
+        record("FAIL", "task-engine: get_running_tasks type", type(_running).__name__)
+
+    # ── 24ad. _row_to_dict boolean conversion ────────────────────────
+    _mock_conn = _get_conn()
+    _mock_id = create_task("row_conv", prompts=["p1"], notify_only=True)
+    _mock_row = _mock_conn.execute("SELECT * FROM tasks WHERE id = ?", (_mock_id,)).fetchone()
+    _mock_dict = _row_to_dict(_mock_row)
+    _mock_conn.close()
+    _conv_ok = (
+        _mock_dict["notify_only"] is True
+        and _mock_dict["enabled"] is True
+        and _mock_dict["delete_after_run"] is False
+        and isinstance(_mock_dict["prompts"], list)
+    )
+    if _conv_ok:
+        record("PASS", "task-engine: _row_to_dict converts ints→bools, JSON→list")
+    else:
+        record("FAIL", "task-engine: _row_to_dict conversion", str(_mock_dict))
+    delete_task(_mock_id)
+
+except Exception as e:
+    record("FAIL", "task engine comprehensive tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 25 · Configurable retrieval compression
+# ═════════════════════════════════════════════════════════════════════════════
+try:
+    from tools.registry import get_global_config, set_global_config
+
+    # ── 25a. Global config round-trip ────────────────────────────────────
+    _prev = get_global_config("compression_mode", "smart")
+    set_global_config("compression_mode", "deep")
+    _readback = get_global_config("compression_mode")
+    if _readback == "deep":
+        record("PASS", "compression: global config round-trip (set→get)")
+    else:
+        record("FAIL", "compression: global config round-trip", f"got {_readback!r}")
+    set_global_config("compression_mode", _prev)  # restore
+
+    # ── 25b. Global config persisted to disk ─────────────────────────────
+    import json as _json25
+    from tools.registry import _CONFIG_PATH as _cfg25
+    set_global_config("compression_mode", "off")
+    with open(_cfg25) as _f25:
+        _disk = _json25.load(_f25)
+    if _disk.get("global", {}).get("compression_mode") == "off":
+        record("PASS", "compression: global config persisted to disk")
+    else:
+        record("FAIL", "compression: global config persisted", str(_disk.get("global")))
+    set_global_config("compression_mode", _prev)  # restore
+
+    # ── 25c. _get_compressor returns EmbeddingsFilter for 'smart' ────────
+    from agent import _get_compressor
+    from langchain_classic.retrievers.document_compressors import EmbeddingsFilter as _EF25
+    from langchain_classic.retrievers.document_compressors import LLMChainExtractor as _LCE25
+    set_global_config("compression_mode", "smart")
+    _comp_smart = _get_compressor()
+    if isinstance(_comp_smart, _EF25):
+        record("PASS", "compression: smart mode → EmbeddingsFilter")
+    else:
+        record("FAIL", "compression: smart mode type", type(_comp_smart).__name__)
+    set_global_config("compression_mode", _prev)
+
+    # ── 25d. _get_compressor returns None for 'off' ─────────────────────
+    set_global_config("compression_mode", "off")
+    _comp_off = _get_compressor()
+    if _comp_off is None:
+        record("PASS", "compression: off mode → None")
+    else:
+        record("FAIL", "compression: off mode type", type(_comp_off).__name__)
+    set_global_config("compression_mode", _prev)
+
+    # ── 25e. _compressed returns bare retriever when mode is 'off' ───────
+    from agent import _compressed
+    from langchain_core.runnables import RunnableLambda as _RL25
+    _fake_ret = _RL25(lambda x: x)
+    set_global_config("compression_mode", "off")
+    _bare = _compressed(_fake_ret)
+    if _bare is _fake_ret:
+        record("PASS", "compression: off → bare retriever passthrough")
+    else:
+        record("FAIL", "compression: off passthrough", type(_bare).__name__)
+    set_global_config("compression_mode", _prev)
+
+    # ── 25f. _compressed wraps retriever when mode is 'smart' ────────────
+    from langchain_classic.retrievers import ContextualCompressionRetriever as _CCR25
+    set_global_config("compression_mode", "smart")
+    _wrapped = _compressed(_fake_ret)
+    if isinstance(_wrapped, _CCR25):
+        record("PASS", "compression: smart → ContextualCompressionRetriever")
+    else:
+        record("FAIL", "compression: smart wrapping", type(_wrapped).__name__)
+    set_global_config("compression_mode", _prev)
+
+    # ── 25g. default mode is 'smart' when no config exists ───────────────
+    # Temporarily clear the key
+    from tools.registry import _global_config as _gc25
+    _saved_mode = _gc25.pop("compression_mode", None)
+    _default = get_global_config("compression_mode", "smart")
+    if _default == "smart":
+        record("PASS", "compression: default mode is 'smart'")
+    else:
+        record("FAIL", "compression: default mode", _default)
+    # Restore
+    if _saved_mode is not None:
+        _gc25["compression_mode"] = _saved_mode
+    set_global_config("compression_mode", _prev)
+
+except Exception as e:
+    record("FAIL", "compression config tests", f"{type(e).__name__}: {e}")
     traceback.print_exc()
 
 

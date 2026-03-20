@@ -58,6 +58,15 @@ def _load_state() -> dict:
     return {}
 
 
+def get_extraction_status() -> dict:
+    """Return extraction status info for the Activity panel."""
+    st = _load_state()
+    return {
+        "last_extraction": st.get("last_extraction"),
+        "interval_hours": _INTERVAL_S / 3600,
+    }
+
+
 def _save_state(state: dict) -> None:
     _STATE_FILE.write_text(json.dumps(state, indent=2))
 

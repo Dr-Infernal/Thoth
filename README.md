@@ -1,6 +1,6 @@
 # 𓁟 Thoth — Personal AI Sovereignty
 
-Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It runs entirely on your machine, combining a powerful ReAct agent with 22 integrated tools — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory, habit tracking, and more — plus Telegram and Email messaging channels, all powered by a locally-running LLM via [Ollama](https://ollama.com/). No data leaves your machine unless you explicitly use an online tool.
+Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It runs entirely on your machine, combining a powerful ReAct agent with 22 integrated tools (56 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory, scheduled tasks, habit tracking, and more — plus Telegram and Email messaging channels, all powered by a locally-running LLM via [Ollama](https://ollama.com/). No data leaves your machine unless you explicitly use an online tool.
 
 > Governments are investing billions to keep AI infrastructure within their borders. Thoth applies the same principle to the individual — your compute, your data, your choice of model, **accountable to no one but you.**
 
@@ -17,7 +17,7 @@ https://github.com/user-attachments/assets/7967e18d-a417-4ca5-b2d7-0fca45975ed7
 | **Cost** | $20+/month per subscription | Free forever — runs on your own hardware |
 | **Memory** | Limited, opaque, provider-controlled | You control what's remembered, searchable, deletable |
 | **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, shell, browser, webcam |
-| **Customisation** | Pick a model, write a system prompt | Swap models freely, build multi-step workflows, schedule tasks |
+| **Customisation** | Pick a model, write a system prompt | Swap models freely, build scheduled tasks with cron, daily/weekly, interval, and delay triggers |
 | **Voice** | Cloud-processed speech | Local Whisper STT + Kokoro TTS — never leaves your mic |
 | **Availability** | Requires internet, subject to outages & rate limits | Works offline (core features), no throttling |
 
@@ -46,11 +46,11 @@ Thoth is a **local-compute desktop assistant**: the LLM, voice pipeline, and mem
 | **Offline capability** | Requires internet for every LLM call | Core features work fully offline |
 | **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Kokoro TTS — fully offline, 10 voices |
 | **Long-term memory** | Session compaction + pruning | Persistent vector memory — semantic search, auto-extraction, 6 categories |
-| **Tools** | Browser automation, Canvas, Skills platform | 22 tools / 54 sub-ops — Gmail, Calendar, filesystem, shell, browser, vision, habit tracker, charts, Wolfram, and more |
+| **Tools** | Browser automation, Canvas, Skills platform | 22 tools / 56 sub-ops — Gmail, Calendar, filesystem, shell, browser, vision, habit tracker, charts, Wolfram, and more |
 | **Health & Habit Tracking** | ❌ None | Conversational tracker for meds, symptoms, exercise, periods — with streak, adherence, and trend analysis |
 | **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows & macOS |
 | **Desktop experience** | macOS menu bar app, WebChat | Native desktop window, system tray, splash screen |
-| **Workflows** | Cron jobs + webhooks | Named multi-step workflows with scheduling, chaining, and template variables |
+| **Tasks** | Cron jobs + webhooks | Named tasks with 7 schedule types, channel delivery, per-task model override, and template variables |
 | **Setup** | Node.js + cloud API keys + channel config | Python + Ollama (GUI Installer), zero accounts needed |
 
 ### Why the name "Thoth"?
@@ -63,15 +63,15 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ### 🤖 ReAct Agent Architecture
 - **Autonomous tool use** — the agent decides which tools to call, when, and how many times, based on your question
-- **22 tools / 54 sub-tools** — web search, email, calendar, file management, shell access, browser automation, vision, memory, habit tracking, and more (see [full list below](#-tools-22-tools--54-sub-tools))
+- **22 tools / 56 sub-tools** — web search, email, calendar, file management, shell access, browser automation, vision, memory, scheduled tasks, habit tracking, and more (see [full list below](#-tools-22-tools--56-sub-tools))
 - **Streaming responses** — tokens stream in real-time with a typing indicator
 - **Thinking indicators** — shows when the model is reasoning before responding
-- **Smart context management** — automatic conversation summarization compresses older turns when token usage exceeds 80% of the context window, preserving the 5 most recent turns and a running summary; a hard trim at 85% drops oldest messages as a safety net; oversized tool outputs (e.g. large PDF reads) are proportionally shrunk so multi-file workflows fit within context
+- **Smart context management** — automatic conversation summarization compresses older turns when token usage exceeds 80% of the context window, preserving the 5 most recent turns and a running summary; a hard trim at 85% drops oldest messages as a safety net; oversized tool outputs (e.g. large PDF reads) are proportionally shrunk so multi-tool chains fit within context
 - **Centralized prompts** — all LLM prompts (system prompt, extraction prompt, summarization prompt) managed in a single `prompts.py` module for easy tuning
 - **Live token counter** — progress bar in the sidebar shows real-time context window usage based on trimmed (model-visible) history
 - **Graceful stop & error recovery** — stop button cleanly halts generation with drain timeout; agent tool loops are caught automatically with a user-friendly error message; orphaned tool calls are repaired
 - **Date/time awareness** — current date and time is injected into every LLM call so the model always knows "today"
-- **Destructive action confirmation** — dangerous operations (file deletion, sending emails, deleting calendar events, deleting memories) require explicit user approval via an interrupt mechanism
+- **Destructive action confirmation** — dangerous operations (file deletion, sending emails, deleting calendar events, deleting memories, deleting tasks) require explicit user approval via an interrupt mechanism
 
 ### 🧠 Long-Term Memory
 - **Persistent personal knowledge** — the agent remembers names, birthdays, preferences, projects, and more across conversations
@@ -104,7 +104,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Safe commands run instantly** — `ls`, `pwd`, `cat`, `git status`, `pip list`, `echo`, and similar read-only commands execute without interruption
 - **Dangerous commands require approval** — destructive or system-modifying commands (`rm`, `chmod`, `kill`, `pip install`, `brew`, `apt`) trigger the interrupt mechanism so you can accept or reject before execution
 - **Blocked by default** — high-risk commands (`shutdown`, `reboot`, `mkfs`, `:(){ :|:& };:`) are rejected outright and never reach the shell
-- **Background workflow safe** — commands that require approval are automatically blocked when running inside a background workflow to prevent unattended destructive actions; safe (read-only) commands still execute normally
+- **Background task safe** — commands that require approval are automatically blocked when running inside a background task to prevent unattended destructive actions; safe (read-only) commands still execute normally
 - **Inline terminal panel** — command output appears in a collapsible terminal panel in the chat UI with clear and history controls
 - **History persistence** — command history is saved per-thread in `~/.thoth/shell_history.json` and reloaded when you revisit a conversation
 
@@ -117,7 +117,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Browser snapshot compression** — older browser snapshots are automatically compressed to one-line stubs (URL + title) while keeping the last 2 in full, preventing context window overflow during long browsing sessions
 - **7 sub-tools** — `browser_navigate`, `browser_click`, `browser_type`, `browser_scroll`, `browser_snapshot`, `browser_back`, `browser_tab`
 - **Automatic browser detection** — detects installed Chrome, then Edge (Windows), then falls back to Playwright's bundled Chromium
-- **Background workflow blocking** — browser actions are blocked when running inside a background workflow
+- **Background task blocking** — browser actions are blocked when running inside a background task
 
 ### 👁️ Vision
 - **Camera analysis** — capture and analyze images from your webcam in real-time
@@ -126,16 +126,18 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Camera selection** — pick which camera to use if you have multiple
 - **Inline image display** — captured images are shown inline in the chat
 
-### ⚡ Workflows
-- **Reusable prompt sequences** — create named, multi-step workflows that run sequentially in a fresh thread
+### ⚡ Tasks & Scheduling
+- **Unified task engine** — create named, multi-step tasks that run sequentially in a fresh thread, powered by APScheduler
+- **7 schedule types** — `daily`, `weekly`, `weekdays`, `weekends`, `interval` (minutes), `cron` (full cron expression), `delay_minutes` (one-shot quick timer with notification)
 - **Template variables** — use `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}` in prompts — replaced at runtime
-- **Manual + scheduled execution** — run workflows on demand from the home screen, or schedule them daily/weekly
+- **Channel delivery** — tasks can deliver their output to Telegram or Email after execution; per-task `delivery_channel` and `delivery_target` configuration
+- **Per-task model override** — each task can specify a different LLM; the engine loads the override, runs the task, then restores the default
 - **Prompt chaining** — each step sees the output of the previous step, enabling research → summarise → action pipelines
-- **Always-background execution** — workflows always run in the background so you can keep chatting; the sidebar shows a ⏳ indicator while running
-- **Safety** — destructive tools (send email, delete files, etc.) are automatically excluded from background workflow runs; the LLM adapts by using safe alternatives
-- **Pre-built templates** — ships with 4 starter workflows (Daily Briefing, Research Summary, Email Digest, Weekly Review)
-- **Full editor** — create, edit, duplicate, and delete workflows from the Settings → Workflows tab
-- **Run history** — track past workflow executions with timestamps and step counts
+- **Always-background execution** — tasks always run in the background so you can keep chatting; the sidebar shows a ⏳ indicator while running
+- **Safety** — destructive tools (send email, delete files, etc.) are automatically excluded from background task runs; the LLM adapts by using safe alternatives
+- **Pre-built templates** — ships with 5 starter tasks (Daily Briefing, Research Summary, Email Digest, Weekly Review, Quick Reminder)
+- **Home screen dashboard** — manage tasks from the home screen with a tabbed layout: ⚡ Tasks (tiles with edit/run/delete) and 📋 Activity (monitoring panel with upcoming runs, recent history, channel status)
+- **Persistent run history** — task execution history survives task deletion; displayed in the Activity tab with ✅/❌/⏳ status icons
 
 ### 📬 Messaging Channels
 - **Telegram bot** — connect a Telegram bot via Bot API token; messages are processed by the full ReAct agent with all tools available; each chat gets its own conversation thread
@@ -182,16 +184,16 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Local indicators** — models marked ✅ (downloaded) or ⬇️ (needs download)
 
 ### 🔔 Notifications
-- **Desktop notifications** — workflow completions and timer expirations trigger a desktop notification with timestamp
-- **Sound effects** — distinct audio chimes for workflow completion (two-tone C5→E5) and timer alerts (5-beep A5), played asynchronously
+- **Desktop notifications** — task completions and timer expirations trigger a desktop notification with timestamp
+- **Sound effects** — distinct audio chimes for task completion (two-tone C5→E5) and timer alerts (5-beep A5), played asynchronously
 - **In-app toasts** — transient toast messages appear in the UI with contextual emoji icons
 - **Unified system** — all notification channels (desktop, sound, toast) fire from a single `notify()` call, keeping notification logic consistent across features
 
 ---
 
-## 🔧 Tools (22 Tools / 54 Sub-tools)
+## 🔧 Tools (22 Tools / 56 Sub-tools)
 
-Thoth's agent has access to 22 tools that expose 54 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
+Thoth's agent has access to 22 tools that expose 56 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
 
 ### Search & Knowledge
 
@@ -214,7 +216,7 @@ Thoth's agent has access to 22 tools that expose 54 individual operations to the
 | **📁 Filesystem** | Sandboxed file operations — read, write, copy, move, delete within a workspace folder; reads PDF, CSV, Excel (.xlsx/.xls), JSON/JSONL, and TSV files; structured data files return schema + stats + preview via pandas | None |
 | **🖥️ Shell** | Execute shell commands with 3-tier safety (safe/moderate/blocked); persistent sessions per thread; user approval for destructive commands; inline terminal panel | None |
 | **🌐 Browser** | Autonomous web browsing in a visible Chromium window — navigate, click, type, scroll, snapshot, back, tab management; accessibility-tree snapshots with numbered element references; persistent profile for logins | None |
-| **⏰ Timer** | Desktop notification timers (max 24h), with list and cancel | None |
+| **📋 Tasks** | Create, list, update, delete, and run scheduled tasks — 7 trigger types (daily, weekly, weekdays, weekends, interval, cron, delay), channel delivery, per-task model override | None |
 | **📋 Tracker** | Habit/health tracker — log meds, symptoms, exercise, periods; streak, adherence, trend analysis; CSV export | None |
 
 ### Computation & Analysis
@@ -232,10 +234,10 @@ Thoth's agent has access to 22 tools that expose 54 individual operations to the
 
 ### Safety & Permissions
 
-- **Destructive operations require confirmation**: `workspace_file_delete`, `workspace_move_file`, `run_command` (moderate-risk), `send_gmail_message`, `move_calendar_event`, `delete_calendar_event`, `delete_memory`, `tracker_delete`
+- **Destructive operations require confirmation**: `workspace_file_delete`, `workspace_move_file`, `run_command` (moderate-risk), `send_gmail_message`, `move_calendar_event`, `delete_calendar_event`, `delete_memory`, `tracker_delete`, `task_delete`
 - **Filesystem is sandboxed**: only the configured workspace folder is accessible
-- **Shell commands are safety-classified**: safe (auto), moderate (confirm), blocked (rejected); high-risk commands like `shutdown`, `reboot`, `mkfs` are blocked outright; background workflows cannot run shell commands
-- **Browser actions are blocked in background workflows**: browser automation is disabled during unattended workflow runs
+- **Shell commands are safety-classified**: safe (auto), moderate (confirm), blocked (rejected); high-risk commands like `shutdown`, `reboot`, `mkfs` are blocked outright; background tasks cannot run shell commands
+- **Browser actions are blocked in background tasks**: browser automation is disabled during unattended task runs
 - **Gmail/Calendar operations are tiered**: read, compose/write, and destructive tiers can be toggled independently
 - **Tools can be individually disabled** from Settings to reduce model decision complexity
 
@@ -248,7 +250,7 @@ Thoth's agent has access to 22 tools that expose 54 individual operations to the
 │                    NiceGUI Frontend (app_nicegui.py)                 │
 │  ┌────────────┐  ┌──────────────────────┐  ┌───────────────────┐   │
 │  │  Sidebar   │  │   Chat Interface     │  │   Settings Dialog │   │
-│  │  Threads   │  │   Streaming Tokens   │  │   12 Tabs         │   │
+│  │  Threads   │  │   Streaming Tokens   │  │   11 Tabs         │   │
 │  │  Controls  │  │   Tool Status        │  │   Tool Config     │   │
 │  └────────────┘  └──────────────────────┘  └───────────────────┘   │
 └──────────────────────────┬───────────────────────────────────────────┘
@@ -261,7 +263,7 @@ Thoth's agent has access to 22 tools that expose 54 individual operations to the
 │   System prompt with TOOL USE, MEMORY, and CITATION guidelines      │
 │   Interrupt mechanism for destructive action confirmation            │
 │                                                                      │
-│   54 LangChain sub-tools from 22 registered tool modules            │
+│   56 LangChain sub-tools from 22 registered tool modules            │
 └───────┬──────────┬──────────┬──────────┬──────────┬─────────────────┘
         │          │          │          │          │
         ▼          ▼          ▼          ▼          ▼
@@ -276,8 +278,8 @@ Thoth's agent has access to 22 tools that expose 54 individual operations to the
 
 | File | Purpose |
 |------|---------|
-| **`app_nicegui.py`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (12 tabs), file attachment handling, streaming event loop with error recovery, export, voice bar, first-launch setup wizard, inline terminal panel, centralized logging configuration |
-| **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator, interrupt handling for destructive actions, live token usage reporting, auto-recall with memory IDs |
+| **`app_nicegui.py`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (11 tabs), tabbed home screen (Tasks + Activity), Task Edit dialog, file attachment handling, streaming event loop with error recovery, export, voice bar, first-launch setup wizard, inline terminal panel, centralized logging configuration |
+| **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator, interrupt handling for destructive actions, live token usage reporting, auto-recall with memory IDs, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off) |
 | **`threads.py`** | SQLite-backed thread metadata and `SqliteSaver` checkpointer for persisting LangGraph conversation state |
 | **`memory.py`** | Long-term memory with SQLite CRUD and FAISS semantic vector search — save, search, list, update, delete, count across 6 categories; deterministic dedup via `find_by_subject()`, source tracking (`live`/`extraction`), consolidation utility; auto-rebuilds vector index on mutations |
 | **`models.py`** | Ollama model management — listing, downloading, switching models, context size configuration with automatic model-max capping |
@@ -290,8 +292,8 @@ Thoth's agent has access to 22 tools that expose 54 individual operations to the
 | **`api_keys.py`** | API key management — load/save/apply from `~/.thoth/api_keys.json` |
 | **`prompts.py`** | Centralized LLM prompts — system prompt, extraction prompt, summarization prompt; memory guidelines with dedup and update instructions |
 | **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts personal facts, deduplicates against existing memories via deterministic subject matching, excludes active threads, runs on startup + every 6 hours |
-| **`workflows.py`** | Workflow engine — SQLite CRUD, template variable expansion, sequential prompt execution, background runner with threading, scheduled execution (daily/weekly), desktop notifications, 4 default templates |
-| **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue; coordinates workflow completion chimes and timer alerts |
+| **`tasks.py`** | Task engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, sequential prompt execution, background runner with threading, channel delivery (Telegram/Email), per-task model override, run history persistence, auto-migration from workflows.db, 5 default templates |
+| **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue; coordinates task completion chimes and timer alerts |
 | **`channels/`** | Messaging channel adapters — Telegram bot (long polling) and Email channel (Gmail polling), with shared config store |
 | **`tools/`** | 22 self-registering tool modules + base class + registry |
 
@@ -313,8 +315,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── vision_settings.json    # Vision model & camera selection
 ├── voice_settings.json     # Whisper model size preference
 ├── processed_files.json    # Tracks indexed documents
-├── workflows.db            # Workflow definitions, schedules & run history
-├── timers.sqlite           # Scheduled timer jobs
+├── tasks.db                # Task definitions, schedules, run history & delivery config
 ├── channels_config.json    # Channel settings (Telegram, Email auto-start)
 ├── shell_history.json      # Shell command history per thread
 ├── thoth_app.log           # Application log (structured, timestamped)
@@ -363,13 +364,13 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 
 ### Windows
 
-1. Download **[ThothSetup_3.4.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.5.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.4.0-macOS.zip](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.5.0-macOS.zip](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Unzip the file — this creates a `Thoth` folder
 3. Open the `Thoth` folder and double-click **`Start Thoth.command`**
    - If macOS blocks it: right-click → **Open** → click **Open** in the dialog
@@ -456,7 +457,7 @@ For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credent
    - *"What's on my screen right now?"* → uses Vision (screen capture)
    - *"I took my Lexapro"* → asks to log, then saves to Tracker
    - *"Show my headache trends this month"* → uses Tracker + Chart
-   - *"Set a timer for 10 minutes"* → uses Timer with desktop notification
+   - *"Remind me to call the dentist tomorrow at 9am"* → uses Tasks with scheduling
    - *"What did I ask about taxes last week?"* → uses Conversation Search
 4. **Open ⚙️ Settings** to configure models, enable/disable tools, and set up integrations
 

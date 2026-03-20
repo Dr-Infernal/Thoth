@@ -1,10 +1,11 @@
 import threading
 
-from models import get_llm, get_context_size, get_current_model
+from models import get_llm, get_llm_for, get_context_size, get_current_model, is_model_local, get_model_max_context
 from api_keys import apply_keys
 from prompts import AGENT_SYSTEM_PROMPT, SUMMARIZE_PROMPT
 from langchain_classic.retrievers import ContextualCompressionRetriever
 from langchain_classic.retrievers.document_compressors import LLMChainExtractor
+from langchain_classic.retrievers.document_compressors import EmbeddingsFilter
 from langchain_core.messages import trim_messages, ToolMessage, AIMessage
 from langgraph.types import interrupt, Command
 from threads import pick_or_create_thread, checkpointer
@@ -18,16 +19,46 @@ apply_keys()
 _compressor = None
 
 def _get_compressor():
-    """Lazy-init compressor so it always uses the current LLM."""
+    """Return a compressor based on the configured mode (smart / deep / off).
+
+    * **smart** — ``EmbeddingsFilter`` using the existing Qwen3-Embedding-0.6B
+      model.  Zero extra LLM calls, ~50 ms overhead.
+    * **deep** — ``LLMChainExtractor`` (original behaviour).  K extra LLM calls
+      per tool invocation.  Respects ``_model_override_var``.
+    * **off** — no compression; returns ``None``.
+    """
     global _compressor
-    _compressor = LLMChainExtractor.from_llm(get_llm())
+    from tools.registry import get_global_config
+    mode = get_global_config("compression_mode", "smart")
+
+    if mode == "off":
+        _compressor = None
+        return None
+
+    if mode == "smart":
+        from documents import get_embedding_model
+        _compressor = EmbeddingsFilter(
+            embeddings=get_embedding_model(),
+            similarity_threshold=0.5,
+        )
+        return _compressor
+
+    # mode == "deep" — original LLMChainExtractor behaviour
+    _ov = _model_override_var.get() or ""
+    if _ov and _ov != get_current_model() and is_model_local(_ov):
+        _compressor = LLMChainExtractor.from_llm(get_llm_for(_ov))
+    else:
+        _compressor = LLMChainExtractor.from_llm(get_llm())
     return _compressor
 
 def _compressed(base_retriever):
     """Wrap any retriever with contextual compression.  Public so tool
     modules can call ``from agent import _compressed``."""
+    comp = _get_compressor()
+    if comp is None:
+        return base_retriever
     return ContextualCompressionRetriever(
-        base_compressor=_get_compressor(),
+        base_compressor=comp,
         base_retriever=base_retriever,
     )
 
@@ -240,6 +271,12 @@ _current_thread_id_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
     "current_thread_id", default=""
 )
 
+# ContextVar for model override — propagates to tool executor threads so
+# the contextual compressor uses the same model as the agent graph.
+_model_override_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
+    "model_override", default=""
+)
+
 
 def is_background_workflow() -> bool:
     """Return True if code is running inside a background workflow.
@@ -319,7 +356,7 @@ def _should_summarize(agent, config: dict, user_input: str) -> bool:
         return False
 
 
-def _do_summarize(agent, config: dict) -> None:
+def _do_summarize(agent, config: dict, model_override: str | None = None) -> None:
     """Summarize older messages and cache the result for the thread.
 
     The summary replaces the older portion of messages inside
@@ -381,8 +418,11 @@ def _do_summarize(agent, config: dict) -> None:
 
         conversation_text = "\n".join(parts)
 
-        # Call the LLM to produce a summary
-        llm = get_llm()
+        # Call the LLM to produce a summary — use override model if set
+        if model_override and model_override != get_current_model() and is_model_local(model_override):
+            llm = get_llm_for(model_override)
+        else:
+            llm = get_llm()
         summary_response = llm.invoke([
             {"role": "system", "content": SUMMARIZE_PROMPT},
             {"role": "human", "content": conversation_text},
@@ -425,7 +465,22 @@ _DESTRUCTIVE_LABELS: dict[str, str] = {
     "send_gmail_message": "Send email",
     "delete_memory": "Delete memory",
     "tracker_delete": "Delete tracker / entry",
+    "task_delete": "Delete task",
 }
+
+
+def _enrich_description(tool_name: str, label: str, args_str: str, kwargs: dict) -> str:
+    """Build a human-friendly description for the interrupt dialog."""
+    if tool_name == "task_delete":
+        try:
+            from tasks import get_task
+            tid = kwargs.get("task_id", "")
+            task = get_task(tid) if tid else None
+            if task:
+                return f"{label}: {task['icon']} {task['name']}"
+        except Exception:
+            pass
+    return f"{label}: {args_str}"
 
 
 def _wrap_with_interrupt_gate(tool) -> None:
@@ -451,10 +506,11 @@ def _wrap_with_interrupt_gate(tool) -> None:
                         "and cannot run in a background workflow. "
                         "Do NOT retry this tool. Inform the user that this "
                         "action was skipped and move on.")
+            desc = _enrich_description(_tname, _label, args_str, kwargs)
             approval = interrupt({
                 "tool": _tname,
                 "label": _label,
-                "description": f"{_label}: {args_str}",
+                "description": desc,
                 "args": kwargs or (args[0] if args else {}),
             })
             if not approval:
@@ -472,10 +528,11 @@ def _wrap_with_interrupt_gate(tool) -> None:
                         "and cannot run in a background workflow. "
                         "Do NOT retry this tool. Inform the user that this "
                         "action was skipped and move on.")
+            desc = _enrich_description(_tname, _label, args_str, kwargs)
             approval = interrupt({
                 "tool": _tname,
                 "label": _label,
-                "description": f"{_label}: {args_str}",
+                "description": desc,
                 "args": kwargs or (args[0] if args else {}),
             })
             if not approval:
@@ -547,14 +604,29 @@ def get_token_usage(config: dict | None = None) -> tuple[int, int]:
         return 0, max_tokens
 
 
-def get_agent_graph(enabled_tool_names: list[str] | None = None):
+def get_agent_graph(enabled_tool_names: list[str] | None = None,
+                    model_override: str | None = None):
     """Build (or return cached) a ReAct agent graph for the given set of
     enabled tools.  The agent is rebuilt only when the tool set changes."""
     if enabled_tool_names is None:
         enabled_tool_names = [t.name for t in tool_registry.get_enabled_tools()]
 
+    # Resolve the model to use
+    if model_override and model_override != get_current_model():
+        if is_model_local(model_override):
+            llm = get_llm_for(model_override)
+            model_label = model_override
+        else:
+            logger.warning("Model override '%s' not available locally — falling back to default '%s'",
+                           model_override, get_current_model())
+            llm = get_llm()
+            model_label = get_current_model()
+    else:
+        llm = get_llm()
+        model_label = get_current_model()
+
     is_background = getattr(_tlocal, 'background_workflow', False)
-    cache_key = frozenset(enabled_tool_names) | frozenset({f"ctx:{get_context_size()}", f"model:{get_current_model()}", f"bg:{is_background}"})
+    cache_key = frozenset(enabled_tool_names) | frozenset({f"ctx:{get_context_size()}", f"model:{model_label}", f"bg:{is_background}"})
 
     if cache_key not in _agent_cache:
         # Collect LangChain tool wrappers for enabled tools
@@ -617,7 +689,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None):
             lc_tools = []
 
         agent = create_react_agent(
-            model=get_llm(),
+            model=llm,
             tools=lc_tools,
             prompt=AGENT_SYSTEM_PROMPT,
             pre_model_hook=_pre_model_trim,
@@ -631,16 +703,18 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None):
 
 def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict) -> str:
     """Invoke the ReAct agent and return the final answer text."""
-    agent = get_agent_graph(enabled_tool_names)
+    _model_ov = (config.get("configurable") or {}).get("model_override")
+    agent = get_agent_graph(enabled_tool_names, model_override=_model_ov)
 
     # Set thread-local so _pre_model_trim can find the summary cache
     _current_thread_id_var.set(
         (config.get("configurable") or {}).get("thread_id", "")
     )
+    _model_override_var.set(_model_ov or "")
 
     # Summarize if context is above threshold
     if _should_summarize(agent, config, user_input):
-        _do_summarize(agent, config)
+        _do_summarize(agent, config, model_override=_model_ov)
 
     result = agent.invoke(
         {"messages": [("human", user_input)]},
@@ -691,17 +765,19 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
     * ``"summarizing"`` – payload = ``None`` (condensing older context)
     * ``"done"``        – payload = full answer text (str)
     """
-    agent = get_agent_graph(enabled_tool_names)
+    _model_ov = (config.get("configurable") or {}).get("model_override")
+    agent = get_agent_graph(enabled_tool_names, model_override=_model_ov)
 
     # Set thread-local so _pre_model_trim can find the summary cache
     _current_thread_id_var.set(
         (config.get("configurable") or {}).get("thread_id", "")
     )
+    _model_override_var.set(_model_ov or "")
 
     # ── Context summarization (runs before the main agent stream) ────
     if _should_summarize(agent, config, user_input):
         yield ("summarizing", None)
-        _do_summarize(agent, config)
+        _do_summarize(agent, config, model_override=_model_ov)
 
     yield from _stream_graph(agent, {"messages": [("human", user_input)]}, config,
                              stop_event=stop_event)
@@ -749,13 +825,19 @@ def repair_orphaned_tool_calls(enabled_tool_names: list[str] | None = None, conf
 
 
 def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: bool,
-                        *, stop_event: threading.Event | None = None):
+                        *, interrupt_ids: list[str] | None = None,
+                        stop_event: threading.Event | None = None):
     """Resume an interrupted agent graph after user approval/denial.
 
     Yields the same ``(event_type, payload)`` tuples as ``stream_agent``.
     """
-    agent = get_agent_graph(enabled_tool_names)
-    yield from _stream_graph(agent, Command(resume=approved), config,
+    _model_ov = (config.get("configurable") or {}).get("model_override")
+    agent = get_agent_graph(enabled_tool_names, model_override=_model_ov)
+    if interrupt_ids and len(interrupt_ids) > 1:
+        resume_val = {iid: approved for iid in interrupt_ids}
+    else:
+        resume_val = approved
+    yield from _stream_graph(agent, Command(resume=resume_val), config,
                              stop_event=stop_event)
 
 
@@ -898,11 +980,16 @@ def _stream_graph(agent, input_data, config: dict,
     # Check if the graph paused due to an interrupt (destructive tool gate)
     state = agent.get_state(config)
     if state and state.next:
-        # Graph has pending nodes — look for interrupt data
+        all_interrupts: list[dict] = []
         for task in state.tasks:
             if hasattr(task, "interrupts") and task.interrupts:
-                yield ("interrupt", task.interrupts[0].value)
-                return
+                for intr in task.interrupts:
+                    item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
+                    item["__interrupt_id"] = intr.id
+                    all_interrupts.append(item)
+        if all_interrupts:
+            yield ("interrupt", all_interrupts)
+            return
 
     yield ("done", "".join(full_answer))
 

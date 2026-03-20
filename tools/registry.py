@@ -132,6 +132,32 @@ def _invalidate_agent_cache():
         pass
 
 
+# ── Global (non-tool-specific) config ────────────────────────────────────────
+_global_config: dict = {}
+
+def _load_global_config():
+    """Bootstrap global config from the persisted file."""
+    global _global_config
+    saved = _load_config()
+    _global_config = saved.get("global", {})
+
+def get_global_config(key: str, default=None):
+    """Read a global (non-tool-specific) config value."""
+    if not _global_config:
+        _load_global_config()
+    return _global_config.get(key, default)
+
+def set_global_config(key: str, value) -> None:
+    """Write a global config value and persist."""
+    _global_config[key] = value
+    # Merge into the config file alongside tools and tool_configs
+    saved = _load_config()
+    saved["global"] = _global_config
+    with open(_CONFIG_PATH, "w") as f:
+        json.dump(saved, f, indent=2)
+    _invalidate_agent_cache()
+
+
 def get_langchain_tools() -> list:
     """Return LangChain-compatible tool wrappers for all enabled tools.
     Uses ``as_langchain_tools()`` (plural) so tools contributing multiple

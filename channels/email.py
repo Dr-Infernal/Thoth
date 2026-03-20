@@ -616,3 +616,29 @@ async def stop_polling():
 
     _pending_interrupts.clear()
     log.info("Email channel stopped")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Outbound messages (called by the task engine)
+# ──────────────────────────────────────────────────────────────────────
+def send_outbound(to: str, subject: str, body: str) -> None:
+    """Send a new email to *to* with the given subject and body.
+
+    Called synchronously by ``tasks._deliver_to_channel()``.
+    Uses the same Gmail OAuth credentials as the inbound channel.
+    """
+    if not _is_gmail_ready():
+        raise RuntimeError("Gmail OAuth not configured — cannot deliver email")
+
+    service = _build_gmail_service()
+
+    full_body = body.rstrip() + "\n\n— sent by Thoth"
+    mime = email.mime.text.MIMEText(full_body, "plain", "utf-8")
+    mime["to"] = to
+    mime["subject"] = subject
+
+    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+    service.users().messages().send(
+        userId="me", body={"raw": raw}
+    ).execute()
+    log.info("Outbound email sent to %s (subject: %s)", to, subject)

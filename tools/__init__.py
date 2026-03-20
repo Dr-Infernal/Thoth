@@ -19,7 +19,6 @@ from tools import gmail_tool       # noqa: F401
 from tools import calendar_tool   # noqa: F401
 from tools import url_reader_tool # noqa: F401
 from tools import youtube_tool    # noqa: F401
-from tools import timer_tool      # noqa: F401
 from tools import calculator_tool  # noqa: F401
 from tools import wolfram_tool     # noqa: F401
 from tools import weather_tool     # noqa: F401
@@ -30,6 +29,7 @@ from tools import system_info_tool  # noqa: F401
 from tools import chart_tool        # noqa: F401
 from tools import tracker_tool      # noqa: F401
 from tools import shell_tool        # noqa: F401
+from tools import task_tool         # noqa: F401
 try:                                # browser_tool is still in development
     from tools import browser_tool  # noqa: F401
 except ImportError:
