@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/thoth_glyph_256.png" alt="Thoth" width="256">
+  <img src="docs/thoth_glyph_256.png" alt="Thoth" width="180">
 </p>
 
 <h1 align="center">𓁟 Thoth — Personal AI Sovereignty</h1>
