@@ -423,27 +423,47 @@ class ShellTool(BaseTool):
             )
 
         if classification == "needs_approval":
-            # Block in background workflows
+            # In background workflows, check task-scoped command allowlist
+            _is_bg = False
             try:
-                from agent import is_background_workflow
-                if is_background_workflow():
-                    return (
-                        f"⚠️ BLOCKED: Command '{command}' requires user "
-                        "confirmation and cannot run in a background workflow. "
-                        "Do NOT retry this tool. Inform the user that this "
-                        "action was skipped and move on."
-                    )
+                from agent import is_background_workflow, _task_allowed_commands_var
+                _is_bg = is_background_workflow()
             except ImportError:
                 pass
 
-            approval = interrupt({
-                "tool": "run_command",
-                "label": "Run shell command",
-                "description": f"Run shell command: {command}",
-                "args": {"command": command},
-            })
-            if not approval:
-                return "Command cancelled by user."
+            if _is_bg:
+                allowed = _task_allowed_commands_var.get() or []
+                cmd_lower = command.strip().lower()
+                if not any(cmd_lower.startswith(prefix.lower())
+                           for prefix in allowed):
+                    if allowed:
+                        return (
+                            f"⚠️ BLOCKED: Command '{command}' is not in this "
+                            f"task's allowed commands list. The task owner can "
+                            f"add it in the task editor under "
+                            f"'🔒 Background permissions'.\n"
+                            f"Currently allowed prefixes: {', '.join(allowed)}\n"
+                            f"Do NOT retry this tool."
+                        )
+                    return (
+                        f"⚠️ BLOCKED: Command '{command}' requires approval "
+                        f"and this task has no allowed commands configured. "
+                        f"The task owner can configure allowed command "
+                        f"prefixes in the task editor under "
+                        f"'🔒 Background permissions'.\n"
+                        f"Do NOT retry this tool."
+                    )
+                # Command matches an allowed prefix — skip interrupt, proceed
+            else:
+                # Interactive session — gate with interrupt
+                approval = interrupt({
+                    "tool": "run_command",
+                    "label": "Run shell command",
+                    "description": f"Run shell command: {command}",
+                    "args": {"command": command},
+                })
+                if not approval:
+                    return "Command cancelled by user."
 
         # ── Execute ──────────────────────────────────────────────────────
         try:

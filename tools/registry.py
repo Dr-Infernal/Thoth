@@ -68,6 +68,26 @@ def register(tool: "BaseTool") -> None:
     saved_configs = saved.get("tool_configs", {})
     if tool.name in saved_configs:
         _tool_configs[tool.name] = saved_configs[tool.name]
+        # Auto-migrate: if the schema adds new default operations that didn't
+        # exist before, merge them in so existing users get new sub-tools.
+        # We track which options were known at last save via _known_options.
+        for key, spec in tool.config_schema.items():
+            if spec.get("type") != "multicheck":
+                continue
+            known_key = f"_{key}_known"
+            current_options = set(spec.get("options", []))
+            previously_known = set(_tool_configs[tool.name].get(known_key, []))
+            if previously_known:
+                new_ops = current_options - previously_known
+                default_ops = set(spec.get("default", []))
+                to_add = new_ops & default_ops  # only auto-enable if in defaults
+                if to_add and key in _tool_configs[tool.name]:
+                    saved_ops = set(_tool_configs[tool.name][key])
+                    _tool_configs[tool.name][key] = list(saved_ops | to_add)
+                    logger.info("Auto-enabled new operations for %s: %s",
+                                tool.name, to_add)
+            # Always update the known set to current options
+            _tool_configs[tool.name][known_key] = list(current_options)
     else:
         # Initialise from schema defaults
         _tool_configs.setdefault(tool.name, {})

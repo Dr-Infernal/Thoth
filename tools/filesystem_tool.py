@@ -7,7 +7,7 @@ from tools import registry
 
 # Operations the user can enable, grouped by risk level
 _SAFE_OPS = ["read_file", "list_directory", "file_search"]
-_WRITE_OPS = ["write_file", "copy_file"]
+_WRITE_OPS = ["write_file", "copy_file", "export_to_pdf"]
 _DESTRUCTIVE_OPS = ["move_file", "file_delete"]
 ALL_OPERATIONS = _SAFE_OPS + _WRITE_OPS + _DESTRUCTIVE_OPS
 
@@ -92,11 +92,17 @@ class FileSystemTool(BaseTool):
         if not selected:
             return []
 
-        toolkit = FileManagementToolkit(
-            root_dir=root,
-            selected_tools=selected,
-        )
-        tools = toolkit.get_tools()
+        # Separate custom tools from LangChain FileManagementToolkit tools
+        _CUSTOM_OPS = {"export_to_pdf"}
+        lc_selected = [op for op in selected if op not in _CUSTOM_OPS]
+
+        tools = []
+        if lc_selected:
+            toolkit = FileManagementToolkit(
+                root_dir=root,
+                selected_tools=lc_selected,
+            )
+            tools = toolkit.get_tools()
 
         # Wrap each built-in tool to normalise paths, add sandbox
         # redirect for out-of-workspace paths, rename to workspace_*,
@@ -107,6 +113,10 @@ class FileSystemTool(BaseTool):
         if "read_file" in selected:
             tools = [t for t in tools if t.name != "workspace_read_file"]
             tools.append(_make_pdf_aware_read_tool(root))
+
+        # Add export_to_pdf sub-tool
+        if "export_to_pdf" in selected:
+            tools.append(_make_export_to_pdf_tool(root))
 
         return tools
 
@@ -319,6 +329,74 @@ def _make_pdf_aware_read_tool(root_dir: str):
             "(WORKSPACE ONLY — file_path is relative to the workspace folder. "
             "For files outside the workspace, use run_command instead.)"
         ),
+    )
+
+
+# ── Export to PDF ────────────────────────────────────────────────────────────
+
+def _make_export_to_pdf_tool(root_dir: str):
+    """Return a tool that exports text/markdown content to a PDF file."""
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel as _BM, Field as _F
+
+    class _ExportPdfInput(_BM):
+        content: str = _F(
+            description=(
+                "The text or markdown content to render as a PDF. "
+                "Plain text and basic markdown are supported."
+            ),
+        )
+        filename: str = _F(
+            description=(
+                "Output filename (e.g. 'report.pdf'). Saved in the workspace folder. "
+                "The .pdf extension is added automatically if missing."
+            ),
+        )
+
+    def export_to_pdf(content: str, filename: str) -> str:
+        """Render markdown/text content as a PDF in the workspace."""
+        import re as _re
+        from pathlib import Path as _Path
+        try:
+            from fpdf import FPDF
+        except ImportError:
+            return "Error: fpdf2 is not installed. Run: pip install fpdf2"
+
+        fname = filename.strip()
+        if not fname.lower().endswith(".pdf"):
+            fname += ".pdf"
+        out_path = _Path(root_dir) / fname
+
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=20)
+        pdf.add_page()
+
+        def _safe(text: str) -> str:
+            return text.encode("latin-1", errors="replace").decode("latin-1")
+
+        # Strip markdown syntax — same approach as conversation export
+        text = content
+        text = _re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+        text = _re.sub(r'```[\s\S]*?```', '[code block]', text)
+        text = _re.sub(r'#{1,6}\s+', '', text)
+
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(0, 5, _safe(text))
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf.output(str(out_path))
+        return f"PDF saved to: {out_path}"
+
+    return StructuredTool.from_function(
+        func=export_to_pdf,
+        name="export_to_pdf",
+        description=(
+            "Export text or markdown content to a PDF file in the workspace. "
+            "Returns the absolute file path — useful for sending the "
+            "PDF via Telegram or email. "
+            "(WORKSPACE ONLY — saves to the configured workspace folder.)"
+        ),
+        args_schema=_ExportPdfInput,
     )
 
 

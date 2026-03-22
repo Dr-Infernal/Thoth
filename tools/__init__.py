@@ -30,6 +30,7 @@ from tools import chart_tool        # noqa: F401
 from tools import tracker_tool      # noqa: F401
 from tools import shell_tool        # noqa: F401
 from tools import task_tool         # noqa: F401
+from tools import telegram_tool      # noqa: F401
 try:                                # browser_tool is still in development
     from tools import browser_tool  # noqa: F401
 except ImportError:

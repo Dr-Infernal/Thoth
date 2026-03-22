@@ -214,8 +214,9 @@ def _pre_model_trim(state: dict) -> dict:
 
     # ── Auto-recall: inject relevant memories before the last user msg ───
     # Embed the latest human message and pull the top-5 most relevant
-    # memories from the FAISS index.  This ensures the model always has
-    # personal context without needing to call search_memory explicitly.
+    # memories from the FAISS index, then expand 1 hop in the knowledge
+    # graph to include connected entities.  This ensures the model always
+    # has rich personal context without needing to call search_memory.
     try:
         last_human_text = None
         last_human_idx = None
@@ -226,29 +227,39 @@ def _pre_model_trim(state: dict) -> dict:
                 break
 
         if last_human_text and last_human_idx is not None:
-            from memory import semantic_search as _mem_search, count_memories
+            from knowledge_graph import graph_enhanced_recall, count_entities
 
-            if count_memories() > 0:
+            if count_entities() > 0:
                 # Use first 500 chars of user message for embedding
                 query = last_human_text[:500] if isinstance(last_human_text, str) else str(last_human_text)[:500]
-                memories = _mem_search(query, top_k=5, threshold=0.35)
+                memories = graph_enhanced_recall(query, top_k=5, threshold=0.35, hops=1)
                 if memories:
                     lines = []
                     for m in memories:
-                        lines.append(
-                            f"- [id={m['id']}] [{m['category']}] {m['subject']}: {m['content']}"
-                            + (f" (tags: {m['tags']})" if m.get("tags") else "")
-                        )
+                        # Use legacy column names if available, fall back to graph names
+                        category = m.get("category", m.get("entity_type", ""))
+                        content = m.get("content", m.get("description", ""))
+                        via = m.get("via", "semantic")
+                        line = f"- [id={m['id']}] [{category}] {m['subject']}: {content}"
+                        if m.get("tags"):
+                            line += f" (tags: {m['tags']})"
+                        if via == "graph" and m.get("relations"):
+                            rels = m["relations"]
+                            rel_strs = [f"{r['from']} → {r['type']} → {r['to']}" for r in rels]
+                            line += f" (connected via: {'; '.join(rel_strs)})"
+                        lines.append(line)
                     recall_msg = SystemMessage(
                         content=(
                             "You KNOW the following facts about this user "
-                            "(from your long-term memory):\n"
+                            "(from your long-term memory and knowledge graph):\n"
                             + "\n".join(lines)
                             + "\n\nTreat these as things you already know. "
                             "Use them to answer the user's question directly — "
                             "do NOT say you don't know or search for this info. "
                             "Do not mention that these were recalled from memory. "
-                            "If you need to update or delete one of these, use its ID."
+                            "If you need to update or delete one of these, use its ID. "
+                            "If you notice related entities, you can use explore_connections "
+                            "to see the full relationship graph."
                         )
                     )
                     trimmed.insert(last_human_idx, recall_msg)
@@ -260,10 +271,18 @@ def _pre_model_trim(state: dict) -> dict:
 # Cache compiled agent graphs keyed by frozenset of enabled tool names
 _agent_cache: dict[frozenset[str], object] = {}
 
-# Thread-local flag — background workflows skip destructive tools
+# Thread-local storage for misc flags; background flag uses ContextVar
+# for proper propagation to LangGraph executor threads.
 import threading as _threading
 import contextvars as _contextvars
 _tlocal = _threading.local()
+
+# ContextVar for background workflow flag — MUST be ContextVar (not
+# threading.local) because LangGraph runs tools in executor threads
+# that inherit ContextVars but NOT threading.local storage.
+_background_workflow_var: _contextvars.ContextVar[bool] = _contextvars.ContextVar(
+    "background_workflow", default=False
+)
 
 # ContextVar for current_thread_id — unlike threading.local, this
 # propagates to sync executor threads used by LangGraph for tools.
@@ -277,13 +296,24 @@ _model_override_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
     "model_override", default=""
 )
 
+# ContextVars for task-scoped permissions — set by tasks.py before agent
+# invocation so that tools can check at runtime whether a background task
+# is allowed to send email or run shell commands.
+_task_allowed_commands_var: _contextvars.ContextVar[list] = _contextvars.ContextVar(
+    "task_allowed_commands", default=[]
+)
+_task_allowed_recipients_var: _contextvars.ContextVar[list] = _contextvars.ContextVar(
+    "task_allowed_recipients", default=[]
+)
+
 
 def is_background_workflow() -> bool:
     """Return True if code is running inside a background workflow.
 
-    Used by self-gating tools (e.g. shell) to block destructive
-    operations without the generic interrupt wrapper."""
-    return getattr(_tlocal, 'background_workflow', False)
+    Used by self-gating tools (e.g. shell, gmail, browser) to block or
+    gate destructive operations at runtime.  Uses ContextVar so the flag
+    propagates to LangGraph executor threads."""
+    return _background_workflow_var.get()
 
 # ── Context summarization ────────────────────────────────────────────────────
 _SUMMARY_THRESHOLD = 0.80   # trigger summarization at 80 % of context window
@@ -501,7 +531,7 @@ def _wrap_with_interrupt_gate(tool) -> None:
                 args_str = repr(args[0]) if len(args) == 1 else repr(args)
                 if kwargs:
                     args_str += ", " + ", ".join(f"{k}={v!r}" for k, v in kwargs.items())
-            if getattr(_tlocal, 'background_workflow', False):
+            if _background_workflow_var.get():
                 return (f"⚠️ BLOCKED: '{_label}' requires user confirmation "
                         "and cannot run in a background workflow. "
                         "Do NOT retry this tool. Inform the user that this "
@@ -523,7 +553,7 @@ def _wrap_with_interrupt_gate(tool) -> None:
 
         def _gated_run(*args, _fn=_orig, _label=label, _tname=tool.name, **kwargs):
             args_str = ", ".join(f"{k}={v!r}" for k, v in kwargs.items())
-            if getattr(_tlocal, 'background_workflow', False):
+            if _background_workflow_var.get():
                 return (f"⚠️ BLOCKED: '{_label}' requires user confirmation "
                         "and cannot run in a background workflow. "
                         "Do NOT retry this tool. Inform the user that this "
@@ -625,7 +655,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
         llm = get_llm()
         model_label = get_current_model()
 
-    is_background = getattr(_tlocal, 'background_workflow', False)
+    is_background = _background_workflow_var.get()
     cache_key = frozenset(enabled_tool_names) | frozenset({f"ctx:{get_context_size()}", f"model:{model_label}", f"bg:{is_background}"})
 
     if cache_key not in _agent_cache:
@@ -639,9 +669,23 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                 destructive_names.update(tool_obj.destructive_tool_names)
 
         if is_background:
-            # Background workflows: remove destructive tools entirely so the
-            # LLM can't call them (prevents infinite retry loops).
-            lc_tools = [t for t in lc_tools if t.name not in destructive_names]
+            # Tiered background permissions:
+            # ALWAYS BLOCKED: file_delete, delete_calendar, delete_memory,
+            #                 tracker_delete, task_delete
+            # ALWAYS ALLOWED: move_file, move_calendar_event
+            # RUNTIME-GATED:  send_gmail_message (by allowed_recipients)
+            #                 run_command "needs_approval" (by allowed_commands)
+            # The runtime-gated tools are kept in the tool list but validate
+            # permissions inside their own _run / func at execution time.
+            _ALWAYS_ALLOWED_BG = {
+                "workspace_move_file", "move_calendar_event",
+                "send_gmail_message",
+            }
+            # run_command is NOT in destructive_names (shell self-gates),
+            # so it's already kept.  We only strip the hard-blocked ones.
+            lc_tools = [t for t in lc_tools
+                        if t.name not in destructive_names
+                        or t.name in _ALWAYS_ALLOWED_BG]
         else:
             # Interactive sessions: gate destructive tools with interrupt() —
             # the graph will pause, yield an "interrupt" event, and wait for

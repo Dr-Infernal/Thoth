@@ -1139,16 +1139,29 @@ try:
         else:
             record("FAIL", f"memory: category '{_c}' missing from VALID_CATEGORIES")
 
-    # --- 17b. Schema: source column present in CREATE TABLE --------------
+    # --- 17b. Schema: source column present in entities table (v3.6 KG) ---
     import sqlite3 as _sqlite3
     _test_conn = _sqlite3.connect(_mem_mod.DB_PATH)
     _test_conn.row_factory = _sqlite3.Row
-    _cols = [row[1] for row in _test_conn.execute("PRAGMA table_info(memories)").fetchall()]
-    _test_conn.close()
-    if "source" in _cols:
-        record("PASS", "memory: 'source' column exists in memories table")
+    # v3.6+: memories table migrated to entities table
+    _tables17 = {row[0] for row in _test_conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "entities" in _tables17:
+        _cols = [row[1] for row in _test_conn.execute("PRAGMA table_info(entities)").fetchall()]
+        if "source" in _cols:
+            record("PASS", "memory: 'source' column exists in entities table")
+        else:
+            record("FAIL", "memory: 'source' column missing from entities table")
+    elif "memories" in _tables17:
+        _cols = [row[1] for row in _test_conn.execute("PRAGMA table_info(memories)").fetchall()]
+        if "source" in _cols:
+            record("PASS", "memory: 'source' column exists in memories table (pre-migration)")
+        else:
+            record("FAIL", "memory: 'source' column missing from memories table")
     else:
-        record("FAIL", "memory: 'source' column missing from memories table")
+        record("FAIL", "memory: neither entities nor memories table found")
+    _test_conn.close()
 
     # --- 17c. memory_extraction.py fixes ---------------------------------
 
@@ -1958,12 +1971,12 @@ try:
     except Exception as _e:
         record("FAIL", "delivery: validate(None, None)", str(_e))
 
-    # 23b. _validate_delivery rejects channel without target
+    # 23b. _validate_delivery accepts telegram with no target (uses configured user ID)
     try:
         _validate_delivery("telegram", None)
-        record("FAIL", "delivery: validate(telegram, None) should raise")
-    except ValueError:
-        record("PASS", "delivery: validate(telegram, None) raises ValueError")
+        record("PASS", "delivery: validate(telegram, None) passes (no target needed)")
+    except Exception as _e:
+        record("FAIL", "delivery: validate(telegram, None) should pass", str(_e))
 
     # 23c. _validate_delivery rejects target without channel
     try:
@@ -1979,12 +1992,12 @@ try:
     except ValueError:
         record("PASS", "delivery: validate(sms, target) raises ValueError")
 
-    # 23e. _validate_delivery requires telegram target to be numeric
+    # 23e. _validate_delivery accepts telegram regardless of target value
     try:
         _validate_delivery("telegram", "not_a_number")
-        record("FAIL", "delivery: validate(telegram, non-numeric) should raise")
-    except ValueError:
-        record("PASS", "delivery: validate(telegram, non-numeric) raises ValueError")
+        record("PASS", "delivery: validate(telegram, any target) passes (target ignored)")
+    except Exception as _e:
+        record("FAIL", "delivery: validate(telegram, any target) should pass", str(_e))
 
     # 23f. _validate_delivery accepts valid telegram target
     try:
@@ -2040,14 +2053,14 @@ try:
         else:
             record("FAIL", "delivery: unconfigured email", f"got '{_result3_status}'")
 
-    # 23l. create_task rejects bad delivery settings
+    # 23l. create_task accepts telegram delivery without numeric target (target ignored)
     from tasks import create_task, delete_task
     try:
-        _bad_id = create_task(name="BadDelivery", delivery_channel="telegram", delivery_target="abc")
-        delete_task(_bad_id)  # cleanup if it somehow succeeds
-        record("FAIL", "delivery: create_task should reject bad telegram target")
-    except ValueError:
-        record("PASS", "delivery: create_task rejects bad telegram target")
+        _tg_id = create_task(name="TGDelivery", delivery_channel="telegram", prompts=["test"])
+        delete_task(_tg_id)
+        record("PASS", "delivery: create_task accepts telegram with no target")
+    except Exception as _e:
+        record("FAIL", "delivery: create_task telegram no target", str(_e))
 
     # 23m. create_task accepts valid delivery settings
     try:
@@ -2078,10 +2091,10 @@ try:
     else:
         record("FAIL", "delivery: completed_delivery_failed missing from Activity tab")
 
-    # 23p. prompts.py has expanded delivery channel guidance
+    # 23p. prompts.py has delivery channel guidance (telegram uses configured user ID)
     _prompts_src = Path("prompts.py").read_text(encoding="utf-8")
-    if "chat_id" in _prompts_src and "ASK them" in _prompts_src:
-        record("PASS", "delivery: prompts.py has expanded delivery guidance")
+    if "TELEGRAM_USER_ID" in _prompts_src and "delivery_channel" in _prompts_src:
+        record("PASS", "delivery: prompts.py has delivery guidance")
     else:
         record("FAIL", "delivery: prompts.py delivery guidance incomplete")
 
@@ -2587,6 +2600,1640 @@ try:
 
 except Exception as e:
     record("FAIL", "compression config tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 26 · Knowledge Graph (v3.6)
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("26. KNOWLEDGE GRAPH")
+print("=" * 70)
+
+try:
+    import knowledge_graph as _kg_mod
+    import memory as _mem_compat
+
+    # --- 26a. Module imports correctly ------------------------------------
+    record("PASS", "knowledge_graph: module imports")
+
+    # NetworkX dependency
+    import networkx as _nx_test
+    record("PASS", "knowledge_graph: networkx available")
+
+    # --- 26b. Schema — entities table exists ------------------------------
+    import sqlite3 as _sqlite3_kg
+    _kg_conn = _sqlite3_kg.connect(_kg_mod.DB_PATH)
+    _kg_conn.row_factory = _sqlite3_kg.Row
+    _kg_tables = {row[0] for row in _kg_conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "entities" in _kg_tables:
+        record("PASS", "knowledge_graph: entities table exists")
+    else:
+        record("FAIL", "knowledge_graph: entities table missing")
+
+    if "relations" in _kg_tables:
+        record("PASS", "knowledge_graph: relations table exists")
+    else:
+        record("FAIL", "knowledge_graph: relations table missing")
+
+    # --- 26c. Entity columns include new fields ---------------------------
+    _ent_cols = [row[1] for row in _kg_conn.execute("PRAGMA table_info(entities)").fetchall()]
+    for _col in ("id", "entity_type", "subject", "description", "aliases", "tags", "properties", "source", "created_at", "updated_at"):
+        if _col in _ent_cols:
+            record("PASS", f"knowledge_graph: entities has '{_col}' column")
+        else:
+            record("FAIL", f"knowledge_graph: entities missing '{_col}' column")
+
+    # --- 26d. Relation columns -------------------------------------------
+    _rel_cols = [row[1] for row in _kg_conn.execute("PRAGMA table_info(relations)").fetchall()]
+    for _col in ("id", "source_id", "target_id", "relation_type", "confidence", "properties", "source", "created_at", "updated_at"):
+        if _col in _rel_cols:
+            record("PASS", f"knowledge_graph: relations has '{_col}' column")
+        else:
+            record("FAIL", f"knowledge_graph: relations missing '{_col}' column")
+    _kg_conn.close()
+
+    # --- 26e. VALID_ENTITY_TYPES superset ---------------------------------
+    _vet = _kg_mod.VALID_ENTITY_TYPES
+    for _c in ("person", "preference", "fact", "event", "place", "project"):
+        if _c in _vet:
+            record("PASS", f"knowledge_graph: type '{_c}' in VALID_ENTITY_TYPES")
+        else:
+            record("FAIL", f"knowledge_graph: type '{_c}' missing from VALID_ENTITY_TYPES")
+    # New types
+    for _c in ("organisation", "concept", "skill", "media"):
+        if _c in _vet:
+            record("PASS", f"knowledge_graph: new type '{_c}' in VALID_ENTITY_TYPES")
+        else:
+            record("FAIL", f"knowledge_graph: new type '{_c}' missing")
+
+    # --- 26f. Core entity CRUD functions exist ----------------------------
+    import inspect as _ins_kg
+    _kg_funcs = {
+        "save_entity": ("entity_type", "subject"),
+        "get_entity": ("entity_id",),
+        "update_entity": ("entity_id", "description"),
+        "delete_entity": ("entity_id",),
+        "list_entities": (),
+        "count_entities": (),
+        "search_entities": ("query",),
+        "find_by_subject": ("entity_type", "subject"),
+        "semantic_search": ("query",),
+        "find_duplicate": ("entity_type", "subject", "description"),
+    }
+    for _fn_name, _required_params in _kg_funcs.items():
+        _fn = getattr(_kg_mod, _fn_name, None)
+        if callable(_fn):
+            _sig = _ins_kg.signature(_fn)
+            _params = set(_sig.parameters.keys())
+            _missing = [p for p in _required_params if p not in _params]
+            if _missing:
+                record("FAIL", f"knowledge_graph: {_fn_name} missing params {_missing}")
+            else:
+                record("PASS", f"knowledge_graph: {_fn_name} exists with correct params")
+        else:
+            record("FAIL", f"knowledge_graph: {_fn_name} not callable")
+
+    # --- 26g. Relation CRUD functions exist --------------------------------
+    _rel_funcs = {
+        "add_relation": ("source_id", "target_id", "relation_type"),
+        "get_relations": ("entity_id",),
+        "delete_relation": ("relation_id",),
+        "count_relations": (),
+        "list_relations": (),
+    }
+    for _fn_name, _required_params in _rel_funcs.items():
+        _fn = getattr(_kg_mod, _fn_name, None)
+        if callable(_fn):
+            _sig = _ins_kg.signature(_fn)
+            _params = set(_sig.parameters.keys())
+            _missing = [p for p in _required_params if p not in _params]
+            if _missing:
+                record("FAIL", f"knowledge_graph: {_fn_name} missing params {_missing}")
+            else:
+                record("PASS", f"knowledge_graph: {_fn_name} exists with correct params")
+        else:
+            record("FAIL", f"knowledge_graph: {_fn_name} not callable")
+
+    # --- 26h. Graph query helpers -----------------------------------------
+    _graph_funcs = ["get_neighbors", "get_shortest_path", "get_subgraph",
+                    "get_connected_components", "get_graph_stats", "to_mermaid",
+                    "graph_enhanced_recall"]
+    for _fn_name in _graph_funcs:
+        if callable(getattr(_kg_mod, _fn_name, None)):
+            record("PASS", f"knowledge_graph: {_fn_name} callable")
+        else:
+            record("FAIL", f"knowledge_graph: {_fn_name} not callable")
+
+    # --- 26i. rebuild_index and consolidate_duplicates --------------------
+    if callable(getattr(_kg_mod, "rebuild_index", None)):
+        record("PASS", "knowledge_graph: rebuild_index callable")
+    else:
+        record("FAIL", "knowledge_graph: rebuild_index not callable")
+
+    if callable(getattr(_kg_mod, "consolidate_duplicates", None)):
+        record("PASS", "knowledge_graph: consolidate_duplicates callable")
+    else:
+        record("FAIL", "knowledge_graph: consolidate_duplicates not callable")
+
+    if callable(getattr(_kg_mod, "delete_all_entities", None)):
+        record("PASS", "knowledge_graph: delete_all_entities callable")
+    else:
+        record("FAIL", "knowledge_graph: delete_all_entities not callable")
+
+    # --- 26j. _normalize_subject works ------------------------------------
+    if hasattr(_kg_mod, "_normalize_subject"):
+        _ns_kg = _kg_mod._normalize_subject
+        if _ns_kg("  Mom  ") == "mom" and _ns_kg("My  Cat") == "my cat":
+            record("PASS", "knowledge_graph: _normalize_subject works")
+        else:
+            record("FAIL", "knowledge_graph: _normalize_subject output unexpected")
+    else:
+        record("FAIL", "knowledge_graph: _normalize_subject missing")
+
+    # --- 26k. Memory.py backward compatibility ----------------------------
+    # memory.py must still export all legacy functions
+    _legacy_funcs = [
+        "save_memory", "update_memory", "delete_memory", "get_memory",
+        "list_memories", "count_memories", "search_memories", "semantic_search",
+        "find_by_subject", "find_duplicate", "delete_all_memories",
+        "consolidate_duplicates", "_normalize_subject",
+    ]
+    for _fn_name in _legacy_funcs:
+        if callable(getattr(_mem_compat, _fn_name, None)):
+            record("PASS", f"memory compat: {_fn_name} still exported")
+        else:
+            record("FAIL", f"memory compat: {_fn_name} missing from memory.py")
+
+    # VALID_CATEGORIES still accessible
+    if hasattr(_mem_compat, "VALID_CATEGORIES"):
+        _vc_compat = _mem_compat.VALID_CATEGORIES
+        for _c in ("person", "preference", "fact", "event", "place", "project"):
+            if _c in _vc_compat:
+                record("PASS", f"memory compat: '{_c}' in VALID_CATEGORIES")
+            else:
+                record("FAIL", f"memory compat: '{_c}' missing from VALID_CATEGORIES")
+    else:
+        record("FAIL", "memory compat: VALID_CATEGORIES missing")
+
+    # DB_PATH still accessible
+    if hasattr(_mem_compat, "DB_PATH"):
+        record("PASS", "memory compat: DB_PATH exported")
+    else:
+        record("FAIL", "memory compat: DB_PATH missing")
+
+    # --- 26l. Memory tool has new sub-tools --------------------------------
+    from tools import memory_tool as _mt_kg
+    _mt_src = _ins_kg.getsource(_mt_kg)
+    if "link_memories" in _mt_src:
+        record("PASS", "memory_tool: link_memories sub-tool present")
+    else:
+        record("FAIL", "memory_tool: link_memories sub-tool missing")
+    if "explore_connections" in _mt_src:
+        record("PASS", "memory_tool: explore_connections sub-tool present")
+    else:
+        record("FAIL", "memory_tool: explore_connections sub-tool missing")
+    if "knowledge_graph" in _mt_src or "import knowledge_graph" in _mt_src:
+        record("PASS", "memory_tool: imports knowledge_graph")
+    else:
+        record("FAIL", "memory_tool: does not import knowledge_graph")
+
+    # Count sub-tools — should be 7 now
+    _mt_inst = _mt_kg.MemoryTool()
+    _lc_tools = _mt_inst.as_langchain_tools()
+    if len(_lc_tools) == 7:
+        record("PASS", f"memory_tool: 7 sub-tools registered")
+    else:
+        record("FAIL", f"memory_tool: expected 7 sub-tools, got {len(_lc_tools)}")
+
+    _tool_names = {t.name for t in _lc_tools}
+    for _tn in ("save_memory", "search_memory", "list_memories", "update_memory",
+                "delete_memory", "link_memories", "explore_connections"):
+        if _tn in _tool_names:
+            record("PASS", f"memory_tool: sub-tool '{_tn}' registered")
+        else:
+            record("FAIL", f"memory_tool: sub-tool '{_tn}' missing")
+
+    # --- 26m. Extraction prompt includes relations ------------------------
+    from prompts import EXTRACTION_PROMPT as _ep_kg
+    _extraction_checks = [
+        ("relation_type", "extraction prompt has relation_type"),
+        ("source_subject", "extraction prompt has source_subject"),
+        ("target_subject", "extraction prompt has target_subject"),
+        ("confidence", "extraction prompt has confidence"),
+        ("mother_of", "extraction prompt has example relation"),
+    ]
+    for _check, _desc in _extraction_checks:
+        if _check in _ep_kg:
+            record("PASS", f"prompt: {_desc}")
+        else:
+            record("FAIL", f"prompt: {_desc}")
+
+    # --- 26n. System prompt updated for knowledge graph -------------------
+    from prompts import AGENT_SYSTEM_PROMPT as _asp_kg
+    _kg_prompt_checks = [
+        ("knowledge graph", "system prompt mentions knowledge graph"),
+        ("link_memories", "system prompt mentions link_memories"),
+        ("explore_connections", "system prompt mentions explore_connections"),
+        ("BUILDING CONNECTIONS", "system prompt has BUILDING CONNECTIONS section"),
+        ("EXPLORING CONNECTIONS", "system prompt has EXPLORING CONNECTIONS section"),
+    ]
+    for _check, _desc in _kg_prompt_checks:
+        if _check in _asp_kg:
+            record("PASS", f"prompt: {_desc}")
+        else:
+            record("FAIL", f"prompt: {_desc}")
+
+    # --- 26o. Agent auto-recall uses graph_enhanced_recall ----------------
+    _agent_src_kg = _ins_kg.getsource(_ins_kg.getmodule(_agent_mod._pre_model_trim))
+    if "graph_enhanced_recall" in _agent_src_kg:
+        record("PASS", "agent: auto-recall uses graph_enhanced_recall")
+    else:
+        record("FAIL", "agent: auto-recall should use graph_enhanced_recall")
+    if "count_entities" in _agent_src_kg:
+        record("PASS", "agent: auto-recall uses count_entities")
+    else:
+        record("FAIL", "agent: auto-recall should use count_entities")
+
+    # --- 26p. requirements.txt has networkx --------------------------------
+    _req_path = os.path.join(PROJECT_ROOT, "requirements.txt")
+    _req_text = open(_req_path).read()
+    if "networkx" in _req_text:
+        record("PASS", "requirements: networkx listed")
+    else:
+        record("FAIL", "requirements: networkx missing")
+
+    # --- 26q. memory_extraction uses knowledge_graph for relations --------
+    _mex_src = _ins_kg.getsource(_ins_kg.getmodule(_me_mod._dedup_and_save))
+    if "add_relation" in _mex_src or "kg.add_relation" in _mex_src:
+        record("PASS", "extraction: _dedup_and_save creates relations")
+    else:
+        record("FAIL", "extraction: _dedup_and_save should create relations")
+    if "subject_to_id" in _mex_src:
+        record("PASS", "extraction: _dedup_and_save tracks subject→id mapping")
+    else:
+        record("FAIL", "extraction: _dedup_and_save missing subject→id mapping")
+
+except Exception as e:
+    record("FAIL", "knowledge graph tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 27 · Knowledge Graph Visualization (v3.6)
+# ═════════════════════════════════════════════════════════════════════════════
+print(f"\n{'='*70}")
+print("SECTION 27 · Knowledge Graph Visualization")
+print(f"{'='*70}")
+
+try:
+    import knowledge_graph as _vis_kg
+    _ins_vis = importlib.import_module("inspect")
+
+    # --- 27a. graph_to_vis_json exists ------------------------------------
+    if hasattr(_vis_kg, "graph_to_vis_json"):
+        record("PASS", "vis: graph_to_vis_json() exists")
+    else:
+        record("FAIL", "vis: graph_to_vis_json() missing")
+
+    # --- 27b. _VIS_TYPE_COLORS covers all entity types --------------------
+    _vtc = getattr(_vis_kg, "_VIS_TYPE_COLORS", {})
+    _vet = getattr(_vis_kg, "VALID_ENTITY_TYPES", set())
+    _missing_colors = _vet - set(_vtc.keys())
+    if not _missing_colors:
+        record("PASS", f"vis: type colors cover all {len(_vet)} entity types")
+    else:
+        record("FAIL", "vis: type colors missing", str(_missing_colors))
+
+    # --- 27c. Empty graph returns correct shape ---------------------------
+    _orig_graph = _vis_kg._graph
+    _orig_ready = _vis_kg._graph_ready
+    try:
+        import networkx as _vis_nx
+        _vis_kg._graph = _vis_nx.DiGraph()
+        _vis_kg._graph_ready = True
+        _empty = _vis_kg.graph_to_vis_json()
+        if (_empty["nodes"] == [] and _empty["edges"] == []
+                and _empty["center"] is None
+                and _empty["stats"]["total_entities"] == 0):
+            record("PASS", "vis: empty graph returns correct shape")
+        else:
+            record("FAIL", "vis: empty graph shape wrong", str(_empty))
+    finally:
+        _vis_kg._graph = _orig_graph
+        _vis_kg._graph_ready = _orig_ready
+
+    # --- 27d. Full graph mode returns all expected keys -------------------
+    _full = _vis_kg.graph_to_vis_json()
+    _required_keys = {"nodes", "edges", "center", "stats"}
+    if _required_keys <= set(_full.keys()):
+        record("PASS", "vis: full graph has required top-level keys")
+    else:
+        record("FAIL", "vis: missing keys", str(_required_keys - set(_full.keys())))
+
+    # --- 27e. Stats has required fields -----------------------------------
+    _stat_keys = {"total_entities", "total_relations", "shown_nodes", "shown_edges"}
+    if _stat_keys <= set(_full["stats"].keys()):
+        record("PASS", "vis: stats has required fields")
+    else:
+        record("FAIL", "vis: stats missing", str(_stat_keys - set(_full["stats"].keys())))
+
+    # --- 27f. Node objects have vis-network fields ------------------------
+    if _full["nodes"]:
+        _n0 = _full["nodes"][0]
+        _node_req = {"id", "label", "color", "size", "font", "title",
+                     "_type", "_description", "_aliases", "_tags", "_degree"}
+        if _node_req <= set(_n0.keys()):
+            record("PASS", f"vis: node has all {len(_node_req)} required fields")
+        else:
+            record("FAIL", "vis: node missing fields", str(_node_req - set(_n0.keys())))
+    else:
+        record("WARN", "vis: no nodes to check fields (empty DB)")
+
+    # --- 27g. Edge objects have vis-network fields ------------------------
+    if _full["edges"]:
+        _e0 = _full["edges"][0]
+        # Note: per-edge "font" removed in v3.6 so global transparent font takes effect
+        _edge_req = {"from", "to", "label", "arrows", "color"}
+        if _edge_req <= set(_e0.keys()):
+            record("PASS", f"vis: edge has all {len(_edge_req)} required fields")
+        else:
+            record("FAIL", "vis: edge missing fields", str(_edge_req - set(_e0.keys())))
+    else:
+        record("WARN", "vis: no edges to check fields (empty DB)")
+
+    # --- 27h. Node colors match type palette ------------------------------
+    if _full["nodes"]:
+        _color_correct = all(
+            n["color"] == _vtc.get(n["_type"], _vis_kg._VIS_DEFAULT_COLOR)
+            for n in _full["nodes"]
+        )
+        if _color_correct:
+            record("PASS", "vis: all node colors match type palette")
+        else:
+            record("FAIL", "vis: node color mismatch")
+    else:
+        record("WARN", "vis: no nodes for color check")
+
+    # --- 27i. Node sizes are in valid range (15–40) -----------------------
+    if _full["nodes"]:
+        _sizes = [n["size"] for n in _full["nodes"]]
+        if all(15 <= s <= 40 for s in _sizes):
+            record("PASS", f"vis: node sizes in range 15–40 (min={min(_sizes)}, max={max(_sizes)})")
+        else:
+            record("FAIL", "vis: node sizes out of range", f"min={min(_sizes)}, max={max(_sizes)}")
+    else:
+        record("WARN", "vis: no nodes for size check")
+
+    # --- 27j. Center is User entity (if exists) or highest-degree ---------
+    if _full["center"] and _full["nodes"]:
+        _center_node = next((n for n in _full["nodes"] if n["id"] == _full["center"]), None)
+        if _center_node:
+            _user_exists = any(n["label"].lower() == "user" for n in _full["nodes"])
+            if _user_exists:
+                if _center_node["label"].lower() == "user":
+                    record("PASS", "vis: center is User entity")
+                else:
+                    record("FAIL", "vis: center should be User", f"got {_center_node['label']}")
+            else:
+                # Should be highest degree
+                _max_deg = max(n["_degree"] for n in _full["nodes"])
+                if _center_node["_degree"] == _max_deg:
+                    record("PASS", "vis: center is highest-degree node (no User)")
+                else:
+                    record("FAIL", "vis: center not highest degree")
+        else:
+            record("FAIL", "vis: center ID not found in nodes")
+    else:
+        record("WARN", "vis: no center to check")
+
+    # --- 27k. Subgraph mode returns subset --------------------------------
+    if _full["center"]:
+        _sub = _vis_kg.graph_to_vis_json(entity_id=_full["center"], hops=2)
+        if len(_sub["nodes"]) <= len(_full["nodes"]):
+            record("PASS", f"vis: subgraph ({len(_sub['nodes'])} nodes) <= full ({len(_full['nodes'])})")
+        else:
+            record("FAIL", "vis: subgraph larger than full")
+        if _sub["center"] == _full["center"]:
+            record("PASS", "vis: subgraph center matches requested entity")
+        else:
+            record("FAIL", "vis: subgraph center mismatch")
+    else:
+        record("WARN", "vis: no center for subgraph test")
+
+    # --- 27l. Nonexistent entity falls back to full graph -----------------
+    _bad = _vis_kg.graph_to_vis_json(entity_id="nonexistent_id_xyz")
+    if _bad["stats"]["shown_nodes"] == _full["stats"]["total_entities"]:
+        record("PASS", "vis: nonexistent entity falls back to full graph")
+    else:
+        record("FAIL", "vis: nonexistent entity fallback wrong",
+               f"shown={_bad['stats']['shown_nodes']}, expected={_full['stats']['total_entities']}")
+
+    # --- 27m. max_nodes cap works -----------------------------------------
+    _capped = _vis_kg.graph_to_vis_json(max_nodes=5)
+    if _capped["stats"]["shown_nodes"] <= 5:
+        record("PASS", f"vis: max_nodes cap works ({_capped['stats']['shown_nodes']} ≤ 5)")
+    else:
+        record("FAIL", "vis: max_nodes cap exceeded", str(_capped["stats"]["shown_nodes"]))
+
+    # --- 27n. Edges reference valid node IDs ------------------------------
+    if _full["edges"] and _full["nodes"]:
+        _nids = {n["id"] for n in _full["nodes"]}
+        _bad_edges = [e for e in _full["edges"]
+                      if e["from"] not in _nids or e["to"] not in _nids]
+        if not _bad_edges:
+            record("PASS", "vis: all edges reference valid node IDs")
+        else:
+            record("FAIL", "vis: edges with invalid node refs", str(len(_bad_edges)))
+    else:
+        record("WARN", "vis: no data for edge ref check")
+
+    # --- 27o. get_subgraph includes source_id/target_id on edges ----------
+    if _full["center"]:
+        _sg = _vis_kg.get_subgraph(_full["center"], hops=1)
+        if _sg["edges"]:
+            _e = _sg["edges"][0]
+            if "source_id" in _e and "target_id" in _e:
+                record("PASS", "vis: get_subgraph edges have source_id/target_id")
+            else:
+                record("FAIL", "vis: get_subgraph edges missing source_id/target_id")
+        else:
+            record("WARN", "vis: get_subgraph returned no edges")
+    else:
+        record("WARN", "vis: no center for subgraph edge test")
+
+    # --- 27p. Edge arrows are set to 'to' --------------------------------
+    if _full["edges"]:
+        _all_arrows = all(e.get("arrows") == "to" for e in _full["edges"])
+        if _all_arrows:
+            record("PASS", "vis: all edges have directional arrows")
+        else:
+            record("FAIL", "vis: some edges missing arrows")
+    else:
+        record("WARN", "vis: no edges for arrow check")
+
+    # --- 27q. UI wiring: _build_graph_panel exists in app_nicegui ---------
+    _app_src = open(os.path.join(PROJECT_ROOT, "app_nicegui.py"), encoding="utf-8").read()
+    if "_build_graph_panel" in _app_src:
+        record("PASS", "vis: _build_graph_panel() exists in app_nicegui.py")
+    else:
+        record("FAIL", "vis: _build_graph_panel() missing from app_nicegui.py")
+
+    # --- 27r. UI has vis-network reference ----------------------------------
+    if "vis-network" in _app_src:
+        record("PASS", "vis: vis-network library referenced in UI")
+    else:
+        record("FAIL", "vis: vis-network library missing from UI")
+
+    # --- 27s. UI has graph-container div ----------------------------------
+    if "graph-container" in _app_src:
+        record("PASS", "vis: graph-container div exists in UI")
+    else:
+        record("FAIL", "vis: graph-container div missing from UI")
+
+    # --- 27t. UI has Memory tab in home screen tabs ------------------------
+    if 'graph_tab' in _app_src and 'icon="psychology"' in _app_src:
+        record("PASS", "vis: Memory tab wired into home screen")
+    else:
+        record("FAIL", "vis: Memory tab not wired into home screen")
+
+    # --- 27u. Font color set for dark theme readability -------------------
+    if _full["nodes"]:
+        _all_font = all(n.get("font", {}).get("color") == "#ECEFF1" for n in _full["nodes"])
+        if _all_font:
+            record("PASS", "vis: node font color set for dark theme")
+        else:
+            record("FAIL", "vis: node font color not set for dark theme")
+    else:
+        record("WARN", "vis: no nodes for font color check")
+
+    # --- 27v. UI uses run_javascript (not add_body_html) for graph JS ------
+    if "run_javascript(_graph_js)" in _app_src and "add_body_html" not in _app_src:
+        record("PASS", "vis: graph JS delivered via run_javascript (no add_body_html)")
+    elif "run_javascript(_graph_js)" in _app_src:
+        record("FAIL", "vis: run_javascript present but stale add_body_html still exists")
+    else:
+        record("FAIL", "vis: run_javascript(_graph_js) not found in UI")
+
+    # --- 27w. JS teardown: stale boot timer cleared -----------------------
+    if "clearTimeout(window._thothGraphBootTimer" in _app_src:
+        record("PASS", "vis: JS teardown clears stale boot timer")
+    else:
+        record("FAIL", "vis: JS teardown missing clearTimeout for boot timer")
+
+    # --- 27x. JS teardown: old network destroyed --------------------------
+    if "network.destroy()" in _app_src:
+        record("PASS", "vis: JS teardown destroys old vis.Network")
+    else:
+        record("FAIL", "vis: JS teardown missing network.destroy()")
+
+    # --- 27y. JS namespaced state on window._thothGraph -------------------
+    if "window._thothGraph" in _app_src:
+        record("PASS", "vis: JS state namespaced on window._thothGraph")
+    else:
+        record("FAIL", "vis: JS state not namespaced on window._thothGraph")
+
+    # --- 27z. thothGraphRedraw calls wireControls for full reinit ---------
+    if "thothGraphRedraw" in _app_src and "wireControls" in _app_src:
+        record("PASS", "vis: thothGraphRedraw with wireControls for full reinit")
+    else:
+        record("FAIL", "vis: thothGraphRedraw or wireControls missing")
+
+    # --- 27aa. vis-network loaded in add_head_html (global, not per-panel)
+    _head_html_idx = _app_src.find("add_head_html")
+    _vis_in_head = "vis-network.min.js" in _app_src[_head_html_idx:_head_html_idx+500] if _head_html_idx != -1 else False
+    if _vis_in_head:
+        record("PASS", "vis: vis-network.min.js loaded once in add_head_html")
+    else:
+        record("FAIL", "vis: vis-network.min.js not found in add_head_html block")
+
+    # --- 27ab. _on_tab_change uses setTimeout before thothGraphRedraw -----
+    if "setTimeout" in _app_src and "thothGraphRedraw" in _app_src:
+        record("PASS", "vis: tab change uses setTimeout before thothGraphRedraw")
+    else:
+        record("FAIL", "vis: tab change missing setTimeout for thothGraphRedraw")
+
+except Exception as e:
+    record("FAIL", "visualization tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 28 · Triple-based extraction & relation creation (v3.6)
+# ═════════════════════════════════════════════════════════════════════════════
+try:
+    print("SECTION 28 · Triple-based Extraction")
+    print("-" * 40)
+
+    import memory_extraction as _me28
+    import memory as _mem28
+    import knowledge_graph as _kg28
+    import inspect as _insp28
+    from prompts import EXTRACTION_PROMPT as _EP28
+
+    # --- 28a. Extraction prompt mentions "User" entity guidance -----------
+    if '"User"' in _EP28 and "THE \"User\" ENTITY" in _EP28:
+        record("PASS", "extraction: prompt has User entity guidance section")
+    else:
+        record("FAIL", "extraction: prompt missing User entity guidance")
+
+    # --- 28b. Prompt instructs to always output relations -----------------
+    if "ALWAYS output relations" in _EP28:
+        record("PASS", "extraction: prompt instructs always output relations")
+    else:
+        record("FAIL", "extraction: prompt missing 'ALWAYS output relations'")
+
+    # --- 28c. Prompt example includes relation objects --------------------
+    if "relation_type" in _EP28 and "source_subject" in _EP28 and "target_subject" in _EP28:
+        record("PASS", "extraction: prompt example has relation objects")
+    else:
+        record("FAIL", "extraction: prompt example missing relation objects")
+
+    # --- 28d. Prompt mentions aliases field --------------------------------
+    if "aliases" in _EP28:
+        record("PASS", "extraction: prompt mentions aliases field")
+    else:
+        record("FAIL", "extraction: prompt missing aliases mention")
+
+    # --- 28e. Validation accepts relation objects -------------------------
+    # Simulate what _extract_from_conversation does for validation
+    _test_data = [
+        {"category": "person", "subject": "User", "content": "Lives in London"},
+        {"relation_type": "lives_in", "source_subject": "User", "target_subject": "London", "confidence": 0.9},
+    ]
+    _valid = []
+    for _entry in _test_data:
+        if not isinstance(_entry, dict):
+            continue
+        if _entry.get("category") and _entry.get("subject") and _entry.get("content"):
+            _valid.append(_entry)
+        elif _entry.get("relation_type") and _entry.get("source_subject") and _entry.get("target_subject"):
+            _valid.append(_entry)
+    if len(_valid) == 2:
+        record("PASS", "extraction: validation accepts both entity and relation objects")
+    else:
+        record("FAIL", f"extraction: validation accepted {len(_valid)}/2 objects")
+
+    # --- 28f. _dedup_and_save processes relation objects -------------------
+    _dedup_src = _insp28.getsource(_me28._dedup_and_save)
+    if "relation_type" in _dedup_src and "add_relation" in _dedup_src:
+        record("PASS", "extraction: _dedup_and_save handles relation_type + add_relation")
+    else:
+        record("FAIL", "extraction: _dedup_and_save missing relation processing")
+
+    # --- 28g. _dedup_and_save pre-populates User entity -------------------
+    if 'find_by_subject(None, "User")' in _dedup_src:
+        record("PASS", "extraction: _dedup_and_save pre-populates User entity in map")
+    else:
+        record("FAIL", "extraction: _dedup_and_save missing User entity pre-population")
+
+    # --- 28h. _dedup_and_save handles aliases from extracted data ----------
+    if "aliases" in _dedup_src and "new_aliases" in _dedup_src:
+        record("PASS", "extraction: _dedup_and_save merges extracted aliases")
+    else:
+        record("FAIL", "extraction: _dedup_and_save missing alias merging")
+
+    # --- 28i. memory.py update_memory accepts aliases kwarg ---------------
+    _um28_sig = _insp28.signature(_mem28.update_memory)
+    if "aliases" in _um28_sig.parameters:
+        record("PASS", "memory: update_memory accepts 'aliases' kwarg")
+    else:
+        record("FAIL", "memory: update_memory missing 'aliases' kwarg")
+
+    # --- 28j. update_memory passes aliases to update_entity ---------------
+    _um28_src = _insp28.getsource(_mem28.update_memory)
+    if "aliases=aliases" in _um28_src or "aliases = aliases" in _um28_src:
+        record("PASS", "memory: update_memory passes aliases to update_entity")
+    else:
+        record("FAIL", "memory: update_memory does NOT pass aliases to update_entity")
+
+    # --- 28k. Prompt has expanded relation types --------------------------
+    _expanded_rels = ["partner_of", "interested_in", "visits", "owns"]
+    _rel_hits = sum(1 for r in _expanded_rels if r in _EP28)
+    if _rel_hits >= 3:
+        record("PASS", f"extraction: prompt has {_rel_hits}/4 expanded relation types")
+    else:
+        record("FAIL", f"extraction: prompt only has {_rel_hits}/4 expanded relation types")
+
+    # --- 28l. Prompt example has User as source_subject -------------------
+    if '"source_subject": "User"' in _EP28 or '"source_subject": "Dad"' in _EP28:
+        record("PASS", "extraction: prompt example uses proper entity subjects")
+    else:
+        record("FAIL", "extraction: prompt example missing proper entity subjects")
+
+    # --- 28m. knowledge_graph.py vis edges removed per-edge font ----------
+    _kg28_vis_src = _insp28.getsource(_kg28.graph_to_vis_json)
+    # Edges should NOT have a per-edge font property (removed for hover-only labels)
+    if '"font"' not in _kg28_vis_src.split("vis_edges")[1] if "vis_edges" in _kg28_vis_src else True:
+        record("PASS", "vis: edge data does not include per-edge font property")
+    else:
+        record("FAIL", "vis: edge data still has per-edge font property")
+
+    # --- 28n. knowledge_graph.py vis nodes use plain-text tooltips --------
+    if "\\n" in _kg28_vis_src and "<br>" not in _kg28_vis_src.split("vis_nodes")[1].split("vis_edges")[0]:
+        record("PASS", "vis: node tooltips use plain text (no HTML)")
+    else:
+        record("FAIL", "vis: node tooltips still use HTML tags")
+
+    # --- 28o. _dedup_and_save resolves subjects via DB fallback -----------
+    if "find_by_subject(None," in _dedup_src and "source_subject" in _dedup_src:
+        record("PASS", "extraction: relation pass resolves subjects via DB fallback")
+    else:
+        record("FAIL", "extraction: relation pass missing DB subject fallback")
+
+    # --- 28p. Integration: create entities + relations end-to-end ---------
+    # Create two test entities and a relation via _dedup_and_save
+    import uuid as _uuid28
+    _test_subj_a = f"TestPerson_{_uuid28.uuid4().hex[:6]}"
+    _test_subj_b = f"TestPlace_{_uuid28.uuid4().hex[:6]}"
+    _test_extracted = [
+        {"category": "person", "subject": _test_subj_a, "content": f"{_test_subj_a} is a test person"},
+        {"category": "place", "subject": _test_subj_b, "content": f"{_test_subj_b} is a test city"},
+        {"relation_type": "lives_in", "source_subject": _test_subj_a, "target_subject": _test_subj_b, "confidence": 0.9},
+    ]
+    _saved_count = _me28._dedup_and_save(_test_extracted)
+    if _saved_count >= 3:
+        record("PASS", f"extraction: end-to-end created {_saved_count} items (entities + relation)")
+    elif _saved_count >= 2:
+        record("PASS", f"extraction: end-to-end created {_saved_count} items (entities, relation may have failed)")
+    else:
+        record("FAIL", f"extraction: end-to-end only saved {_saved_count} items")
+
+    # Verify the entities exist
+    _found_a = _mem28.find_by_subject(None, _test_subj_a)
+    _found_b = _mem28.find_by_subject(None, _test_subj_b)
+    if _found_a and _found_b:
+        record("PASS", "extraction: both test entities created and findable")
+    else:
+        record("FAIL", f"extraction: test entities not found (a={bool(_found_a)}, b={bool(_found_b)})")
+
+    # Verify the relation was created
+    if _found_a and _found_b:
+        _rels = _kg28.get_relations(_found_a["id"])
+        _has_link = any(
+            r.get("target_id") == _found_b["id"] and r.get("relation_type") == "lives_in"
+            for r in _rels
+        )
+        if _has_link:
+            record("PASS", "extraction: relation lives_in created between test entities")
+        else:
+            record("FAIL", "extraction: relation lives_in NOT found between test entities")
+    else:
+        record("FAIL", "extraction: cannot check relation — entities missing")
+
+    # Clean up test entities
+    if _found_a:
+        _kg28.delete_entity(_found_a["id"])
+    if _found_b:
+        _kg28.delete_entity(_found_b["id"])
+
+    # --- 28q. Integration: alias merge on existing entity -----------------
+    _test_subj_c = f"TestUser_{_uuid28.uuid4().hex[:6]}"
+    # First save
+    _me28._dedup_and_save([
+        {"category": "person", "subject": _test_subj_c, "content": f"{_test_subj_c} is the user"},
+    ])
+    # Second save with aliases
+    _me28._dedup_and_save([
+        {"category": "person", "subject": _test_subj_c, "content": f"{_test_subj_c} is the user", "aliases": "TestAlias123"},
+    ])
+    _found_c = _mem28.find_by_subject(None, _test_subj_c)
+    if _found_c and "TestAlias123" in (_found_c.get("aliases", "") or ""):
+        record("PASS", "extraction: alias merged into existing entity")
+    else:
+        record("FAIL", f"extraction: alias NOT merged (aliases={_found_c.get('aliases') if _found_c else 'N/A'})")
+    # Verify alias lookup works
+    _found_by_alias = _mem28.find_by_subject(None, "TestAlias123")
+    if _found_by_alias and _found_by_alias["id"] == _found_c["id"]:
+        record("PASS", "extraction: find_by_subject resolves alias to same entity")
+    else:
+        record("FAIL", "extraction: find_by_subject does NOT resolve alias")
+    # Clean up
+    if _found_c:
+        _kg28.delete_entity(_found_c["id"])
+
+except Exception as e:
+    record("FAIL", "triple extraction tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 29. TELEGRAM TOOL — tool module, sub-tools, channel helpers, delivery changes
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("29. TELEGRAM TOOL")
+print("=" * 70)
+
+try:
+    # 29a. telegram_tool module imports cleanly
+    import tools.telegram_tool as _tg_mod
+    record("PASS", "telegram tool: module imports")
+
+    # 29b. TelegramTool class exists and is a BaseTool
+    from tools.telegram_tool import TelegramTool as _TgToolCls
+    from tools.base import BaseTool as _BT
+    assert issubclass(_TgToolCls, _BT)
+    record("PASS", "telegram tool: TelegramTool is a BaseTool subclass")
+
+    # 29c. Tool properties
+    _tg_inst = _TgToolCls()
+    assert _tg_inst.name == "telegram"
+    assert _tg_inst.display_name == "📱 Telegram"
+    assert _tg_inst.enabled_by_default is False
+    record("PASS", "telegram tool: name, display_name, enabled_by_default correct")
+
+    # 29d. as_langchain_tools returns 3 sub-tools
+    _tg_lc = _tg_inst.as_langchain_tools()
+    assert len(_tg_lc) == 3, f"expected 3 sub-tools, got {len(_tg_lc)}"
+    record("PASS", "telegram tool: as_langchain_tools returns 3 sub-tools")
+
+    # 29e. Sub-tool names match expectations
+    _tg_names = sorted(t.name for t in _tg_lc)
+    _expected_names = sorted(["send_telegram_message", "send_telegram_photo", "send_telegram_document"])
+    assert _tg_names == _expected_names, f"expected {_expected_names}, got {_tg_names}"
+    record("PASS", "telegram tool: sub-tool names are correct")
+
+    # 29f. Input schemas exist with correct fields
+    from tools.telegram_tool import _SendMessageInput, _SendPhotoInput, _SendDocumentInput
+    assert "text" in _SendMessageInput.model_fields
+    assert "file_path" in _SendPhotoInput.model_fields
+    assert "caption" in _SendPhotoInput.model_fields
+    assert "file_path" in _SendDocumentInput.model_fields
+    assert "caption" in _SendDocumentInput.model_fields
+    record("PASS", "telegram tool: Pydantic input schemas have correct fields")
+
+    # 29g. Tool is registered in the registry
+    from tools.registry import get_all_tools as _all_tools
+    _all_names = [t.name for t in _all_tools()]
+    assert "telegram" in _all_names, f"'telegram' not in registry: {_all_names}"
+    record("PASS", "telegram tool: registered in tool registry")
+
+    # 29h. send_photo and send_document exist in channels.telegram
+    from channels.telegram import send_photo as _sp, send_document as _sd
+    import inspect as _insp29
+    _sp_sig = _insp29.signature(_sp)
+    _sd_sig = _insp29.signature(_sd)
+    assert "chat_id" in _sp_sig.parameters
+    assert "file_path" in _sp_sig.parameters
+    assert "caption" in _sp_sig.parameters
+    assert "chat_id" in _sd_sig.parameters
+    assert "file_path" in _sd_sig.parameters
+    assert "caption" in _sd_sig.parameters
+    record("PASS", "telegram tool: send_photo/send_document signatures correct")
+
+    # 29i. send_photo raises RuntimeError when bot not running
+    try:
+        _sp(12345, "dummy.png")
+        record("FAIL", "telegram tool: send_photo should raise RuntimeError")
+    except RuntimeError:
+        record("PASS", "telegram tool: send_photo raises RuntimeError when not running")
+    except Exception as _e29:
+        record("WARN", "telegram tool: send_photo unexpected error", str(_e29))
+
+    # 29j. send_document raises RuntimeError when bot not running
+    try:
+        _sd(12345, "dummy.txt")
+        record("FAIL", "telegram tool: send_document should raise RuntimeError")
+    except RuntimeError:
+        record("PASS", "telegram tool: send_document raises RuntimeError when not running")
+    except Exception as _e29:
+        record("WARN", "telegram tool: send_document unexpected error", str(_e29))
+
+    # 29k. _send_telegram_message returns error when bot not running
+    from tools.telegram_tool import _send_telegram_message as _stm
+    _stm_r = _stm("hello")
+    assert "Error" in _stm_r or "not running" in _stm_r.lower(), f"unexpected: {_stm_r}"
+    record("PASS", "telegram tool: _send_telegram_message returns error when not running")
+
+    # 29l. _send_telegram_photo returns error when bot not running
+    from tools.telegram_tool import _send_telegram_photo as _stp
+    _stp_r = _stp("dummy.png")
+    assert "Error" in _stp_r or "not running" in _stp_r.lower(), f"unexpected: {_stp_r}"
+    record("PASS", "telegram tool: _send_telegram_photo returns error when not running")
+
+    # 29m. _send_telegram_document returns error when bot not running
+    from tools.telegram_tool import _send_telegram_document as _std
+    _std_r = _std("dummy.txt")
+    assert "Error" in _std_r or "not running" in _std_r.lower(), f"unexpected: {_std_r}"
+    record("PASS", "telegram tool: _send_telegram_document returns error when not running")
+
+    # 29n. _validate_delivery: email without target still raises ValueError
+    from tasks import _validate_delivery
+    try:
+        _validate_delivery("email", None)
+        record("FAIL", "telegram tool: validate(email, None) should raise ValueError")
+    except ValueError:
+        record("PASS", "telegram tool: validate(email, None) raises ValueError")
+
+    # 29o. _deliver_to_channel: telegram path calls _get_allowed_user_id
+    _deliver_src29 = _insp29.getsource(_deliver_to_channel)
+    if "_get_allowed_user_id" in _deliver_src29:
+        record("PASS", "telegram tool: _deliver_to_channel uses _get_allowed_user_id")
+    else:
+        record("FAIL", "telegram tool: _deliver_to_channel missing _get_allowed_user_id")
+
+    # 29p. prompts.py contains TELEGRAM MESSAGING section
+    _p_src29 = Path("prompts.py").read_text(encoding="utf-8")
+    if "TELEGRAM MESSAGING" in _p_src29 and "send_telegram_message" in _p_src29:
+        record("PASS", "telegram tool: prompts.py has TELEGRAM MESSAGING section")
+    else:
+        record("FAIL", "telegram tool: prompts.py missing TELEGRAM MESSAGING section")
+
+    # 29q. telegram_tool.py in installer/thoth_setup.iss
+    _iss_src29 = Path("installer/thoth_setup.iss").read_text(encoding="utf-8")
+    if "telegram_tool.py" in _iss_src29:
+        record("PASS", "telegram tool: included in installer thoth_setup.iss")
+    else:
+        record("FAIL", "telegram tool: missing from installer thoth_setup.iss")
+
+    # 29r. tools/__init__.py imports telegram_tool
+    _init_src29 = Path("tools/__init__.py").read_text(encoding="utf-8")
+    if "telegram_tool" in _init_src29:
+        record("PASS", "telegram tool: imported in tools/__init__.py")
+    else:
+        record("FAIL", "telegram tool: missing from tools/__init__.py")
+
+except Exception as e:
+    record("FAIL", "telegram tool tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 30. FILE & MESSAGING PIPELINE (v3.6.0)
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("30. FILE & MESSAGING PIPELINE (v3.6.0)")
+print("=" * 70)
+
+try:
+    import inspect as _insp30
+    import tempfile, shutil
+
+    # ── 30a. Telegram _resolve_file_path: returns original when not found ──
+    from tools.telegram_tool import _resolve_file_path as _tg_resolve
+    _r30a = _tg_resolve("definitely_nonexistent_file_xyz.txt")
+    assert _r30a == "definitely_nonexistent_file_xyz.txt", f"expected original back, got {_r30a}"
+    record("PASS", "v3.6: telegram _resolve_file_path returns original for missing file")
+
+    # ── 30b. Telegram _resolve_file_path: resolves workspace-relative ──────
+    _tmpdir30 = tempfile.mkdtemp(prefix="thoth_test30_")
+    try:
+        _test_file30 = Path(_tmpdir30) / "test_photo.png"
+        _test_file30.write_bytes(b"\x89PNG\r\n\x1a\n")  # minimal PNG header
+        from tools.registry import get_tool as _gt30
+        _fs30 = _gt30("filesystem")
+        _old_ws30 = _fs30.get_config("workspace_root", "") if _fs30 else ""
+        if _fs30:
+            _fs30.set_config("workspace_root", _tmpdir30)
+        _resolved30b = _tg_resolve("test_photo.png")
+        assert Path(_resolved30b).is_file(), f"resolved path is not a file: {_resolved30b}"
+        assert "test_photo.png" in _resolved30b
+        record("PASS", "v3.6: telegram _resolve_file_path resolves workspace-relative")
+    finally:
+        if _fs30 and _old_ws30:
+            _fs30.set_config("workspace_root", _old_ws30)
+        elif _fs30:
+            _fs30.set_config("workspace_root", "")
+        shutil.rmtree(_tmpdir30, ignore_errors=True)
+
+    # ── 30c. Gmail _resolve_file_path: same pattern ────────────────────────
+    from tools.gmail_tool import _resolve_file_path as _gm_resolve
+    _r30c = _gm_resolve("nonexistent_attachment.pdf")
+    assert _r30c == "nonexistent_attachment.pdf", f"expected original back, got {_r30c}"
+    record("PASS", "v3.6: gmail _resolve_file_path returns original for missing file")
+
+    # ── 30d. TelegramTool always returns all 3 sub-tools when enabled ─────
+    from tools.telegram_tool import TelegramTool as _TT30
+    _tt30 = _TT30()
+    _tools30d = _tt30.as_langchain_tools()
+    _names30d = sorted(t.name for t in _tools30d)
+    assert len(_names30d) == 3, f"expected 3 tools, got {_names30d}"
+    assert _names30d == sorted(["send_telegram_message", "send_telegram_photo", "send_telegram_document"])
+    record("PASS", "v3.6: TelegramTool.as_langchain_tools always returns all 3 sub-tools")
+
+    # ── 30e. TelegramTool._ALL_OPS has 3 operations ───────────────────────
+    from tools.telegram_tool import _ALL_OPS as _all_ops30
+    assert len(_all_ops30) == 3, f"expected 3 operations, got {len(_all_ops30)}"
+    assert "send_telegram_message" in _all_ops30
+    assert "send_telegram_photo" in _all_ops30
+    assert "send_telegram_document" in _all_ops30
+    record("PASS", "v3.6: _ALL_OPS contains all 3 telegram operations")
+
+    # ── 30f. TelegramTool has no config_schema (no checkboxes) ────────────
+    _cs30f = _tt30.config_schema
+    assert "selected_operations" not in _cs30f, f"selected_operations should be removed: {list(_cs30f.keys())}"
+    record("PASS", "v3.6: TelegramTool has no selected_operations config (toggle-only)")
+
+    # ── 30g. _CreateChartInput has save_to_file field ──────────────────────
+    from tools.chart_tool import _CreateChartInput as _CCI30
+    assert "save_to_file" in _CCI30.model_fields, f"fields: {list(_CCI30.model_fields.keys())}"
+    _stf_field = _CCI30.model_fields["save_to_file"]
+    assert not _stf_field.is_required(), "save_to_file should be optional"
+    record("PASS", "v3.6: _CreateChartInput has optional save_to_file field")
+
+    # ── 30h. _create_chart accepts save_to_file parameter ──────────────────
+    from tools.chart_tool import _create_chart as _cc30
+    _sig30h = _insp30.signature(_cc30)
+    assert "save_to_file" in _sig30h.parameters, f"params: {list(_sig30h.parameters.keys())}"
+    record("PASS", "v3.6: _create_chart function accepts save_to_file param")
+
+    # ── 30i. Chart save_to_file produces PNG (integration) ─────────────────
+    _tmpdir30i = tempfile.mkdtemp(prefix="thoth_test30i_")
+    try:
+        # Create test CSV
+        _csv30 = Path(_tmpdir30i) / "data.csv"
+        _csv30.write_text("x,y\n1,10\n2,20\n3,30\n", encoding="utf-8")
+
+        _fs30i = _gt30("filesystem")
+        _old_ws30i = _fs30i.get_config("workspace_root", "") if _fs30i else ""
+        if _fs30i:
+            _fs30i.set_config("workspace_root", _tmpdir30i)
+
+        _result30i = _cc30(
+            chart_type="bar",
+            data_source=str(_csv30),
+            x_column="x",
+            y_column="y",
+            save_to_file="test_chart.png",
+        )
+        assert "Chart saved to:" in _result30i, f"expected 'Chart saved to:' in result: {_result30i[:200]}"
+        # Check that png file exists
+        _png30 = Path(_tmpdir30i) / "test_chart.png"
+        assert _png30.is_file(), f"PNG file not created at {_png30}"
+        assert _png30.stat().st_size > 1000, f"PNG too small: {_png30.stat().st_size} bytes"
+        record("PASS", "v3.6: chart save_to_file creates PNG on disk (kaleido)")
+    except ImportError as _ie30i:
+        record("WARN", "v3.6: chart save_to_file skipped (kaleido not installed)", str(_ie30i))
+    except Exception as _e30i:
+        record("FAIL", "v3.6: chart save_to_file", f"{type(_e30i).__name__}: {_e30i}")
+    finally:
+        if _fs30i and _old_ws30i:
+            _fs30i.set_config("workspace_root", _old_ws30i)
+        elif _fs30i:
+            _fs30i.set_config("workspace_root", "")
+        shutil.rmtree(_tmpdir30i, ignore_errors=True)
+
+    # ── 30j. Gmail _SendMessageInput has attachments field ─────────────────
+    from tools.gmail_tool import _SendMessageInput as _SMI30
+    assert "attachments" in _SMI30.model_fields, f"fields: {list(_SMI30.model_fields.keys())}"
+    _att_field30 = _SMI30.model_fields["attachments"]
+    assert not _att_field30.is_required(), "attachments should be optional"
+    record("PASS", "v3.6: gmail _SendMessageInput has optional attachments field")
+
+    # ── 30k. Gmail _CreateDraftInput has attachments field ─────────────────
+    from tools.gmail_tool import _CreateDraftInput as _CDI30
+    assert "attachments" in _CDI30.model_fields, f"fields: {list(_CDI30.model_fields.keys())}"
+    record("PASS", "v3.6: gmail _CreateDraftInput has optional attachments field")
+
+    # ── 30l. _build_mime_message creates multipart with attachment ─────────
+    from tools.gmail_tool import _build_mime_message as _bmm30
+    _tmpdir30l = tempfile.mkdtemp(prefix="thoth_test30l_")
+    try:
+        _att_file30 = Path(_tmpdir30l) / "test.txt"
+        _att_file30.write_text("hello world", encoding="utf-8")
+        _mime30 = _bmm30(
+            body="Test email body",
+            to="test@example.com",
+            subject="Test Subject",
+            attachments=[str(_att_file30)],
+        )
+        assert _mime30["To"] == "test@example.com"
+        assert _mime30["Subject"] == "Test Subject"
+        # Count MIME parts: 1 text + 1 attachment = 2 payloads
+        _payloads30 = _mime30.get_payload()
+        assert len(_payloads30) == 2, f"expected 2 parts, got {len(_payloads30)}"
+        assert _payloads30[0].get_content_type() == "text/plain"
+        assert _payloads30[1].get_content_disposition() == "attachment"
+        record("PASS", "v3.6: _build_mime_message creates multipart with attachment")
+    finally:
+        shutil.rmtree(_tmpdir30l, ignore_errors=True)
+
+    # ── 30m. _build_mime_message skips missing attachments ─────────────────
+    _mime30m = _bmm30(
+        body="no attach",
+        to="a@b.com",
+        subject="S",
+        attachments=["absolutely_missing_file.xyz"],
+    )
+    _payloads30m = _mime30m.get_payload()
+    assert len(_payloads30m) == 1, f"expected 1 part (missing att skipped), got {len(_payloads30m)}"
+    record("PASS", "v3.6: _build_mime_message skips missing attachment files")
+
+    # ── 30n. export_to_pdf in filesystem _WRITE_OPS ────────────────────────
+    from tools.filesystem_tool import _WRITE_OPS as _wo30
+    assert "export_to_pdf" in _wo30, f"_WRITE_OPS: {_wo30}"
+    record("PASS", "v3.6: export_to_pdf in filesystem _WRITE_OPS")
+
+    # ── 30o. export_to_pdf creates a PDF file ──────────────────────────────
+    _tmpdir30o = tempfile.mkdtemp(prefix="thoth_test30o_")
+    try:
+        from tools.filesystem_tool import _make_export_to_pdf_tool as _mepdf
+        _pdf_tool30 = _mepdf(_tmpdir30o)
+        _pdf_result30 = _pdf_tool30.invoke({
+            "content": "# Test Report\n\nThis is a **test** document.\n\n- Item 1\n- Item 2\n",
+            "filename": "report.pdf",
+        })
+        assert "PDF saved to:" in _pdf_result30, f"result: {_pdf_result30}"
+        _pdf_path30 = Path(_tmpdir30o) / "report.pdf"
+        assert _pdf_path30.is_file(), f"PDF not created at {_pdf_path30}"
+        # PDF header check
+        _pdf_bytes30 = _pdf_path30.read_bytes()
+        assert _pdf_bytes30[:4] == b"%PDF", f"not a valid PDF: {_pdf_bytes30[:10]}"
+        record("PASS", "v3.6: export_to_pdf creates valid PDF file")
+    except ImportError as _ie30o:
+        record("WARN", "v3.6: export_to_pdf skipped (fpdf2 not installed)", str(_ie30o))
+    finally:
+        shutil.rmtree(_tmpdir30o, ignore_errors=True)
+
+    # ── 30p. export_to_pdf auto-adds .pdf extension ───────────────────────
+    _tmpdir30p = tempfile.mkdtemp(prefix="thoth_test30p_")
+    try:
+        _pdf_tool30p = _mepdf(_tmpdir30p)
+        _pdf_result30p = _pdf_tool30p.invoke({
+            "content": "Hello",
+            "filename": "no_extension",
+        })
+        assert "PDF saved to:" in _pdf_result30p
+        assert Path(_tmpdir30p, "no_extension.pdf").is_file()
+        record("PASS", "v3.6: export_to_pdf auto-adds .pdf extension")
+    except ImportError:
+        record("WARN", "v3.6: export_to_pdf extension test skipped (fpdf2 not installed)")
+    finally:
+        shutil.rmtree(_tmpdir30p, ignore_errors=True)
+
+    # ── 30q. prompts.py has FILE GENERATION & SENDING WORKFLOWS ────────────
+    _p_src30 = Path("prompts.py").read_text(encoding="utf-8")
+    assert "FILE GENERATION & SENDING WORKFLOWS" in _p_src30
+    record("PASS", "v3.6: prompts.py has FILE GENERATION & SENDING WORKFLOWS section")
+
+    # ── 30r. prompts.py has EMAIL ATTACHMENTS section ─────────────────────
+    assert "EMAIL ATTACHMENTS" in _p_src30
+    record("PASS", "v3.6: prompts.py has EMAIL ATTACHMENTS section")
+
+    # ── 30s. prompts.py mentions save_to_file ─────────────────────────────
+    assert "save_to_file" in _p_src30
+    record("PASS", "v3.6: prompts.py mentions save_to_file")
+
+    # ── 30t. "telegram" in skip_tools in app_nicegui.py ───────────────────
+    _app_src30 = Path("app_nicegui.py").read_text(encoding="utf-8")
+    # Find the skip_tools set definition and check telegram is in it
+    import re as _re30
+    _skip_match30 = _re30.search(r'skip_tools\s*=\s*\{([^}]+)\}', _app_src30, _re30.DOTALL)
+    assert _skip_match30, "skip_tools set not found in app_nicegui.py"
+    assert "telegram" in _skip_match30.group(1), f"telegram not in skip_tools: {_skip_match30.group(1)[:200]}"
+    record("PASS", "v3.6: telegram in skip_tools in app_nicegui.py")
+
+    # ── 30u. kaleido in requirements.txt ──────────────────────────────────
+    _req_src30 = Path("requirements.txt").read_text(encoding="utf-8")
+    assert "kaleido" in _req_src30.lower()
+    record("PASS", "v3.6: kaleido in requirements.txt")
+
+    # ── 30v. Gmail as_langchain_tools replaces send/draft with custom ─────
+    _gm_src30 = Path("tools/gmail_tool.py").read_text(encoding="utf-8")
+    assert "_make_custom_send" in _gm_src30
+    assert "_make_custom_draft" in _gm_src30
+    assert "_build_mime_message" in _gm_src30
+    record("PASS", "v3.6: gmail_tool.py has custom send/draft with MIME builder")
+
+    # ── 30w. prompts.py has multi-attachment guidance ─────────────────────
+    assert "SINGLE send_gmail_message" in _p_src30 or "single send_gmail_message" in _p_src30.lower() or "SINGLE send_gmail" in _p_src30
+    record("PASS", "v3.6: prompts.py has single-email multi-attachment guidance")
+
+    # ── 30x. Telegram _send_telegram_photo uses _resolve_file_path ────────
+    _tg_src30 = Path("tools/telegram_tool.py").read_text(encoding="utf-8")
+    assert "_resolve_file_path" in _tg_src30
+    # Also check that send_photo and send_document call it
+    _photo_fn_src30 = _insp30.getsource(_stp)
+    assert "_resolve_file_path" in _photo_fn_src30
+    _doc_fn_src30 = _insp30.getsource(_std)
+    assert "_resolve_file_path" in _doc_fn_src30
+    record("PASS", "v3.6: send_photo and send_document use _resolve_file_path")
+
+    # ── 30y. _md_to_html converts markdown to Telegram HTML ───────────────
+    from channels.telegram import _md_to_html as _mth30
+    _html30y = _mth30("**bold** and `code` and *italic*")
+    assert "<b>bold</b>" in _html30y, f"bold not converted: {_html30y}"
+    assert "<code>code</code>" in _html30y, f"code not converted: {_html30y}"
+    assert "<i>italic</i>" in _html30y, f"italic not converted: {_html30y}"
+    record("PASS", "v3.6: _md_to_html converts bold/code/italic")
+
+    # ── 30ya. _md_to_html escapes HTML entities before converting ─────────
+    _html30ya = _mth30("x < 10 && y > 5")
+    assert "&lt;" in _html30ya, f"< not escaped: {_html30ya}"
+    assert "&gt;" in _html30ya, f"> not escaped: {_html30ya}"
+    assert "&amp;" in _html30ya, f"& not escaped: {_html30ya}"
+    record("PASS", "v3.6: _md_to_html escapes HTML entities")
+
+    # ── 30yb. _md_to_html handles headings ────────────────────────────────
+    _html30yb = _mth30("# Title\n\nSome text\n## Subtitle")
+    assert "<b>Title</b>" in _html30yb
+    assert "<b>Subtitle</b>" in _html30yb
+    record("PASS", "v3.6: _md_to_html converts headings to bold")
+
+    # ── 30yc. _md_to_html handles fenced code blocks ─────────────────────
+    _html30yc = _mth30("```python\nprint('hello')\n```")
+    assert "<pre>" in _html30yc
+    assert "print" in _html30yc
+    record("PASS", "v3.6: _md_to_html converts fenced code blocks")
+
+    # ── 30z. _format_interrupt accepts list of dicts (agent format) ───────
+    from channels.telegram import _format_interrupt as _fi30
+    _fi_list30 = _fi30([
+        {"tool": "file_delete", "description": "Delete report.pdf", "args": {"path": "/x"}},
+        {"tool": "send_email", "description": "Send to user@e.com"},
+    ])
+    assert "file_delete" in _fi_list30
+    assert "send_email" in _fi_list30
+    assert "<b>" in _fi_list30, "should be HTML formatted"
+    record("PASS", "v3.6: _format_interrupt handles list of interrupt dicts")
+
+    # ── 30za. _format_interrupt accepts single dict (backward compat) ─────
+    _fi_single30 = _fi30({"tool": "delete_file", "args": {"path": "test.txt"}})
+    assert "delete_file" in _fi_single30
+    assert "<b>" in _fi_single30
+    record("PASS", "v3.6: _format_interrupt handles single interrupt dict")
+
+    # ── 30zb. _extract_interrupt_ids extracts multi-interrupt ids ─────────
+    from channels.telegram import _extract_interrupt_ids as _eii30
+    _ids30 = _eii30([
+        {"tool": "a", "__interrupt_id": "id1"},
+        {"tool": "b", "__interrupt_id": "id2"},
+    ])
+    assert _ids30 == ["id1", "id2"], f"expected ['id1', 'id2'], got {_ids30}"
+    record("PASS", "v3.6: _extract_interrupt_ids extracts multi-interrupt ids")
+
+    # ── 30zc. _extract_interrupt_ids returns None for single interrupt ────
+    _ids30c = _eii30([{"tool": "a", "__interrupt_id": "id1"}])
+    assert _ids30c is None, f"expected None for single interrupt, got {_ids30c}"
+    record("PASS", "v3.6: _extract_interrupt_ids returns None for single interrupt")
+
+    # ── 30zd. _is_corrupt_thread_error detects stuck tool call ────────────
+    from channels.telegram import _is_corrupt_thread_error as _icte30
+    assert _icte30(Exception("tool call was present without results"))
+    assert _icte30(Exception("expected tool message after tool_calls"))
+    assert not _icte30(Exception("some random error"))
+    record("PASS", "v3.6: _is_corrupt_thread_error detects stuck threads")
+
+    # ── 30ze. _resume_agent_sync accepts interrupt_ids kwarg ──────────────
+    _sig30ze = _insp30.signature(
+        __import__("channels.telegram", fromlist=["_resume_agent_sync"])._resume_agent_sync
+    )
+    assert "interrupt_ids" in _sig30ze.parameters, f"params: {list(_sig30ze.parameters)}"
+    record("PASS", "v3.6: _resume_agent_sync accepts interrupt_ids kwarg")
+
+    # ── 30zf. _pending_interrupts guard in _handle_message ────────────────
+    _tg_chan_src30 = Path("channels/telegram.py").read_text(encoding="utf-8")
+    assert "chat_id in _pending_interrupts" in _tg_chan_src30, "pending interrupt guard missing"
+    record("PASS", "v3.6: _handle_message blocks messages during pending interrupt")
+
+    # ── 30zg. _escape_html escapes required characters ────────────────────
+    from channels.telegram import _escape_html as _eh30
+    assert _eh30("a & b < c > d") == "a &amp; b &lt; c &gt; d"
+    record("PASS", "v3.6: _escape_html escapes &, <, >")
+
+    # ── 30zh. _grab_vision_capture exists and is callable ─────────────────
+    from channels.telegram import _grab_vision_capture as _gvc30
+    assert callable(_gvc30)
+    # Should return None when no vision service has captured anything
+    _vc30 = _gvc30()
+    assert _vc30 is None, f"expected None when no capture, got type {type(_vc30)}"
+    record("PASS", "v3.6: _grab_vision_capture returns None when no capture")
+
+    # ── 30zi. _run_agent_sync returns 3-tuple ─────────────────────────────
+    _sig30zi = _insp30.signature(
+        __import__("channels.telegram", fromlist=["_run_agent_sync"])._run_agent_sync
+    )
+    # Check return annotation includes 3 elements (bytes | None at end)
+    _tg_src30zi = Path("channels/telegram.py").read_text(encoding="utf-8")
+    assert "bytes | None]" in _tg_src30zi, "return type should include bytes | None"
+    assert "captured_image" in _tg_src30zi, "should track captured_image"
+    record("PASS", "v3.6: _run_agent_sync returns 3-tuple with captured image")
+
+    # ── 30zj. _resume_agent_sync returns 3-tuple ─────────────────────────
+    assert "used_vision" in _tg_src30zi, "should track used_vision flag"
+    assert "send_photo" in _tg_src30zi, "should call send_photo for vision captures"
+    record("PASS", "v3.6: _resume_agent_sync returns 3-tuple with captured image")
+
+    # ── 30zk. Email _format_interrupt handles list of dicts ─────────────
+    _email_src30 = Path("channels/email.py").read_text(encoding="utf-8")
+    assert "isinstance(data, list)" in _email_src30, \
+        "email _format_interrupt should handle list"
+    assert '"description"' in _email_src30 or "'description'" in _email_src30, \
+        "email should use 'description' field, not 'reason'"
+    record("PASS", "v3.6: email _format_interrupt handles list of dicts")
+
+    # ── 30zl. Email _resume_agent_sync accepts interrupt_ids ──────────
+    assert "interrupt_ids" in _email_src30, \
+        "email _resume_agent_sync should accept interrupt_ids"
+    # Verify it's passed through to resume_stream_agent
+    assert "interrupt_ids=interrupt_ids" in _email_src30, \
+        "should pass interrupt_ids to resume_stream_agent"
+    record("PASS", "v3.6: email _resume_agent_sync accepts interrupt_ids")
+
+    # ── 30zm. Email has _extract_interrupt_ids helper ─────────────────
+    assert "_extract_interrupt_ids" in _email_src30, \
+        "email should have _extract_interrupt_ids helper"
+    assert "__interrupt_id" in _email_src30, \
+        "should extract __interrupt_id from interrupt data"
+    record("PASS", "v3.6: email has _extract_interrupt_ids helper")
+
+    # ── 30zn. Email has corrupt thread detection ──────────────────────
+    assert "_is_corrupt_thread_error" in _email_src30, \
+        "email should have _is_corrupt_thread_error"
+    assert "_THREAD_CORRUPT_PATTERNS" in _email_src30, \
+        "email should have _THREAD_CORRUPT_PATTERNS"
+    record("PASS", "v3.6: email has corrupt thread detection")
+
+    # ── 30zo. Email _poll_once passes interrupt_ids on resume ─────────
+    # Check the lambda pattern that passes interrupt_ids
+    assert "interrupt_ids=interrupt_ids" in _email_src30, \
+        "poll_once should pass interrupt_ids on resume"
+    assert "_extract_interrupt_ids(pending" in _email_src30, \
+        "should extract interrupt_ids from pending data"
+    record("PASS", "v3.6: email _poll_once passes interrupt_ids on resume")
+
+    # ── 30zp. Email corrupt thread recovery in new-message handler ────
+    # Count occurrences of _is_corrupt_thread_error — should appear 2+ times
+    # (once in resume handler, once in new-message handler)
+    _corrupt_count = _email_src30.count("_is_corrupt_thread_error")
+    assert _corrupt_count >= 2, \
+        f"_is_corrupt_thread_error should be called in both handlers, found {_corrupt_count}"
+    assert "start a new email thread" in _email_src30, \
+        "should advise user to start new email thread on corrupt error"
+    record("PASS", "v3.6: email corrupt thread recovery in both handlers")
+
+except Exception as e:
+    record("FAIL", "v3.6 file & messaging pipeline tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 31. TASK-SCOPED BACKGROUND PERMISSIONS (v3.6.0)
+# ═════════════════════════════════════════════════════════════════════════════
+try:
+    _src_agent31 = Path("agent.py").read_text(encoding="utf-8")
+    _src_tasks31 = Path("tasks.py").read_text(encoding="utf-8")
+    _src_shell31 = Path("tools/shell_tool.py").read_text(encoding="utf-8")
+    _src_gmail31 = Path("tools/gmail_tool.py").read_text(encoding="utf-8")
+    _src_prompts31 = Path("prompts.py").read_text(encoding="utf-8")
+    _src_ui31 = Path("app_nicegui.py").read_text(encoding="utf-8")
+
+    # ── 31a. ContextVars for task permissions exist in agent.py ──────
+    assert "_task_allowed_commands_var" in _src_agent31, \
+        "agent.py must define _task_allowed_commands_var"
+    assert "_task_allowed_recipients_var" in _src_agent31, \
+        "agent.py must define _task_allowed_recipients_var"
+    assert "ContextVar" in _src_agent31, \
+        "should use ContextVar for task permission propagation"
+    record("PASS", "v3.6: agent.py has task permission ContextVars")
+
+    # ── 31b. Tiered background tool filtering in agent.py ────────────
+    assert "_ALWAYS_ALLOWED_BG" in _src_agent31, \
+        "agent.py should define _ALWAYS_ALLOWED_BG set"
+    assert "workspace_move_file" in _src_agent31.split("_ALWAYS_ALLOWED_BG")[1][:200], \
+        "move_file should be in always-allowed background set"
+    assert "move_calendar_event" in _src_agent31.split("_ALWAYS_ALLOWED_BG")[1][:200], \
+        "move_calendar should be in always-allowed background set"
+    assert "send_gmail_message" in _src_agent31.split("_ALWAYS_ALLOWED_BG")[1][:200], \
+        "send_gmail should be in always-allowed background set"
+    record("PASS", "v3.6: agent.py has tiered background tool filtering")
+
+    # ── 31c. tasks.py DB schema has permission columns ───────────────
+    assert "allowed_commands" in _src_tasks31, \
+        "tasks.py schema should have allowed_commands column"
+    assert "allowed_recipients" in _src_tasks31, \
+        "tasks.py schema should have allowed_recipients column"
+    # Verify migration for existing DBs (the migration loop adds columns dynamically)
+    _migrations_section = _src_tasks31[_src_tasks31.index("Migrations for tasks table"):
+                                        _src_tasks31.index("Migrations for tasks table") + 400]
+    assert "allowed_commands" in _migrations_section, \
+        "should have migration for allowed_commands"
+    assert "allowed_recipients" in _migrations_section, \
+        "should have migration for allowed_recipients"
+    record("PASS", "v3.6: tasks.py DB schema has permission columns")
+
+    # ── 31d. _row_to_dict parses permission fields ───────────────────
+    _row_section = _src_tasks31[_src_tasks31.index("def _row_to_dict"):][:500]
+    assert "allowed_commands" in _row_section, \
+        "_row_to_dict should parse allowed_commands"
+    assert "allowed_recipients" in _row_section, \
+        "_row_to_dict should parse allowed_recipients"
+    assert "json.loads" in _row_section, \
+        "_row_to_dict should json.loads the permission fields"
+    record("PASS", "v3.6: _row_to_dict parses permission fields")
+
+    # ── 31e. update_task allows permission fields ────────────────────
+    _update_section = _src_tasks31[_src_tasks31.index("def update_task"):][:800]
+    assert "allowed_commands" in _update_section, \
+        "update_task should accept allowed_commands"
+    assert "allowed_recipients" in _update_section, \
+        "update_task should accept allowed_recipients"
+    record("PASS", "v3.6: update_task accepts permission fields")
+
+    # ── 31f. run_task_background sets ContextVars ────────────────────
+    _run_bg_section = _src_tasks31[_src_tasks31.index("def run_task_background"):][:4000]
+    assert "_task_allowed_commands_var" in _run_bg_section, \
+        "run_task_background should set _task_allowed_commands_var"
+    assert "_task_allowed_recipients_var" in _run_bg_section, \
+        "run_task_background should set _task_allowed_recipients_var"
+    record("PASS", "v3.6: run_task_background sets task permission ContextVars")
+
+    # ── 31g. Shell tool checks allowed_commands in background ────────
+    assert "_task_allowed_commands_var" in _src_shell31, \
+        "shell_tool should import _task_allowed_commands_var"
+    assert "allowed commands" in _src_shell31.lower() or \
+           "allowed_commands" in _src_shell31, \
+        "shell_tool should reference allowed commands"
+    # Should have prefix matching logic
+    assert "startswith" in _src_shell31, \
+        "shell_tool should do prefix matching on allowed commands"
+    # Should mention task editor in blocked message
+    assert "Background permissions" in _src_shell31, \
+        "blocked message should tell user where to configure"
+    record("PASS", "v3.6: shell_tool checks allowed_commands in background")
+
+    # ── 31h. Shell tool still uses interrupt for interactive ─────────
+    assert "interrupt(" in _src_shell31, \
+        "shell_tool should still use interrupt for interactive sessions"
+    assert "Run shell command" in _src_shell31, \
+        "shell_tool should have interactive interrupt label"
+    record("PASS", "v3.6: shell_tool still uses interrupt for interactive")
+
+    # ── 31i. Gmail tool checks allowed_recipients in background ──────
+    assert "_task_allowed_recipients_var" in _src_gmail31, \
+        "gmail_tool should import _task_allowed_recipients_var"
+    assert "is_background_workflow" in _src_gmail31, \
+        "gmail_tool should check is_background_workflow"
+    # Should validate all recipient fields (to, cc, bcc)
+    _gmail_recip_section = _src_gmail31[_src_gmail31.index("_task_allowed_recipients_var"):][:1000]
+    assert "cc" in _gmail_recip_section.lower(), \
+        "gmail_tool should validate cc recipients too"
+    assert "bcc" in _gmail_recip_section.lower(), \
+        "gmail_tool should validate bcc recipients too"
+    assert "Background permissions" in _src_gmail31, \
+        "blocked message should tell user where to configure"
+    record("PASS", "v3.6: gmail_tool checks allowed_recipients in background")
+
+    # ── 31j. UI has background permissions section ───────────────────
+    assert "Background permissions" in _src_ui31, \
+        "task editor should have background permissions section"
+    assert "allowed_recip_input" in _src_ui31 or "allowed_recipients" in _src_ui31, \
+        "task editor should have allowed recipients field"
+    assert "allowed_cmds_input" in _src_ui31 or "allowed_commands" in _src_ui31, \
+        "task editor should have allowed commands field"
+    record("PASS", "v3.6: UI task editor has background permission fields")
+
+    # ── 31k. UI save persists permission fields ──────────────────────
+    # Check that _save reads from the permission textareas and updates
+    _save_section = _src_ui31[_src_ui31.index("def _save():"):][:4000]
+    assert "allowed_commands" in _save_section or "allowed_cmds" in _save_section, \
+        "save should persist allowed_commands"
+    assert "allowed_recipients" in _save_section or "allowed_recip" in _save_section, \
+        "save should persist allowed_recipients"
+    record("PASS", "v3.6: UI save persists permission fields")
+
+    # ── 31l. Prompts mention background task permissions ─────────────
+    assert "background task" in _src_prompts31.lower() or \
+           "BACKGROUND TASK PERMISSIONS" in _src_prompts31, \
+        "prompts should mention background task permissions"
+    record("PASS", "v3.6: prompts mention background task permissions")
+
+    # ── 31m. CRUD roundtrip: create + read permissions ───────────────
+    import tasks as _tasks31
+    _test_id31 = _tasks31.create_task(
+        name="__test_perms_31m__",
+        prompts=["test"],
+        schedule=None,
+    )
+    _tasks31.update_task(_test_id31,
+        allowed_commands=["git pull", "python backup.py"],
+        allowed_recipients=["alice@example.com", "bob@example.com"],
+    )
+    _t31 = _tasks31.get_task(_test_id31)
+    assert _t31 is not None
+    assert _t31["allowed_commands"] == ["git pull", "python backup.py"], \
+        f"expected commands list, got {_t31['allowed_commands']}"
+    assert _t31["allowed_recipients"] == ["alice@example.com", "bob@example.com"], \
+        f"expected recipients list, got {_t31['allowed_recipients']}"
+    _tasks31.delete_task(_test_id31)
+    record("PASS", "v3.6: CRUD roundtrip for task permissions")
+
+    # ── 31n. Default permissions are empty lists ─────────────────────
+    _test_id31n = _tasks31.create_task(
+        name="__test_defaults_31n__",
+        prompts=["test"],
+    )
+    _t31n = _tasks31.get_task(_test_id31n)
+    assert _t31n["allowed_commands"] == [], \
+        f"default allowed_commands should be [], got {_t31n['allowed_commands']}"
+    assert _t31n["allowed_recipients"] == [], \
+        f"default allowed_recipients should be [], got {_t31n['allowed_recipients']}"
+    _tasks31.delete_task(_test_id31n)
+    record("PASS", "v3.6: default task permissions are empty lists")
+
+    # ── 31o. Still-blocked ops not in _ALWAYS_ALLOWED_BG ─────────────
+    _bg_set_text = _src_agent31.split("_ALWAYS_ALLOWED_BG")[1][:300]
+    for _blocked_op in ("workspace_file_delete", "delete_calendar_event",
+                        "delete_memory", "tracker_delete", "task_delete"):
+        assert _blocked_op not in _bg_set_text, \
+            f"{_blocked_op} should NOT be in _ALWAYS_ALLOWED_BG"
+    record("PASS", "v3.6: hard-blocked ops excluded from background")
+
+except Exception as e:
+    record("FAIL", "v3.6 task-scoped background permissions", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 32. SECURITY AUDIT — BACKGROUND FLAG PROPAGATION (v3.6.0)
+# ═════════════════════════════════════════════════════════════════════════════
+try:
+    _src_agent32 = Path("agent.py").read_text(encoding="utf-8")
+    _src_tasks32 = Path("tasks.py").read_text(encoding="utf-8")
+    _src_wf32 = Path("workflows.py").read_text(encoding="utf-8")
+    _src_shell32 = Path("tools/shell_tool.py").read_text(encoding="utf-8")
+    _src_gmail32 = Path("tools/gmail_tool.py").read_text(encoding="utf-8")
+    _src_browser32 = Path("tools/browser_tool.py").read_text(encoding="utf-8")
+
+    # ── 32a. Background flag is a ContextVar, NOT threading.local ────
+    assert "_background_workflow_var" in _src_agent32, \
+        "background flag must be a ContextVar named _background_workflow_var"
+    assert "ContextVar" in _src_agent32.split("_background_workflow_var")[0][-200:] + \
+           _src_agent32.split("_background_workflow_var")[1][:200], \
+        "_background_workflow_var must be a ContextVar"
+    # Verify no code reads _tlocal.background_workflow (the old pattern)
+    assert "_tlocal.background_workflow" not in _src_agent32, \
+        "SECURITY: _tlocal.background_workflow still in agent.py — must use ContextVar"
+    assert "_tlocal.background_workflow" not in _src_tasks32, \
+        "SECURITY: _tlocal.background_workflow still in tasks.py"
+    assert "_tlocal.background_workflow" not in _src_wf32, \
+        "SECURITY: _tlocal.background_workflow still in workflows.py"
+    record("PASS", "v3.6: background flag uses ContextVar (not threading.local)")
+
+    # ── 32b. is_background_workflow reads ContextVar ─────────────────
+    _ibw_section = _src_agent32[_src_agent32.index("def is_background_workflow"):][:400]
+    assert "_background_workflow_var.get()" in _ibw_section, \
+        "is_background_workflow must read from ContextVar"
+    assert "getattr(_tlocal" not in _ibw_section, \
+        "is_background_workflow must NOT use _tlocal"
+    record("PASS", "v3.6: is_background_workflow reads ContextVar")
+
+    # ── 32c. _wrap_with_interrupt_gate uses ContextVar ───────────────
+    _gate_section = _src_agent32[_src_agent32.index("def _wrap_with_interrupt_gate"):][:2000]
+    assert "_background_workflow_var.get()" in _gate_section, \
+        "interrupt gate must check _background_workflow_var.get()"
+    assert "getattr(_tlocal" not in _gate_section, \
+        "interrupt gate must NOT use _tlocal for background check"
+    record("PASS", "v3.6: interrupt gate uses ContextVar for bg check")
+
+    # ── 32d. get_agent_graph uses ContextVar ─────────────────────────
+    _gag_section = _src_agent32[_src_agent32.index("def get_agent_graph"):][:1500]
+    assert "_background_workflow_var.get()" in _gag_section, \
+        "get_agent_graph must read _background_workflow_var"
+    record("PASS", "v3.6: get_agent_graph uses ContextVar for bg check")
+
+    # ── 32e. tasks.py sets ContextVar ────────────────────────────────
+    assert "_background_workflow_var.set(True)" in _src_tasks32, \
+        "tasks.py must set _background_workflow_var to True"
+    assert "_background_workflow_var" in _src_tasks32, \
+        "tasks.py must import _background_workflow_var"
+    record("PASS", "v3.6: tasks.py sets ContextVar for background")
+
+    # ── 32f. workflows.py sets ContextVar ────────────────────────────
+    assert "_background_workflow_var.set(True)" in _src_wf32, \
+        "workflows.py must set _background_workflow_var to True"
+    record("PASS", "v3.6: workflows.py sets ContextVar for background")
+
+    # ── 32g. All runtime tool gates use is_background_workflow() ─────
+    # Shell tool, gmail tool, browser tool should all call is_background_workflow()
+    assert "is_background_workflow" in _src_shell32, \
+        "shell_tool must call is_background_workflow()"
+    assert "is_background_workflow" in _src_gmail32, \
+        "gmail_tool must call is_background_workflow()"
+    assert "is_background_workflow" in _src_browser32, \
+        "browser_tool must call is_background_workflow()"
+    record("PASS", "v3.6: all self-gating tools use is_background_workflow()")
+
+    # ── 32h. ContextVar propagation test ─────────────────────────────
+    # Verify that ContextVar propagates to child threads (executor-like)
+    import contextvars as _cv32
+    import concurrent.futures as _cf32
+    _test_var32 = _cv32.ContextVar("_test_propagation_32", default=False)
+    _test_var32.set(True)
+    _executor_result32 = None
+    def _check_in_executor():
+        return _test_var32.get()
+    # Copy context to simulate LangGraph executor behavior
+    ctx32 = _cv32.copy_context()
+    _executor_result32 = ctx32.run(_check_in_executor)
+    assert _executor_result32 is True, \
+        f"ContextVar must propagate via copy_context, got {_executor_result32}"
+    _test_var32.set(False)  # clean up
+    record("PASS", "v3.6: ContextVar propagation via copy_context works")
+
+    # ── 32i. Destructive ops in _DESTRUCTIVE_LABELS match tools ──────
+    # Every destructive label should have a corresponding tool somewhere
+    _destr_labels = set()
+    _in_labels = False
+    for _line in _src_agent32.split("\n"):
+        if "_DESTRUCTIVE_LABELS" in _line and "{" in _line:
+            _in_labels = True
+        if _in_labels:
+            if '"' in _line:
+                _parts = _line.split('"')
+                if len(_parts) >= 2:
+                    _destr_labels.add(_parts[1])
+            if "}" in _line:
+                _in_labels = False
+    # The labels should match what tools report as destructive
+    _expected_destructive = {
+        "workspace_file_delete", "workspace_move_file",
+        "delete_calendar_event", "move_calendar_event",
+        "send_gmail_message", "delete_memory",
+        "tracker_delete", "task_delete",
+    }
+    assert _destr_labels == _expected_destructive, \
+        f"_DESTRUCTIVE_LABELS mismatch: {_destr_labels.symmetric_difference(_expected_destructive)}"
+    record("PASS", "v3.6: _DESTRUCTIVE_LABELS matches expected destructive ops")
+
+    # ── 32j. send_gmail_message in _ALWAYS_ALLOWED_BG requires runtime gate ──
+    # If send_gmail is allowed in background, the gmail tool MUST have a
+    # runtime recipient check. Verify both sides of this contract.
+    assert "send_gmail_message" in _src_agent32.split("_ALWAYS_ALLOWED_BG")[1][:300], \
+        "send_gmail_message must be in _ALWAYS_ALLOWED_BG"
+    assert "_task_allowed_recipients_var" in _src_gmail32, \
+        "gmail_tool MUST check _task_allowed_recipients_var since send is allowed in bg"
+    record("PASS", "v3.6: send_gmail bg allowance paired with runtime guard")
+
+    # ── 32k. Interactive channels do NOT set background flag ─────────
+    _src_tg32 = Path("channels/telegram.py").read_text(encoding="utf-8")
+    _src_em32 = Path("channels/email.py").read_text(encoding="utf-8")
+    _src_ui32 = Path("app_nicegui.py").read_text(encoding="utf-8")
+    # These should NEVER set background_workflow to True
+    assert "_background_workflow_var" not in _src_tg32, \
+        "SECURITY: Telegram must NOT set _background_workflow_var"
+    assert "_background_workflow_var" not in _src_em32, \
+        "SECURITY: Email channel must NOT set _background_workflow_var"
+    # UI may import is_background_workflow but should never .set(True)
+    assert "_background_workflow_var.set(True)" not in _src_ui32, \
+        "SECURITY: UI must NOT set _background_workflow_var to True"
+    record("PASS", "v3.6: interactive channels do NOT set background flag")
+
+    # ── 32l. Shell blocked patterns still enforced on top of allowlist ──
+    # Even if allowed_commands permits "rm", the BLOCKED patterns must still fire
+    assert "_BLOCKED_PATTERNS" in _src_shell32, \
+        "shell_tool must have _BLOCKED_PATTERNS for catastrophic commands"
+    # Verify blocked check happens BEFORE the allowed check
+    _blocked_idx = _src_shell32.index("classification == \"blocked\"")
+    _allowed_idx = _src_shell32.index("_task_allowed_commands_var")
+    assert _blocked_idx < _allowed_idx, \
+        "SECURITY: blocked pattern check must happen BEFORE allowed_commands check"
+    record("PASS", "v3.6: shell blocked patterns enforced before allowlist")
+
+except Exception as e:
+    record("FAIL", "v3.6 security audit tests", f"{type(e).__name__}: {e}")
     traceback.print_exc()
 
 

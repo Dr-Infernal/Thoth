@@ -74,6 +74,16 @@ class _CreateChartInput(BaseModel):
         default=None,
         description="(Excel only) Sheet name to read.  Defaults to the first sheet.",
     )
+    save_to_file: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional filename to save the chart as a PNG image in the "
+            "workspace (e.g. 'sales_chart.png'). When set the chart is "
+            "saved to disk AND displayed inline. The returned message "
+            "includes the absolute file path — useful for sending the "
+            "image via Telegram or email."
+        ),
+    )
 
 
 # ── Data loading helper ─────────────────────────────────────────────────
@@ -281,6 +291,7 @@ def _create_chart(
     color_column: str | None = None,
     title: str | None = None,
     sheet: str | None = None,
+    save_to_file: str | None = None,
 ) -> str:
     """Create a chart and return a JSON marker for the UI to render."""
 
@@ -321,7 +332,35 @@ def _create_chart(
     if title:
         chart_info = title
 
-    return f"{_CHART_MARKER}{fig_json}\n\nChart created: {chart_info} ({len(df):,} data points)"
+    result = f"{_CHART_MARKER}{fig_json}\n\nChart created: {chart_info} ({len(df):,} data points)"
+
+    # Optionally save as PNG image
+    if save_to_file:
+        try:
+            save_name = save_to_file.strip()
+            if not save_name.lower().endswith(".png"):
+                save_name += ".png"
+            # Resolve to workspace root
+            save_path = Path(save_name)
+            if not save_path.is_absolute():
+                try:
+                    from tools import registry as _reg
+                    fs_tool = _reg.get_tool("filesystem")
+                    if fs_tool:
+                        ws_root = fs_tool.get_config("workspace_root", "")
+                        if ws_root:
+                            save_path = Path(ws_root) / save_name
+                except Exception:
+                    pass
+                if not save_path.is_absolute():
+                    save_path = Path.cwd() / save_name
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.write_image(str(save_path), width=1200, height=700, scale=2)
+            result += f"\n\n📁 Chart saved to: {save_path}"
+        except Exception as exc:
+            result += f"\n\n⚠️ Could not save chart image: {exc}"
+
+    return result
 
 
 # ── Tool class ───────────────────────────────────────────────────────────
@@ -358,6 +397,8 @@ class ChartTool(BaseTool):
                     "donut, histogram, box, area, heatmap. Reads data from "
                     "CSV, Excel (XLSX/XLS), JSON, JSONL, or TSV files. "
                     "The tool auto-picks columns if x/y are not specified. "
+                    "Use save_to_file to save the chart as a PNG image "
+                    "(e.g. for sending via Telegram or email). "
                     "Use this when the user asks to visualise, plot, chart, "
                     "or graph data, or when a chart would help explain "
                     "tabular data you have analysed."

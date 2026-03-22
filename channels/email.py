@@ -33,6 +33,12 @@ from threads import _save_thread_meta, _list_threads
 from tools import registry as tool_registry
 from channels import config as channel_config
 
+_THREAD_CORRUPT_PATTERNS = (
+    "tool call.*without.*result",
+    "tool_calls.*without.*tool_results",
+    "expected.*tool.*message",
+)
+
 log = logging.getLogger("thoth.email")
 
 # ──────────────────────────────────────────────────────────────────────
@@ -320,14 +326,17 @@ def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None]:
     return answer or "(No response)", interrupt_data
 
 
-def _resume_agent_sync(config: dict, approved: bool) -> tuple[str, dict | None]:
+def _resume_agent_sync(config: dict, approved: bool,
+                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None]:
     """Resume a paused agent after interrupt approval/denial."""
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
     full_answer: list[str] = []
     tool_reports: list[str] = []
     interrupt_data: dict | None = None
 
-    for event_type, payload in agent_mod.resume_stream_agent(enabled, config, approved):
+    for event_type, payload in agent_mod.resume_stream_agent(
+        enabled, config, approved, interrupt_ids=interrupt_ids
+    ):
         if event_type == "token":
             full_answer.append(payload)
         elif event_type == "tool_call":
@@ -355,25 +364,47 @@ def _resume_agent_sync(config: dict, approved: bool) -> tuple[str, dict | None]:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Interrupt formatting
+# Interrupt formatting & helpers
 # ──────────────────────────────────────────────────────────────────────
-def _format_interrupt(data: dict) -> str:
-    """Format an interrupt into an email-friendly message."""
-    tool_name = data.get("tool", data.get("name", "Unknown tool"))
-    reason = data.get("reason", "")
-    args = data.get("args", {})
+def _format_interrupt(data) -> str:
+    """Format interrupt data (single dict or list of dicts) for email."""
+    items = data if isinstance(data, list) else [data]
+    parts: list[str] = []
 
-    parts = [f"APPROVAL REQUIRED: {tool_name}\n"]
-    if reason:
-        parts.append(f"Reason: {reason}\n")
-    if args:
-        parts.append("Details:")
-        for k, v in args.items():
-            parts.append(f"  - {k}: {v}")
+    for i, item in enumerate(items, 1):
+        if not isinstance(item, dict):
+            parts.append(str(item))
+            continue
+        tool_name = item.get("tool", item.get("name", "Unknown tool"))
+        desc = item.get("description", "")
+        args = item.get("args", {})
+
+        prefix = f"{i}. " if len(items) > 1 else ""
+        parts.append(f"{prefix}APPROVAL REQUIRED: {tool_name}")
+        if desc:
+            parts.append(f"   {desc}")
+        elif args:
+            parts.append("   Details:")
+            for k, v in args.items():
+                parts.append(f"     - {k}: {v}")
+
     parts.append("\n---")
     parts.append("Reply to this email with APPROVE or DENY.")
-
     return "\n".join(parts)
+
+
+def _extract_interrupt_ids(data) -> list[str] | None:
+    """Extract __interrupt_id values from interrupt data for multi-interrupt resume."""
+    items = data if isinstance(data, list) else [data]
+    ids = [item.get("__interrupt_id") for item in items
+           if isinstance(item, dict) and item.get("__interrupt_id")]
+    return ids if len(ids) > 1 else None
+
+
+def _is_corrupt_thread_error(exc: Exception) -> bool:
+    """Return True if the exception indicates a stuck/corrupt thread."""
+    msg = str(exc).lower()
+    return any(re.search(p, msg) for p in _THREAD_CORRUPT_PATTERNS)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -445,6 +476,7 @@ async def _poll_once():
             # Resume agent
             config = pending["config"]
             original_msg = pending["original_msg"]
+            interrupt_ids = _extract_interrupt_ids(pending.get("data"))
             del _pending_interrupts[gmail_thread_id]
 
             action = "Approved" if approved else "Denied"
@@ -452,13 +484,22 @@ async def _poll_once():
 
             try:
                 answer, new_interrupt = await loop.run_in_executor(
-                    None, _resume_agent_sync, config, approved
+                    None, lambda: _resume_agent_sync(
+                        config, approved, interrupt_ids=interrupt_ids
+                    ),
                 )
             except Exception as exc:
                 log.error("Agent resume error: %s", exc)
-                await loop.run_in_executor(
-                    None, _send_reply, service, original_msg, f"Error: {exc}"
-                )
+                if _is_corrupt_thread_error(exc):
+                    await loop.run_in_executor(
+                        None, _send_reply, service, original_msg,
+                        "The conversation had a stuck tool call and couldn't continue. "
+                        "Please start a new email thread with [Thoth] to retry."
+                    )
+                else:
+                    await loop.run_in_executor(
+                        None, _send_reply, service, original_msg, f"Error: {exc}"
+                    )
                 break
 
             if new_interrupt:
@@ -513,9 +554,17 @@ async def _poll_once():
             )
         except Exception as exc:
             log.error("Agent error for email %s: %s", msg_id, exc)
-            await loop.run_in_executor(
-                None, _send_reply, service, msg, f"Error processing your request: {exc}"
-            )
+            if _is_corrupt_thread_error(exc):
+                await loop.run_in_executor(
+                    None, _send_reply, service, msg,
+                    "The conversation had a stuck tool call and couldn't continue. "
+                    "Please start a new email thread with [Thoth] to retry."
+                )
+            else:
+                await loop.run_in_executor(
+                    None, _send_reply, service, msg,
+                    f"Error processing your request: {exc}"
+                )
             continue
 
         if interrupt_data:

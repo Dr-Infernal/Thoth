@@ -1,8 +1,11 @@
-"""Memory tool — save, search, list, update, and delete long-term memories.
+"""Memory tool — save, search, list, update, delete, link, and explore memories.
 
 Exposes multiple LangChain sub-tools so the agent can manage a persistent
-personal knowledge base across conversations.  Categories: person, preference,
-fact, event, place, project.
+personal knowledge graph across conversations.  Categories: person, preference,
+fact, event, place, project (and more).
+
+v3.6+: Two new sub-tools — ``link_memories`` (create relations between
+entities) and ``explore_connections`` (traverse the knowledge graph).
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from pydantic import BaseModel, Field
 from tools.base import BaseTool
 from tools import registry
 import memory as memory_db
+import knowledge_graph as kg
 
 
 # ── Pydantic schemas for structured input ────────────────────────────────────
@@ -67,6 +71,40 @@ class _UpdateMemoryInput(BaseModel):
 class _DeleteMemoryInput(BaseModel):
     memory_id: str = Field(
         description="The ID of the memory to delete (from search or list output)."
+    )
+
+
+class _LinkMemoriesInput(BaseModel):
+    source_id: str = Field(
+        description=(
+            "ID of the source entity (the 'from' side of the relationship). "
+            "Get IDs from search_memory or list_memories."
+        )
+    )
+    target_id: str = Field(
+        description=(
+            "ID of the target entity (the 'to' side of the relationship). "
+            "Get IDs from search_memory or list_memories."
+        )
+    )
+    relation_type: str = Field(
+        description=(
+            "Label describing the relationship — e.g. 'father_of', 'lives_in', "
+            "'works_on', 'friend_of', 'prefers', 'related_to'. Use snake_case."
+        )
+    )
+
+
+class _ExploreConnectionsInput(BaseModel):
+    entity_id: str = Field(
+        description=(
+            "ID of the entity to explore connections for. "
+            "Get IDs from search_memory or list_memories."
+        )
+    )
+    hops: int = Field(
+        default=1,
+        description="Number of hops to traverse (1 = immediate neighbors, 2 = friends-of-friends).",
     )
 
 
@@ -168,6 +206,77 @@ def _delete_memory(memory_id: str) -> str:
     return f"Memory '{memory_id}' not found."
 
 
+def _link_memories(source_id: str, target_id: str, relation_type: str) -> str:
+    """Create a relationship between two memories in the knowledge graph."""
+    try:
+        # Validate both entities exist and give helpful names
+        source_entity = kg.get_entity(source_id)
+        target_entity = kg.get_entity(target_id)
+        if not source_entity:
+            return f"Error: source entity '{source_id}' not found. Use search_memory or list_memories to find the correct ID."
+        if not target_entity:
+            return f"Error: target entity '{target_id}' not found. Use search_memory or list_memories to find the correct ID."
+
+        rel = kg.add_relation(source_id, target_id, relation_type)
+        if rel:
+            return (
+                f"Relationship created successfully.\n"
+                f"{source_entity['subject']} --[{rel['relation_type']}]--> {target_entity['subject']}\n"
+                f"Relation ID: {rel['id']}"
+            )
+        return "Error: could not create relationship (entities may not exist)."
+    except Exception as exc:
+        return f"Error creating relationship: {exc}"
+
+
+def _explore_connections(entity_id: str, hops: int = 1) -> str:
+    """Explore the knowledge graph around an entity."""
+    try:
+        entity = kg.get_entity(entity_id)
+        if not entity:
+            return f"Entity '{entity_id}' not found. Use search_memory or list_memories to find the correct ID."
+
+        hops = max(1, min(hops, 3))  # cap at 3 to prevent huge traversals
+        neighbors = kg.get_neighbors(entity_id, hops=hops)
+        relations = kg.get_relations(entity_id)
+
+        parts = [f"**{entity.get('subject', '?')}** ({entity.get('entity_type', '?')})"]
+
+        if relations:
+            parts.append(f"\nRelationships ({len(relations)}):")
+            for rel in relations:
+                arrow = "-->" if rel["direction"] == "outgoing" else "<--"
+                parts.append(
+                    f"  {arrow} [{rel['relation_type']}] {rel['peer_subject']} "
+                    f"(id: {rel['peer_id']})"
+                )
+
+        if neighbors:
+            graph_only = [n for n in neighbors if n not in [{"id": r["peer_id"]} for r in relations]]
+            if len(neighbors) > len(relations):
+                parts.append(f"\nNearby entities within {hops} hop(s): {len(neighbors)}")
+                for n in neighbors[:15]:  # cap display
+                    hop = n.get("hop", "?")
+                    parts.append(
+                        f"  [{hop} hop] {n.get('subject', '?')} ({n.get('entity_type', '?')}) "
+                        f"(id: {n['id']})"
+                    )
+                if len(neighbors) > 15:
+                    parts.append(f"  ... and {len(neighbors) - 15} more")
+
+        if not relations and not neighbors:
+            parts.append("\nNo connections found. Use link_memories to create relationships.")
+
+        # Include Mermaid diagram for visual context
+        mermaid = kg.to_mermaid(entity_id, hops=hops, max_nodes=15)
+        if mermaid and mermaid.count("\n") > 1:
+            parts.append(f"\n```mermaid\n{mermaid}\n```")
+
+        return "\n".join(parts)
+    except Exception as exc:
+        return f"Error exploring connections: {exc}"
+
+
 # ── Tool class ───────────────────────────────────────────────────────────────
 
 class MemoryTool(BaseTool):
@@ -184,8 +293,10 @@ class MemoryTool(BaseTool):
     def description(self) -> str:
         return (
             "Save and recall long-term memories about people, preferences, "
-            "facts, events, places, and projects. Use this to remember "
-            "personal details the user shares across conversations."
+            "facts, events, places, and projects. Connect memories with "
+            "relationships to build a personal knowledge graph. Use this to "
+            "remember personal details the user shares across conversations "
+            "and explore how they relate to each other."
         )
 
     @property
@@ -254,10 +365,34 @@ class MemoryTool(BaseTool):
                 ),
                 args_schema=_DeleteMemoryInput,
             ),
+            StructuredTool.from_function(
+                func=_link_memories,
+                name="link_memories",
+                description=(
+                    "Create a relationship between two memories in the knowledge graph. "
+                    "Use when the user mentions how things are related — e.g. 'Sarah is "
+                    "my mom', 'I work at Acme Corp', 'The deadline is for Project X'. "
+                    "Requires source_id, target_id (from search/list), and a relation_type "
+                    "label like 'mother_of', 'works_at', 'deadline_for'. Also use this "
+                    "proactively when you save related memories to build connections."
+                ),
+                args_schema=_LinkMemoriesInput,
+            ),
+            StructuredTool.from_function(
+                func=_explore_connections,
+                name="explore_connections",
+                description=(
+                    "Explore the knowledge graph around a memory to see how it connects "
+                    "to other memories. Shows relationships, nearby entities, and a visual "
+                    "graph diagram. Use when the user asks about how things are related, "
+                    "'tell me about my family', 'what do you know about my work', etc."
+                ),
+                args_schema=_ExploreConnectionsInput,
+            ),
         ]
 
     def execute(self, query: str) -> str:
-        return "Use save_memory, search_memory, list_memories, update_memory, or delete_memory instead."
+        return "Use save_memory, search_memory, list_memories, update_memory, delete_memory, link_memories, or explore_connections instead."
 
 
 registry.register(MemoryTool())

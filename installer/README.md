@@ -1,6 +1,6 @@
 # Building the Thoth Windows Installer
 
-This guide explains how to build a distributable Windows installer for Thoth v3.5.0.
+This guide explains how to build a distributable Windows installer for Thoth v3.6.0.
 
 ## Architecture
 
@@ -33,7 +33,7 @@ The installer (~30 MB) bundles the embedded Python runtime and app source code. 
 This will:
 1. Download Python 3.13 embeddable package (~15 MB)
 2. Download `get-pip.py` (~2.5 MB)
-3. Compile everything into `dist\ThothSetup_3.5.0.exe`
+3. Compile everything into `dist\ThothSetup_3.6.0.exe`
 
 ### Options
 
@@ -63,6 +63,7 @@ C:\Program Files\Thoth\            # Installation directory
     ├── agent.py                    # ReAct agent
     ├── memory.py                   # Long-term memory DB + FAISS vector search
     ├── memory_extraction.py        # Background memory extraction from conversations
+    ├── knowledge_graph.py          # Knowledge graph (triple store + NetworkX + FAISS)
     ├── models.py                   # Ollama model management
     ├── documents.py                # Document ingestion
     ├── threads.py                  # Thread/conversation persistence
@@ -72,6 +73,7 @@ C:\Program Files\Thoth\            # Installation directory
     ├── vision.py                   # Camera/screen capture
     ├── data_reader.py              # Pandas-based structured data reader
     ├── tasks.py                    # Task engine + APScheduler
+    ├── prompts.py                  # Centralized LLM prompts
     ├── notifications.py             # Unified notification system
     ├── launcher.py                 # System tray + native window + splash screen
     ├── sounds/                     # Notification sound effects
@@ -84,7 +86,9 @@ C:\Program Files\Thoth\            # Installation directory
     │   └── email.py
     ├── requirements.txt
     ├── thoth.ico
-    ├── tools/                      # 20 tool modules
+    ├── static/                     # Vendored JS libraries
+    │   └── vis-network.min.js
+    ├── tools/                      # 21 tool modules
     │   ├── __init__.py
     │   ├── base.py
     │   ├── registry.py
@@ -97,6 +101,7 @@ C:\Program Files\Thoth\            # Installation directory
 ├── memory.db                       # Long-term memories
 ├── memory_vectors/                 # FAISS index for semantic memory search
 ├── memory_extraction_state.json    # Tracks last extraction run
+├── knowledge_graph.db             # Triple store (knowledge graph)
 ├── api_keys.json                   # API keys
 ├── app_config.json                 # Onboarding / first-run state
 ├── tools_config.json               # Tool enable/disable state
@@ -133,7 +138,7 @@ The Inno Setup installer runs these steps:
 
 ## End-User Experience
 
-1. Run `ThothSetup_3.5.0.exe`
+1. Run `ThothSetup_3.6.0.exe`
 2. Follow the wizard — dependencies download and install automatically (5-15 min)
 3. Launch Thoth from Start Menu or Desktop shortcut
 4. The system tray icon appears; the app opens at `http://localhost:8080`

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 from typing import Any
 
@@ -128,15 +129,30 @@ def _new_thread(chat_id: int) -> dict:
 # ──────────────────────────────────────────────────────────────────────
 # Agent invocation (synchronous — runs in executor)
 # ──────────────────────────────────────────────────────────────────────
-def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None]:
+def _grab_vision_capture() -> bytes | None:
+    """Return the last captured image from the vision service, if any."""
+    try:
+        from tools.vision_tool import _get_vision_service
+        svc = _get_vision_service()
+        if svc and svc.last_capture:
+            img = svc.last_capture
+            svc.last_capture = None
+            return img
+    except Exception:
+        pass
+    return None
+
+
+def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None, bytes | None]:
     """Run the agent synchronously, collecting the full response.
 
-    Returns (answer_text, interrupt_data_or_None).
+    Returns (answer_text, interrupt_data_or_None, captured_image_or_None).
     """
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
     full_answer: list[str] = []
     tool_reports: list[str] = []
     interrupt_data: dict | None = None
+    used_vision = False
 
     for event_type, payload in agent_mod.stream_agent(user_text, enabled, config):
         if event_type == "token":
@@ -144,10 +160,10 @@ def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None]:
         elif event_type == "tool_call":
             tool_reports.append(f"🔧 Using {payload}…")
         elif event_type == "tool_done":
-            if isinstance(payload, dict):
-                tool_reports.append(f"✅ {payload['name']} done")
-            else:
-                tool_reports.append(f"✅ {payload} done")
+            name = payload['name'] if isinstance(payload, dict) else payload
+            tool_reports.append(f"✅ {name} done")
+            if name in ("analyze_image", "👁️ Vision"):
+                used_vision = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -162,26 +178,31 @@ def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None]:
     elif tool_reports:
         answer = "\n".join(tool_reports)
 
-    return answer or "_(No response)_", interrupt_data
+    captured = _grab_vision_capture() if used_vision else None
+    return answer or "_(No response)_", interrupt_data, captured
 
 
-def _resume_agent_sync(config: dict, approved: bool) -> tuple[str, dict | None]:
+def _resume_agent_sync(config: dict, approved: bool,
+                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, bytes | None]:
     """Resume a paused agent after interrupt approval/denial."""
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
     full_answer: list[str] = []
     tool_reports: list[str] = []
     interrupt_data: dict | None = None
+    used_vision = False
 
-    for event_type, payload in agent_mod.resume_stream_agent(enabled, config, approved):
+    for event_type, payload in agent_mod.resume_stream_agent(
+        enabled, config, approved, interrupt_ids=interrupt_ids
+    ):
         if event_type == "token":
             full_answer.append(payload)
         elif event_type == "tool_call":
             tool_reports.append(f"🔧 Using {payload}…")
         elif event_type == "tool_done":
-            if isinstance(payload, dict):
-                tool_reports.append(f"✅ {payload['name']} done")
-            else:
-                tool_reports.append(f"✅ {payload} done")
+            name = payload['name'] if isinstance(payload, dict) else payload
+            tool_reports.append(f"✅ {name} done")
+            if name in ("analyze_image", "👁️ Vision"):
+                used_vision = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -196,7 +217,8 @@ def _resume_agent_sync(config: dict, approved: bool) -> tuple[str, dict | None]:
     elif tool_reports:
         answer = "\n".join(tool_reports)
 
-    return answer or "_(No response)_", interrupt_data
+    captured = _grab_vision_capture() if used_vision else None
+    return answer or "_(No response)_", interrupt_data, captured
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -235,34 +257,66 @@ def _split_message(text: str, max_len: int = MAX_TG_MESSAGE_LEN) -> list[str]:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Markdown → Telegram HTML converter
+# ──────────────────────────────────────────────────────────────────────
+def _md_to_html(text: str) -> str:
+    """Convert common markdown to Telegram-compatible HTML.
+
+    Handles: **bold**, *italic*, `code`, ```code blocks```,
+    # headings → bold, and escapes <>&.
+    """
+    # Escape HTML entities first
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Fenced code blocks (``` ... ```)
+    text = re.sub(r"```(?:\w*\n)?([\s\S]*?)```", r"<pre>\1</pre>", text)
+    # Inline code (`...`)
+    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    # Bold (**...**)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    # Italic (*...*) — but not inside <b> tags
+    text = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"<i>\1</i>", text)
+    # Headings (# ... at start of line) → bold
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
+    return text
+
+
+def _escape_html(text: str) -> str:
+    """Escape only the characters required by Telegram HTML."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Interrupt formatting
 # ──────────────────────────────────────────────────────────────────────
-def _format_interrupt(data: dict) -> str:
-    """Format interrupt data into a readable Telegram message."""
-    tool_name = data.get("tool", data.get("name", "Unknown tool"))
-    reason = data.get("reason", "")
-    args = data.get("args", {})
+def _format_interrupt(data) -> str:
+    """Format interrupt data (single dict or list of dicts) as HTML."""
+    items = data if isinstance(data, list) else [data]
+    parts: list[str] = []
 
-    parts = [f"⚠️ *{_escape_md(tool_name)}* needs your approval:\n"]
-    if reason:
-        parts.append(f"_{_escape_md(reason)}_\n")
-    if args:
-        for k, v in args.items():
-            parts.append(f"• *{_escape_md(str(k))}*: {_escape_md(str(v))}")
+    for item in items:
+        if not isinstance(item, dict):
+            parts.append(_escape_html(str(item)))
+            continue
+        tool_name = item.get("tool", item.get("name", "Unknown tool"))
+        desc = item.get("description", "")
+        args = item.get("args", {})
+
+        parts.append(f"⚠️ <b>{_escape_html(tool_name)}</b> needs your approval:")
+        if desc:
+            parts.append(f"<i>{_escape_html(desc)}</i>")
+        elif args:
+            for k, v in args.items():
+                parts.append(f"• <b>{_escape_html(str(k))}</b>: {_escape_html(str(v))}")
 
     return "\n".join(parts)
 
 
-def _escape_md(text: str) -> str:
-    """Escape MarkdownV2 special characters."""
-    special = r"_*[]()~`>#+-=|{}.!\\"
-    result = []
-    for ch in text:
-        if ch in special:
-            result.append(f"\\{ch}")
-        else:
-            result.append(ch)
-    return "".join(result)
+def _extract_interrupt_ids(data) -> list[str] | None:
+    """Extract __interrupt_id values from interrupt data for multi-interrupt resume."""
+    items = data if isinstance(data, list) else [data]
+    ids = [item.get("__interrupt_id") for item in items
+           if isinstance(item, dict) and item.get("__interrupt_id")]
+    return ids if len(ids) > 1 else None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -276,15 +330,15 @@ async def _cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             "Add this ID in Thoth → Settings → Channels to authorise."
         )
         return
-    await update.message.reply_text(
-        "𓁟 *Thoth* is connected\\!\n\n"
-        "Send me any message and I'll respond using your configured agent\\.\n\n"
+    await _send_html(
+        update.message,
+        "𓁟 <b>Thoth</b> is connected!\n\n"
+        "Send me any message and I'll respond using your configured agent.\n\n"
         "Commands:\n"
         "/newthread — Start a fresh conversation\n"
         "/tools — List enabled tools\n"
         "/status — Check connection status\n"
         "/help — Show this message",
-        parse_mode="MarkdownV2",
     )
 
 
@@ -316,11 +370,10 @@ async def _cmd_tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not enabled:
         await update.message.reply_text("No tools are currently enabled.")
         return
-    lines = ["🔧 *Enabled tools:*\n"]
+    lines = ["🔧 <b>Enabled tools:</b>\n"]
     for t in enabled:
-        desc = getattr(t, "description", "")[:60]
-        lines.append(f"• {_escape_md(t.name)}")
-    await update.message.reply_text("\n".join(lines), parse_mode="MarkdownV2")
+        lines.append(f"• {_escape_html(t.name)}")
+    await _send_html(update.message, "\n".join(lines))
 
 
 async def _cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -333,6 +386,38 @@ async def _cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"🔧 {enabled_count} tools enabled.\n"
         f"👤 Authorised user: {_get_allowed_user_id()}"
     )
+
+
+async def _send_html(target, text: str, **kwargs) -> None:
+    """Send a message as HTML, falling back to plain text on parse errors."""
+    try:
+        await target.reply_text(text, parse_mode="HTML", **kwargs)
+    except Exception:
+        # Strip HTML tags and send as plain text
+        plain = re.sub(r"<[^>]+>", "", text).replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        await target.reply_text(plain, **kwargs)
+
+
+async def _send_html_msg(chat, text: str, **kwargs) -> None:
+    """Send a message via chat.send_message as HTML with plain-text fallback."""
+    try:
+        await chat.send_message(text, parse_mode="HTML", **kwargs)
+    except Exception:
+        plain = re.sub(r"<[^>]+>", "", text).replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        await chat.send_message(plain, **kwargs)
+
+
+_THREAD_CORRUPT_PATTERNS = (
+    "tool call.*without.*result",
+    "tool_calls.*without.*tool_results",
+    "expected.*tool.*message",
+)
+
+
+def _is_corrupt_thread_error(exc: Exception) -> bool:
+    """Return True if the exception indicates a stuck/corrupt thread."""
+    msg = str(exc).lower()
+    return any(re.search(p, msg) for p in _THREAD_CORRUPT_PATTERNS)
 
 
 async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -348,6 +433,13 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not text:
         return
 
+    # Block new messages while an interrupt is pending
+    if chat_id in _pending_interrupts:
+        await update.message.reply_text(
+            "⏸️ There's a pending approval — please tap ✅ Approve or ❌ Deny first."
+        )
+        return
+
     # Get or create thread config (persisted in chat_data)
     config = context.chat_data.get("thread_config")
     if config is None:
@@ -360,13 +452,32 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Run agent in executor (blocking call)
     loop = asyncio.get_event_loop()
     try:
-        answer, interrupt_data = await loop.run_in_executor(
+        answer, interrupt_data, captured_image = await loop.run_in_executor(
             None, _run_agent_sync, text, config
         )
     except Exception as exc:
         log.error("Agent error for chat %s: %s", chat_id, exc)
-        await update.message.reply_text(f"⚠️ Error: {exc}")
+        # If thread is corrupt (stuck tool call), auto-recover
+        if _is_corrupt_thread_error(exc):
+            config = _new_thread(chat_id)
+            context.chat_data["thread_config"] = config
+            await update.message.reply_text(
+                "⚠️ The previous conversation had a stuck tool call and couldn't continue.\n"
+                "🆕 I've started a fresh thread — please resend your message."
+            )
+        else:
+            await update.message.reply_text(f"⚠️ Error: {exc}")
         return
+
+    # Send captured vision image if available
+    if captured_image:
+        try:
+            import io
+            await update.effective_chat.send_photo(
+                photo=io.BytesIO(captured_image), caption="📷 Captured image"
+            )
+        except Exception as exc:
+            log.warning("Failed to send vision capture to Telegram: %s", exc)
 
     if interrupt_data:
         _pending_interrupts[chat_id] = {
@@ -380,15 +491,16 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 InlineKeyboardButton("❌ Deny", callback_data="interrupt_deny"),
             ]
         ])
-        await update.message.reply_text(
+        await _send_html(
+            update.message,
             _format_interrupt(interrupt_data),
-            parse_mode="MarkdownV2",
             reply_markup=keyboard,
         )
     else:
-        # Send response (split if needed)
-        for chunk in _split_message(answer):
-            await update.message.reply_text(chunk)
+        # Send response as formatted HTML (split if needed)
+        html = _md_to_html(answer)
+        for chunk in _split_message(html):
+            await _send_html(update.message, chunk)
 
 
 async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -410,19 +522,38 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.edit_message_text(f"{action} — processing…")
 
     config = pending["config"]
+    interrupt_ids = _extract_interrupt_ids(pending["data"])
 
     # Send typing indicator
     await update.effective_chat.send_action("typing")
 
     loop = asyncio.get_event_loop()
     try:
-        answer, new_interrupt = await loop.run_in_executor(
-            None, _resume_agent_sync, config, approved
+        answer, new_interrupt, captured_image = await loop.run_in_executor(
+            None, lambda: _resume_agent_sync(config, approved, interrupt_ids=interrupt_ids),
         )
     except Exception as exc:
         log.error("Agent resume error: %s", exc)
-        await update.effective_chat.send_message(f"⚠️ Error: {exc}")
+        if _is_corrupt_thread_error(exc):
+            new_config = _new_thread(chat_id)
+            context.chat_data["thread_config"] = new_config
+            await update.effective_chat.send_message(
+                "⚠️ The conversation had a stuck tool call.\n"
+                "🆕 Started a fresh thread — please resend your message."
+            )
+        else:
+            await update.effective_chat.send_message(f"⚠️ Error: {exc}")
         return
+
+    # Send captured vision image if available
+    if captured_image:
+        try:
+            import io
+            await update.effective_chat.send_photo(
+                photo=io.BytesIO(captured_image), caption="📷 Captured image"
+            )
+        except Exception as exc:
+            log.warning("Failed to send vision capture to Telegram: %s", exc)
 
     if new_interrupt:
         _pending_interrupts[chat_id] = {
@@ -435,14 +566,15 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 InlineKeyboardButton("❌ Deny", callback_data="interrupt_deny"),
             ]
         ])
-        await update.effective_chat.send_message(
+        await _send_html_msg(
+            update.effective_chat,
             _format_interrupt(new_interrupt),
-            parse_mode="MarkdownV2",
             reply_markup=keyboard,
         )
     else:
-        for chunk in _split_message(answer):
-            await update.effective_chat.send_message(chunk)
+        html = _md_to_html(answer)
+        for chunk in _split_message(html):
+            await _send_html_msg(update.effective_chat, chunk)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -529,8 +661,68 @@ def send_outbound(chat_id: int, text: str) -> None:
         raise RuntimeError("Telegram bot event loop is not available")
 
     async def _send():
-        for chunk in _split_message(text):
-            await _app.bot.send_message(chat_id=chat_id, text=chunk)
+        html = _md_to_html(text)
+        for chunk in _split_message(html):
+            try:
+                await _app.bot.send_message(chat_id=chat_id, text=chunk, parse_mode="HTML")
+            except Exception:
+                plain = re.sub(r"<[^>]+>", "", chunk).replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                await _app.bot.send_message(chat_id=chat_id, text=plain)
 
     future = asyncio.run_coroutine_threadsafe(_send(), _bot_loop)
     future.result(timeout=30)
+
+
+def send_photo(chat_id: int, file_path: str, *, caption: str | None = None) -> None:
+    """Send a photo to a Telegram chat from *outside* the handler context.
+
+    Parameters
+    ----------
+    chat_id : int
+        Telegram chat / user ID.
+    file_path : str
+        Absolute path to a local image file (PNG, JPG, etc.).
+    caption : str, optional
+        Optional caption text displayed below the photo.
+    """
+    if not _running or _app is None:
+        raise RuntimeError("Telegram bot is not running — cannot send photo")
+    if _bot_loop is None or not _bot_loop.is_running():
+        raise RuntimeError("Telegram bot event loop is not available")
+
+    async def _send():
+        with open(file_path, "rb") as f:
+            await _app.bot.send_photo(chat_id=chat_id, photo=f, caption=caption)
+
+    future = asyncio.run_coroutine_threadsafe(_send(), _bot_loop)
+    future.result(timeout=60)
+
+
+def send_document(chat_id: int, file_path: str, *, caption: str | None = None) -> None:
+    """Send a document/file to a Telegram chat from *outside* the handler context.
+
+    Parameters
+    ----------
+    chat_id : int
+        Telegram chat / user ID.
+    file_path : str
+        Absolute path to the file to send.
+    caption : str, optional
+        Optional caption text displayed with the document.
+    """
+    if not _running or _app is None:
+        raise RuntimeError("Telegram bot is not running — cannot send document")
+    if _bot_loop is None or not _bot_loop.is_running():
+        raise RuntimeError("Telegram bot event loop is not available")
+
+    import os as _os
+    filename = _os.path.basename(file_path)
+
+    async def _send():
+        with open(file_path, "rb") as f:
+            await _app.bot.send_document(
+                chat_id=chat_id, document=f, filename=filename, caption=caption,
+            )
+
+    future = asyncio.run_coroutine_threadsafe(_send(), _bot_loop)
+    future.result(timeout=60)

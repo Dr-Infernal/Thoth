@@ -1,10 +1,25 @@
-"""Gmail tool — search, read, and draft emails via the Gmail API."""
+"""Gmail tool — search, read, draft, and send emails via the Gmail API.
+
+Custom send/draft implementations replace the LangChain defaults to add
+file attachment support.
+"""
 
 from __future__ import annotations
 
+import base64
+import email.encoders
+import email.mime.base
+import email.mime.multipart
+import email.mime.text
 import logging
+import mimetypes
 import os
 import pathlib
+from pathlib import Path
+from typing import List, Optional, Union
+
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 
 from tools.base import BaseTool
 from tools import registry
@@ -30,6 +45,212 @@ DEFAULT_OPERATIONS = _READ_OPS + _COMPOSE_OPS  # send disabled by default
 
 # Full access scope
 GMAIL_SCOPES = ["https://mail.google.com/"]
+
+
+# ── Path resolution (shared with Telegram tool) ─────────────────────────
+
+def _resolve_file_path(file_path: str) -> str:
+    """Resolve relative paths against workspace root, tracker exports, cwd."""
+    p = Path(file_path)
+    if p.is_absolute() and p.is_file():
+        return str(p)
+    try:
+        from tools import registry as _reg
+        fs_tool = _reg.get_tool("filesystem")
+        if fs_tool:
+            ws_root = fs_tool.get_config("workspace_root", "")
+            if ws_root:
+                candidate = Path(ws_root) / p
+                if candidate.is_file():
+                    return str(candidate.resolve())
+    except Exception:
+        pass
+    try:
+        tracker_exports = _DATA_DIR / "tracker" / "exports"
+        candidate = tracker_exports / p
+        if candidate.is_file():
+            return str(candidate.resolve())
+    except Exception:
+        pass
+    candidate = Path.cwd() / p
+    if candidate.is_file():
+        return str(candidate.resolve())
+    return file_path
+
+
+# ── Custom send / draft with attachment support ──────────────────────────
+
+class _SendMessageInput(BaseModel):
+    message: str = Field(description="The email body text.")
+    to: Union[str, List[str]] = Field(description="Recipient email address(es).")
+    subject: str = Field(description="The email subject line.")
+    cc: Optional[Union[str, List[str]]] = Field(
+        default=None, description="CC recipients.",
+    )
+    bcc: Optional[Union[str, List[str]]] = Field(
+        default=None, description="BCC recipients.",
+    )
+    attachments: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional list of file paths to attach. Accepts workspace-relative "
+            "paths (e.g. 'report.pdf') or absolute paths."
+        ),
+    )
+
+
+class _CreateDraftInput(BaseModel):
+    message: str = Field(description="The draft email body text.")
+    to: Union[str, List[str]] = Field(description="Recipient email address(es).")
+    subject: str = Field(description="The email subject line.")
+    cc: Optional[Union[str, List[str]]] = Field(
+        default=None, description="CC recipients.",
+    )
+    bcc: Optional[Union[str, List[str]]] = Field(
+        default=None, description="BCC recipients.",
+    )
+    attachments: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional list of file paths to attach. Accepts workspace-relative "
+            "paths (e.g. 'report.pdf') or absolute paths."
+        ),
+    )
+
+
+def _build_mime_message(
+    body: str,
+    to: Union[str, List[str]],
+    subject: str,
+    cc: Optional[Union[str, List[str]]] = None,
+    bcc: Optional[Union[str, List[str]]] = None,
+    attachments: Optional[List[str]] = None,
+) -> email.mime.multipart.MIMEMultipart:
+    """Build a MIME message with optional file attachments."""
+    mime = email.mime.multipart.MIMEMultipart()
+    mime.attach(email.mime.text.MIMEText(body, "plain", "utf-8"))
+    mime["To"] = ", ".join(to) if isinstance(to, list) else to
+    mime["Subject"] = subject
+    if cc:
+        mime["Cc"] = ", ".join(cc) if isinstance(cc, list) else cc
+    if bcc:
+        mime["Bcc"] = ", ".join(bcc) if isinstance(bcc, list) else bcc
+
+    for fp in (attachments or []):
+        resolved = _resolve_file_path(fp)
+        if not os.path.isfile(resolved):
+            logger.warning("Attachment not found, skipping: %s", fp)
+            continue
+        content_type, _ = mimetypes.guess_type(resolved)
+        if content_type is None:
+            content_type = "application/octet-stream"
+        main_type, sub_type = content_type.split("/", 1)
+        with open(resolved, "rb") as f:
+            part = email.mime.base.MIMEBase(main_type, sub_type)
+            part.set_payload(f.read())
+        email.encoders.encode_base64(part)
+        part.add_header(
+            "Content-Disposition", "attachment",
+            filename=os.path.basename(resolved),
+        )
+        mime.attach(part)
+
+    return mime
+
+
+def _make_custom_send(api_resource):
+    """Return a send function bound to *api_resource*."""
+    def _send_gmail_message(
+        message: str,
+        to: Union[str, List[str]],
+        subject: str,
+        cc: Optional[Union[str, List[str]]] = None,
+        bcc: Optional[Union[str, List[str]]] = None,
+        attachments: Optional[List[str]] = None,
+    ) -> str:
+        # In background workflows, validate recipients against task allowlist
+        try:
+            from agent import is_background_workflow, _task_allowed_recipients_var
+            if is_background_workflow():
+                allowed = [a.lower().strip()
+                           for a in (_task_allowed_recipients_var.get() or [])]
+                all_recipients = []
+                for field in (to, cc, bcc):
+                    if field is None:
+                        continue
+                    if isinstance(field, str):
+                        all_recipients.append(field.lower().strip())
+                    else:
+                        all_recipients.extend(r.lower().strip() for r in field)
+                blocked = [r for r in all_recipients if r not in allowed]
+                if blocked:
+                    if allowed:
+                        return (
+                            f"⚠️ BLOCKED: Cannot send email to {', '.join(blocked)} — "
+                            f"not in this task's allowed recipients list. "
+                            f"The task owner can add recipients in the task "
+                            f"editor under '🔒 Background permissions'.\n"
+                            f"Currently allowed: {', '.join(allowed)}\n"
+                            f"Do NOT retry this tool."
+                        )
+                    return (
+                        f"⚠️ BLOCKED: Cannot send email in a background task — "
+                        f"no allowed recipients configured. "
+                        f"The task owner can configure allowed recipients in "
+                        f"the task editor under '🔒 Background permissions'.\n"
+                        f"Do NOT retry this tool."
+                    )
+        except ImportError:
+            pass
+
+        try:
+            mime = _build_mime_message(message, to, subject, cc, bcc, attachments)
+            raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+            sent = (
+                api_resource.users()
+                .messages()
+                .send(userId="me", body={"raw": raw})
+                .execute()
+            )
+            att_note = ""
+            if attachments:
+                resolved = [_resolve_file_path(a) for a in attachments if os.path.isfile(_resolve_file_path(a))]
+                if resolved:
+                    att_note = f" with {len(resolved)} attachment(s)"
+            return f"Message sent{att_note}. Message Id: {sent['id']}"
+        except Exception as exc:
+            return f"Error sending email: {exc}"
+    return _send_gmail_message
+
+
+def _make_custom_draft(api_resource):
+    """Return a draft-creation function bound to *api_resource*."""
+    def _create_gmail_draft(
+        message: str,
+        to: Union[str, List[str]],
+        subject: str,
+        cc: Optional[Union[str, List[str]]] = None,
+        bcc: Optional[Union[str, List[str]]] = None,
+        attachments: Optional[List[str]] = None,
+    ) -> str:
+        try:
+            mime = _build_mime_message(message, to, subject, cc, bcc, attachments)
+            raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+            draft = (
+                api_resource.users()
+                .drafts()
+                .create(userId="me", body={"message": {"raw": raw}})
+                .execute()
+            )
+            att_note = ""
+            if attachments:
+                resolved = [_resolve_file_path(a) for a in attachments if os.path.isfile(_resolve_file_path(a))]
+                if resolved:
+                    att_note = f" with {len(resolved)} attachment(s)"
+            return f"Draft created{att_note}. Draft Id: {draft['id']}"
+        except Exception as exc:
+            return f"Error creating draft: {exc}"
+    return _create_gmail_draft
 
 
 class GmailTool(BaseTool):
@@ -133,18 +354,47 @@ class GmailTool(BaseTool):
             logger.warning("Gmail API resource build failed (OAuth issue?)", exc_info=True)
             return []
 
-        from langchain_google_community import GmailToolkit
-
-        toolkit = GmailToolkit(api_resource=api_resource)
-        all_tools = toolkit.get_tools()
-
         selected = self._get_selected_operations()
-        # Filter to selected operations only
-        tools = [t for t in all_tools if t.name in selected]
+        tools = []
 
-        # Wrap each tool so empty results return an explicit message
-        # instead of an empty string (which causes the LLM to hallucinate).
-        return [_wrap_gmail_tool_empty_guard(t) for t in tools]
+        # Read tools from LangChain toolkit
+        if any(op in selected for op in _READ_OPS):
+            from langchain_google_community import GmailToolkit
+            toolkit = GmailToolkit(api_resource=api_resource)
+            all_lc_tools = toolkit.get_tools()
+            for t in all_lc_tools:
+                if t.name in selected and t.name in _READ_OPS:
+                    tools.append(_wrap_gmail_tool_empty_guard(t))
+
+        # Custom draft with attachments
+        if "create_gmail_draft" in selected:
+            tools.append(StructuredTool.from_function(
+                func=_make_custom_draft(api_resource),
+                name="create_gmail_draft",
+                description=(
+                    "Create a Gmail draft email. Supports file attachments — "
+                    "pass workspace-relative or absolute file paths in the "
+                    "attachments list. Use this when the user wants to draft "
+                    "an email, optionally with files attached."
+                ),
+                args_schema=_CreateDraftInput,
+            ))
+
+        # Custom send with attachments
+        if "send_gmail_message" in selected:
+            tools.append(StructuredTool.from_function(
+                func=_make_custom_send(api_resource),
+                name="send_gmail_message",
+                description=(
+                    "Send an email via Gmail. Supports file attachments — "
+                    "pass workspace-relative or absolute file paths in the "
+                    "attachments list. Use this when the user wants to send "
+                    "an email, optionally with files attached."
+                ),
+                args_schema=_SendMessageInput,
+            ))
+
+        return tools
 
     def execute(self, query: str) -> str:
         return "Use the individual Gmail operations instead."

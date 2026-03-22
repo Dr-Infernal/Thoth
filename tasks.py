@@ -74,7 +74,9 @@ def _init_db() -> None:
             delivery_target     TEXT,                   -- chat_id or email address
             model_override      TEXT,                   -- null = use global default model
             persistent_thread_id TEXT,                  -- null = fresh thread each run
-            delete_after_run    INTEGER DEFAULT 0       -- 1 = auto-delete after one-shot execution
+            delete_after_run    INTEGER DEFAULT 0,      -- 1 = auto-delete after one-shot execution
+            allowed_commands    TEXT DEFAULT '[]',      -- JSON list of allowed shell command prefixes for background runs
+            allowed_recipients  TEXT DEFAULT '[]'       -- JSON list of allowed email recipients for background runs
         )
     """)
     conn.execute("""
@@ -92,6 +94,17 @@ def _init_db() -> None:
         )
     """)
     # Migrations for pre-existing databases
+    # Migrations for tasks table
+    for col, defn in [
+        ("allowed_commands", "TEXT DEFAULT '[]'"),
+        ("allowed_recipients", "TEXT DEFAULT '[]'"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {defn}")
+            logger.info("Migrated tasks table: added '%s' column", col)
+        except Exception:
+            pass  # column already exists
+
     for col, defn in [
         ("status_message", "TEXT DEFAULT ''"),
         ("task_name", "TEXT DEFAULT ''"),
@@ -314,6 +327,7 @@ def update_task(task_id: str, **kwargs) -> None:
         "notify_only", "notify_label", "enabled", "sort_order", "last_run",
         "delivery_channel", "delivery_target", "model_override",
         "persistent_thread_id", "delete_after_run",
+        "allowed_commands", "allowed_recipients",
     }
 
     # ── Validate delivery if either field is being changed ───────────
@@ -329,7 +343,7 @@ def update_task(task_id: str, **kwargs) -> None:
     for key, value in kwargs.items():
         if key not in _ALLOWED:
             continue
-        if key == "prompts":
+        if key in ("prompts", "allowed_commands", "allowed_recipients"):
             value = json.dumps(value)
         if key in ("notify_only", "delete_after_run"):
             value = int(value)
@@ -382,6 +396,8 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["notify_only"] = bool(d.get("notify_only", 0))
     d["delete_after_run"] = bool(d.get("delete_after_run", 0))
     d["enabled"] = bool(d.get("enabled", 1))
+    d["allowed_commands"] = json.loads(d.get("allowed_commands") or "[]")
+    d["allowed_recipients"] = json.loads(d.get("allowed_recipients") or "[]")
     return d
 
 
@@ -524,7 +540,7 @@ def _validate_delivery(channel: str | None, target: str | None) -> None:
     """
     if not channel and not target:
         return  # no delivery — valid
-    if channel and not target:
+    if channel and not target and channel != "telegram":
         raise ValueError(
             f"delivery_channel is '{channel}' but delivery_target is empty."
         )
@@ -537,12 +553,9 @@ def _validate_delivery(channel: str | None, target: str | None) -> None:
             f"delivery_channel must be 'telegram' or 'email', got '{channel}'."
         )
     if channel == "telegram":
-        try:
-            int(target)
-        except (ValueError, TypeError):
-            raise ValueError(
-                f"Telegram delivery_target must be a numeric chat ID, got '{target}'."
-            )
+        # Telegram always uses the configured TELEGRAM_USER_ID at delivery
+        # time — no target field needed. Just verify the bot is configured.
+        pass
     elif channel == "email":
         if "@" not in target or "." not in target.split("@", 1)[-1]:
             raise ValueError(
@@ -562,20 +575,25 @@ def _deliver_to_channel(task: dict, text: str) -> tuple[str, str]:
     """
     channel = task.get("delivery_channel")
     target = task.get("delivery_target")
-    if not channel or not target:
+    if not channel:
         return "", ""
     try:
         if channel == "telegram":
-            from channels.telegram import send_outbound
+            from channels.telegram import send_outbound, _get_allowed_user_id
+            user_id = _get_allowed_user_id()
+            if user_id is None:
+                raise RuntimeError("TELEGRAM_USER_ID is not configured")
             prefix = f"📋 {task['name']}\n\n"
-            send_outbound(int(target), prefix + text)
+            send_outbound(user_id, prefix + text)
         elif channel == "email":
+            if not target:
+                raise ValueError("Email delivery_target is empty")
             from channels.email import send_outbound
             send_outbound(target, f"FromThoth: {task['name']}", text)
         logger.info(
             "Delivery to %s succeeded for task %s", channel, task["name"],
         )
-        return "delivered", f"Delivered to {channel} ({target})"
+        return "delivered", f"Delivered to {channel}"
     except Exception as exc:
         logger.warning(
             "Delivery to %s failed for task %s: %s",
@@ -663,8 +681,8 @@ def run_task_background(
         last_response = ""
 
         try:
-            from agent import _tlocal
-            _tlocal.background_workflow = True
+            from agent import _background_workflow_var
+            _background_workflow_var.set(True)
 
             config = {
                 "configurable": {"thread_id": thread_id},
@@ -674,6 +692,19 @@ def run_task_background(
             # Model override
             if task.get("model_override"):
                 config["configurable"]["model_override"] = task["model_override"]
+
+            # Task-scoped permissions — propagate via ContextVars
+            # so tools can check them at runtime.
+            from agent import (
+                _task_allowed_commands_var,
+                _task_allowed_recipients_var,
+            )
+            _task_allowed_commands_var.set(
+                task.get("allowed_commands") or []
+            )
+            _task_allowed_recipients_var.set(
+                task.get("allowed_recipients") or []
+            )
 
             for i in range(start_step, total):
                 with _active_lock:

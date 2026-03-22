@@ -139,11 +139,20 @@ def _extract_from_conversation(conversation_text: str) -> list[dict]:
         # Validate each entry
         valid = []
         for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            # Entity object: has category + subject + content
             if (
-                isinstance(entry, dict)
-                and entry.get("category")
+                entry.get("category")
                 and entry.get("subject")
                 and entry.get("content")
+            ):
+                valid.append(entry)
+            # Relation object: has relation_type + source_subject + target_subject
+            elif (
+                entry.get("relation_type")
+                and entry.get("source_subject")
+                and entry.get("target_subject")
             ):
                 valid.append(entry)
         return valid
@@ -153,20 +162,33 @@ def _extract_from_conversation(conversation_text: str) -> list[dict]:
 
 
 def _dedup_and_save(extracted: list[dict]) -> int:
-    """Save extracted memories, deduplicating against existing ones.
+    """Save extracted memories and relations, deduplicating against existing ones.
 
     Uses ``find_by_subject(category=None, ...)`` — a deterministic SQL
     lookup by normalised subject across **all** categories.  This avoids
     duplicates when the extraction LLM classifies a fact into a different
     category than the live tool did (e.g. ``event/dad`` vs ``person/Dad``).
 
-    Returns the number of new/updated memories.
+    Also processes extracted ``relations`` — connecting entities that
+    the LLM identified as related.
+
+    Returns the number of new/updated memories + relations.
     """
     from memory import save_memory, find_by_subject, update_memory, VALID_CATEGORIES
+    import knowledge_graph as kg
 
     saved_count = 0
+
+    # ── Pass 1: save/update entities and build a subject→id map ──────
+    subject_to_id: dict[str, str] = {}
+
+    # Pre-populate the map with the "User" entity if it exists
+    user_entity = find_by_subject(None, "User")
+    if user_entity:
+        subject_to_id[kg._normalize_subject("User")] = user_entity["id"]
+
     for entry in extracted:
-        category = entry["category"].lower().strip()
+        category = entry.get("category", "").lower().strip()
         if category not in VALID_CATEGORIES:
             continue
         subject = entry["subject"].strip()
@@ -174,15 +196,43 @@ def _dedup_and_save(extracted: list[dict]) -> int:
         if not subject or not content:
             continue
 
+        # Extract optional aliases from the LLM output (may be str or list)
+        raw_aliases = entry.get("aliases", "")
+        if isinstance(raw_aliases, list):
+            raw_aliases = ", ".join(str(a) for a in raw_aliases)
+        new_aliases = (raw_aliases or "").strip()
+
         # Check for existing memory with same subject (any category)
         existing = find_by_subject(None, subject)
 
         if existing:
+            subject_to_id[kg._normalize_subject(subject)] = existing["id"]
+
+            # Merge aliases if the LLM provided new ones
+            update_kwargs: dict = {}
+            if new_aliases:
+                old_aliases = existing.get("aliases", "") or ""
+                old_set = {a.strip().lower() for a in old_aliases.split(",") if a.strip()}
+                new_set = {a.strip() for a in new_aliases.split(",") if a.strip()}
+                to_add = [a for a in new_set if a.lower() not in old_set]
+                if to_add:
+                    merged = (old_aliases + ", " + ", ".join(to_add)).strip(", ")
+                    update_kwargs["aliases"] = merged
+                    # Also register each new alias in the subject→id map
+                    for alias in to_add:
+                        subject_to_id[kg._normalize_subject(alias)] = existing["id"]
+
             # Memory about this subject already exists — only update if
             # the extracted content is richer than what we have.
-            if len(content) > len(existing.get("content", "")):
+            if len(content) > len(existing.get("content", "")) or update_kwargs:
                 try:
-                    update_memory(existing["id"], content, source="extraction")
+                    new_content = content if len(content) > len(existing.get("content", "")) else None
+                    update_memory(
+                        existing["id"],
+                        new_content or existing["content"],
+                        source="extraction",
+                        **update_kwargs,
+                    )
                     saved_count += 1
                     logger.info(
                         "Updated memory %s (%s) via extraction",
@@ -190,15 +240,71 @@ def _dedup_and_save(extracted: list[dict]) -> int:
                     )
                 except Exception as exc:
                     logger.debug("Failed to update memory: %s", exc)
-            # else: existing content is already richer, skip
+            # else: existing content is already richer and no alias update needed
         else:
             # No match — save as new
             try:
-                save_memory(category, subject, content, source="extraction")
+                result = save_memory(
+                    category, subject, content,
+                    tags="", source="extraction",
+                )
+                subject_to_id[kg._normalize_subject(subject)] = result["id"]
+
+                # If we created a new entity with aliases, update it
+                if new_aliases:
+                    try:
+                        update_memory(result["id"], content, aliases=new_aliases, source="extraction")
+                        for alias in new_aliases.split(","):
+                            alias = alias.strip()
+                            if alias:
+                                subject_to_id[kg._normalize_subject(alias)] = result["id"]
+                    except Exception:
+                        pass
+
                 saved_count += 1
                 logger.info("Auto-saved memory: [%s] %s", category, subject)
             except Exception as exc:
                 logger.debug("Failed to save memory: %s", exc)
+
+    # ── Pass 2: save extracted relations ─────────────────────────────
+    relations = [e for e in extracted if e.get("relation_type")]
+    for rel in relations:
+        src_subj = kg._normalize_subject(rel.get("source_subject", "").strip())
+        tgt_subj = kg._normalize_subject(rel.get("target_subject", "").strip())
+        rel_type = rel.get("relation_type", "").strip()
+        if not src_subj or not tgt_subj or not rel_type:
+            continue
+
+        # Resolve subjects to entity IDs
+        src_id = subject_to_id.get(src_subj)
+        tgt_id = subject_to_id.get(tgt_subj)
+
+        # Try database lookup if not in our local map
+        if not src_id:
+            found = find_by_subject(None, rel.get("source_subject", "").strip())
+            if found:
+                src_id = found["id"]
+        if not tgt_id:
+            found = find_by_subject(None, rel.get("target_subject", "").strip())
+            if found:
+                tgt_id = found["id"]
+
+        if src_id and tgt_id:
+            try:
+                result = kg.add_relation(
+                    src_id, tgt_id, rel_type,
+                    source="extraction",
+                    confidence=rel.get("confidence", 0.8),
+                )
+                if result:
+                    saved_count += 1
+                    logger.info(
+                        "Auto-linked: %s --[%s]--> %s",
+                        rel.get("source_subject", "?"), rel_type,
+                        rel.get("target_subject", "?"),
+                    )
+            except Exception as exc:
+                logger.debug("Failed to save relation: %s", exc)
 
     return saved_count
 

@@ -681,6 +681,7 @@ async def index():
     <link rel="stylesheet"
           href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="/static/vis-network.min.js"></script>
     <style>
         .thoth-msg pre { overflow-x: auto; max-width: 100%; }
         .thoth-msg a { color: #64b5f6; }
@@ -2248,8 +2249,45 @@ async def index():
                             value=_del_channel,
                         ).classes("w-48")
                         del_tgt_input = ui.input(
-                            "Target (chat ID or email)", value=_del_target,
+                            "Target (email address)", value=_del_target,
                         ).classes("w-full")
+                        # Hide target field for Telegram (uses configured user ID)
+                        del_tgt_input.set_visibility(_del_channel == "email")
+                        del_ch_sel.on_value_change(
+                            lambda e: del_tgt_input.set_visibility(e.value == "email")
+                        )
+
+                    # Background permissions (collapsed)
+                    _allowed_cmds = task.get("allowed_commands", []) if task else []
+                    _allowed_recip = task.get("allowed_recipients", []) if task else []
+                    with ui.expansion("🔒 Background permissions (optional)").classes("w-full"):
+                        ui.label(
+                            "When this task runs in the background, it cannot "
+                            "send emails or run shell commands unless you "
+                            "explicitly allow them here."
+                        ).style("font-size: 0.75rem; color: #666;")
+
+                        ui.label("Allowed email recipients").style(
+                            "font-size: 0.8rem; color: #c0c0d0; margin-top: 8px;"
+                        )
+                        ui.label(
+                            "Email addresses this task may send to (one per line)."
+                        ).style("font-size: 0.7rem; color: #666;")
+                        allowed_recip_input = ui.textarea(
+                            value="\n".join(_allowed_recip),
+                        ).classes("w-full").props('rows="3"')
+
+                        ui.label("Allowed shell commands").style(
+                            "font-size: 0.8rem; color: #c0c0d0; margin-top: 8px;"
+                        )
+                        ui.label(
+                            "Command prefixes this task may run, e.g. 'git pull' "
+                            "or 'python backup.py' (one per line). Permanently "
+                            "blocked commands like rm -rf / are never allowed."
+                        ).style("font-size: 0.7rem; color: #666;")
+                        allowed_cmds_input = ui.textarea(
+                            value="\n".join(_allowed_cmds),
+                        ).classes("w-full").props('rows="3"')
 
                     # Run history (edit mode only)
                     if not is_new:
@@ -2338,9 +2376,19 @@ async def index():
                     cur_desc = desc_input.value.strip()
                     cur_enabled = enabled_switch.value
                     cur_del_ch = del_ch_sel.value or None
-                    cur_del_tgt = del_tgt_input.value.strip() or None
+                    cur_del_tgt = del_tgt_input.value.strip() or None if cur_del_ch == "email" else None
                     _default_label = f"Default ({get_current_model()})"
                     cur_model_ov = model_sel.value if model_sel.value != _default_label else None
+
+                    # Parse background permissions
+                    cur_allowed_cmds = [
+                        ln.strip() for ln in allowed_cmds_input.value.split("\n")
+                        if ln.strip()
+                    ]
+                    cur_allowed_recip = [
+                        ln.strip() for ln in allowed_recip_input.value.split("\n")
+                        if ln.strip()
+                    ]
 
                     try:
                         if is_new:
@@ -2357,12 +2405,19 @@ async def index():
                                 delivery_target=cur_del_tgt,
                                 model_override=cur_model_ov,
                             )
-                            if not cur_enabled:
-                                # Task was just created; we need its ID to disable
-                                all_t = list_tasks()
-                                if all_t:
-                                    newest = all_t[-1]
-                                    update_task(newest["id"], enabled=False)
+                            # Set permissions after creation (they're not in create_task signature)
+                            all_t = list_tasks()
+                            if all_t:
+                                newest = all_t[-1]
+                                perm_updates = {}
+                                if cur_allowed_cmds:
+                                    perm_updates["allowed_commands"] = cur_allowed_cmds
+                                if cur_allowed_recip:
+                                    perm_updates["allowed_recipients"] = cur_allowed_recip
+                                if not cur_enabled:
+                                    perm_updates["enabled"] = False
+                                if perm_updates:
+                                    update_task(newest["id"], **perm_updates)
                             ui.notify("✅ Task created", type="positive")
                         else:
                             updates = {}
@@ -2384,6 +2439,10 @@ async def index():
                                 updates["delivery_target"] = cur_del_tgt
                             if cur_model_ov != (task.get("model_override") or None):
                                 updates["model_override"] = cur_model_ov
+                            if cur_allowed_cmds != (task.get("allowed_commands") or []):
+                                updates["allowed_commands"] = cur_allowed_cmds
+                            if cur_allowed_recip != (task.get("allowed_recipients") or []):
+                                updates["allowed_recipients"] = cur_allowed_recip
 
                             if updates:
                                 update_task(task["id"], **updates)
@@ -2782,7 +2841,7 @@ async def index():
             "filesystem", "shell", "gmail", "documents", "calendar", "timer",
             "url_reader", "calculator", "weather", "vision", "chart",
             "system_info", "conversation_search", "memory", "tracker",
-            "browser",
+            "browser", "telegram",
         }
         for tool in tool_registry.get_all_tools():
             if tool.name in skip_tools:
@@ -3340,16 +3399,17 @@ async def index():
             ui.label("No trackers yet. Start tracking by chatting with Thoth!").classes("text-grey-6 mt-2")
 
     def _build_memory_tab() -> None:
+        import knowledge_graph as kg
+
         ui.label("🧠 Memory").classes("text-h6")
         ui.label(
-            "Thoth can remember personal details you share across conversations — "
-            "names, birthdays, preferences, important facts, and more. Memories "
-            "are stored locally and never sent to any cloud service. "
-            "The agent saves memories automatically when you share something "
-            "worth remembering. Memories are searchable via semantic similarity, "
-            "so the agent can find relevant memories even when you don't use "
-            "the exact same words. You can also ask it to recall, update, or "
-            "forget specific memories in chat."
+            "Thoth builds a memory map from your conversations — a connected "
+            "web of people, places, facts, preferences, events, and projects. "
+            "Everything is stored locally and never sent to any cloud service. "
+            "Memories and connections are saved automatically. You can search "
+            "by meaning, and related memories are surfaced through the memory "
+            "graph. Ask the agent to recall, update, link, explore, or forget "
+            "memories in chat."
         ).classes("text-grey-6 text-sm")
 
         mem_tool = tool_registry.get_tool("memory")
@@ -3361,8 +3421,35 @@ async def index():
             ).tooltip("When enabled, the agent can save and recall long-term memories.")
 
         ui.separator()
+
+        # ── Graph stats ──────────────────────────────────────────────
         total = memory_db.count_memories()
-        ui.label(f"Stored memories: {total}").classes("font-bold")
+        rel_count = kg.count_relations()
+
+        with ui.row().classes("gap-6"):
+            ui.label(f"Entities: {total}").classes("font-bold")
+            ui.label(f"Relations: {rel_count}").classes("font-bold")
+
+        # Show type breakdown if there are entities
+        if total > 0:
+            try:
+                stats = kg.get_graph_stats()
+                type_parts = [f"{t}: {c}" for t, c in sorted(stats.get("entity_types", {}).items())]
+                if type_parts:
+                    ui.label(f"Types — {', '.join(type_parts)}").classes("text-xs text-grey-6")
+                if stats.get("connected_components", 0) > 0:
+                    ui.label(
+                        f"Memory graph — {stats['connected_components']} component(s), "
+                        f"largest: {stats['largest_component']} memories, "
+                        f"{stats['isolated_entities']} isolated"
+                    ).classes("text-xs text-grey-6")
+                if stats.get("relation_types"):
+                    rel_parts = [f"{t}: {c}" for t, c in sorted(stats["relation_types"].items())]
+                    ui.label(f"Relation types — {', '.join(rel_parts)}").classes("text-xs text-grey-6")
+            except Exception:
+                pass
+
+        ui.separator()
 
         if total > 0:
             cat_options = ["All"] + sorted(memory_db.VALID_CATEGORIES)
@@ -3383,11 +3470,34 @@ async def index():
                         ui.label("No matching memories.").classes("text-grey-6")
                     else:
                         for mem in memories:
-                            with ui.expansion(f"**{mem['subject']}** — _{mem['category']}_").classes("w-full"):
-                                ui.markdown(mem["content"], extras=['code-friendly', 'fenced-code-blocks', 'tables'])
+                            with ui.expansion(f"**{mem['subject']}** — _{mem.get('category', mem.get('entity_type', ''))}_").classes("w-full"):
+                                content = mem.get("content", mem.get("description", ""))
+                                ui.markdown(content, extras=['code-friendly', 'fenced-code-blocks', 'tables'])
+
+                                # Show aliases if present
+                                aliases = mem.get("aliases", "")
+                                if aliases:
+                                    ui.label(f"Aliases: {aliases}").classes("text-xs text-grey-6")
+
                                 tags = mem.get("tags", "")
                                 if tags:
                                     ui.label(f"Tags: {tags}").classes("text-xs text-grey-6")
+
+                                # Show relations count
+                                try:
+                                    rels = kg.get_relations(mem["id"])
+                                    if rels:
+                                        rel_lines = []
+                                        for r in rels[:5]:
+                                            arrow = "→" if r["direction"] == "outgoing" else "←"
+                                            rel_lines.append(f"{arrow} {r['relation_type']}: {r['peer_subject']}")
+                                        rel_text = " · ".join(rel_lines)
+                                        if len(rels) > 5:
+                                            rel_text += f" … +{len(rels) - 5} more"
+                                        ui.label(f"🔗 {rel_text}").classes("text-xs text-blue-4")
+                                except Exception:
+                                    pass
+
                                 ui.label(
                                     f"ID: {mem['id']} · Created: {mem['created_at'][:16]} · Updated: {mem['updated_at'][:16]}"
                                 ).classes("text-xs text-grey-6")
@@ -3597,6 +3707,27 @@ async def index():
         with ui.row().classes("gap-2"):
             ui.button("▶️ Start Bot", on_click=_start_tg).props("color=positive")
             ui.button("⏹️ Stop Bot", on_click=_stop_tg).props("color=negative flat")
+
+        ui.separator()
+
+        # ── Telegram Tool (outbound messaging) ──────────────────────
+        tg_tool = tool_registry.get_tool("telegram")
+        if tg_tool:
+            ui.label("Outbound Messaging").classes("text-subtitle2 mt-2")
+            ui.label(
+                "Enable the agent to send messages, photos, and files to your "
+                "Telegram. When enabled, Thoth can proactively push information "
+                "to your phone when you ask."
+            ).classes("text-grey-6 text-sm")
+
+            ui.switch(
+                "Enable Telegram tool",
+                value=tool_registry.is_enabled("telegram"),
+                on_change=lambda e: (
+                    tool_registry.set_enabled("telegram", e.value),
+                    clear_agent_cache(),
+                ),
+            ).tooltip(tg_tool.description)
 
         ui.separator().classes("mt-6")
 
@@ -4140,6 +4271,320 @@ async def index():
                         "text-grey-6 text-sm q-ml-sm"
                     )
 
+    # ── Knowledge Graph visualization panel ──────────────────────────────
+
+    def _build_graph_panel() -> None:
+        """Interactive knowledge graph explorer using vis-network."""
+        import knowledge_graph as kg
+        import json as _json
+
+        data = kg.graph_to_vis_json()
+        stats = data["stats"]
+
+        if stats["total_entities"] == 0:
+            with ui.column().classes("w-full h-full items-center justify-center"):
+                ui.icon("hub").classes("text-grey-6").style("font-size: 4rem; opacity: 0.4;")
+                ui.label(
+                    "Your memory map will appear here as Thoth learns about you."
+                ).classes("text-grey-6 text-center q-mt-md").style("max-width: 360px;")
+            return
+
+        nodes_json = _json.dumps(data["nodes"])
+        edges_json = _json.dumps(data["edges"])
+        center_id = _json.dumps(data["center"])
+        type_colors = _json.dumps(kg._VIS_TYPE_COLORS)
+
+        # ── Controls bar ─────────────────────────────────────────────
+        with ui.row().classes("w-full items-center gap-2 q-px-sm q-py-xs shrink-0").style(
+            "border-bottom: 1px solid rgba(255,255,255,0.08);"
+        ):
+            # Search input
+            ui.html(
+                '<input id="graph-search" type="text" placeholder="Search entities…" '
+                'style="background: #1e1e2e; border: 1px solid #444; border-radius: 6px; '
+                'padding: 4px 10px; color: #eee; font-size: 0.85rem; width: 200px; '
+                'outline: none;" />',
+                sanitize=False,
+            )
+
+            # Type filter pills
+            ui.html(
+                '<div id="graph-type-filters" style="display:flex; gap:4px; flex-wrap:wrap;"></div>',
+                sanitize=False,
+            )
+
+            # Spacer
+            ui.html('<div style="flex-grow:1;"></div>', sanitize=False)
+
+            # Stats badge
+            ui.html(
+                f'<span id="graph-stats-label" style="font-size:0.75rem; color:#9E9E9E;">'
+                f'{stats["shown_nodes"]} memories · {stats["shown_edges"]} connections'
+                f'</span>',
+                sanitize=False,
+            )
+
+            # Fit button
+            ui.html(
+                '<button id="graph-fit-btn" title="Fit to view" '
+                'style="background:none; border:1px solid #555; border-radius:4px; '
+                'color:#ccc; padding:2px 8px; cursor:pointer; font-size:0.8rem;">'
+                '⊞ Fit</button>',
+                sanitize=False,
+            )
+
+            # Full graph toggle
+            ui.html(
+                '<label style="display:flex; align-items:center; gap:4px; font-size:0.8rem; color:#ccc; cursor:pointer;">'
+                '<input type="checkbox" id="graph-full-toggle" checked '
+                'style="accent-color:#FFD54F;" /> Full map</label>',
+                sanitize=False,
+            )
+
+        # ── vis-network canvas + overlay detail card ─────────────────
+        ui.html(
+            '<div style="position:relative; width:100%; height:100%;">'
+            '<div id="graph-container" style="width:100%; height:100%; background:#121212;"></div>'
+            '<div id="graph-detail" style="display:none; position:absolute; bottom:8px; right:12px; '
+            'padding:8px 12px; background:rgba(26,26,46,0.95); border:1px solid rgba(255,255,255,0.1); '
+            'border-radius:8px; font-size:0.85rem; color:#ccc; max-height:140px; max-width:380px; '
+            'overflow-y:auto; z-index:10; backdrop-filter:blur(6px); box-sizing:border-box;"></div>'
+            '</div>',
+            sanitize=False,
+        ).style("flex:1; min-height:0; width:100%;")
+
+        # ── vis-network graph logic (executed via run_javascript, no persistent script tags) ──
+        _graph_js = (
+            '(function() {'
+            # ── Teardown: cancel stale boot timers, destroy old network ──
+            '  clearTimeout(window._thothGraphBootTimer || 0);'
+            '  if (window._thothGraph) {'
+            '    try { window._thothGraph.network && window._thothGraph.network.destroy(); } catch(e) {}'
+            '    window._thothGraph = null;'
+            '  }'
+            # ── State stored on window so it survives across calls ──
+            '  var G = window._thothGraph = {'
+            '    allNodes: ' + nodes_json + ','
+            '    allEdges: ' + edges_json + ','
+            '    centerId: ' + center_id + ','
+            '    typeColors: ' + type_colors + ','
+            '    network: null,'
+            '    currentNodes: null,'
+            '    currentEdges: null,'
+            '    activeFilters: new Set(),'
+            '    isFullGraph: true,'
+            '    searchDebounce: null'
+            '  };'
+            '  G.currentNodes = G.allNodes;'
+            '  G.currentEdges = G.allEdges;'
+            # ── createNetwork ──
+            '  G.createNetwork = function(nodes, edges, focusId) {'
+            '    var container = document.getElementById("graph-container");'
+            '    if (!container) return;'
+            '    var data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };'
+            '    var options = {'
+            '      physics: {'
+            '        solver: "forceAtlas2Based",'
+            '        forceAtlas2Based: { gravitationalConstant: -40, centralGravity: 0.005,'
+            '          springLength: 120, springConstant: 0.06, damping: 0.4 },'
+            '        stabilization: { iterations: 150, fit: true }'
+            '      },'
+            '      nodes: { shape: "dot", borderWidth: 1, borderWidthSelected: 3, font: { size: 12 } },'
+            '      edges: { smooth: { type: "continuous" }, width: 1, selectionWidth: 2,'
+            '        font: { color: "transparent", strokeColor: "transparent", size: 11 } },'
+            '      interaction: { hover: true, tooltipDelay: 200, hideEdgesOnDrag: true, multiselect: false }'
+            '    };'
+            '    if (G.network) { try { G.network.destroy(); } catch(e) {} }'
+            '    G.network = new vis.Network(container, data, options);'
+            # edge hover/blur
+            '    G.network.on("hoverEdge", function(p) {'
+            '      data.edges.update({ id: p.edge, font: { color: "#ccc", strokeColor: "#222" } });'
+            '    });'
+            '    G.network.on("blurEdge", function(p) {'
+            '      data.edges.update({ id: p.edge, font: { color: "transparent", strokeColor: "transparent" } });'
+            '    });'
+            # stabilization focus
+            '    G.network.once("stabilizationIterationsDone", function() {'
+            '      if (focusId) { G.network.focus(focusId, { scale: 1.0, animation: true }); }'
+            '      else { G.network.fit({ animation: true }); }'
+            '    });'
+            # click → detail card
+            '    G.network.on("click", function(params) {'
+            '      var detail = document.getElementById("graph-detail");'
+            '      if (!detail) return;'
+            '      if (params.nodes.length === 0) { detail.style.display = "none"; return; }'
+            '      var nid = params.nodes[0];'
+            '      var node = nodes.find(function(n) { return n.id === nid; });'
+            '      if (!node) { detail.style.display = "none"; return; }'
+            '      var rels = edges.filter(function(e) { return e.from === nid || e.to === nid; });'
+            '      var relHtml = "";'
+            '      if (rels.length > 0) {'
+            '        var relItems = rels.slice(0, 10).map(function(e) {'
+            '          var other = e.from === nid'
+            '            ? nodes.find(function(n) { return n.id === e.to; })'
+            '            : nodes.find(function(n) { return n.id === e.from; });'
+            '          var dir = e.from === nid ? "\u2192" : "\u2190";'
+            '          return "<span style=\\"color:#888;\\">" + dir + "</span> "'
+            '            + "<b>" + (e.label || "related") + "</b> "'
+            '            + (other ? other.label : "?");'
+            '        }).join("<br>");'
+            '        relHtml = "<div style=\\"margin-top:4px;\\">" + relItems'
+            '          + (rels.length > 10 ? "<br><i>\u2026and " + (rels.length - 10) + " more</i>" : "")'
+            '          + "</div>";'
+            '      }'
+            '      var aliases = node._aliases ? "<div style=\\"color:#999; font-size:0.8rem;\\">Aliases: " + node._aliases + "</div>" : "";'
+            '      var tags = node._tags ? "<div style=\\"color:#999; font-size:0.8rem;\\">Tags: " + node._tags + "</div>" : "";'
+            '      detail.innerHTML ='
+            '        "<div style=\\"display:flex; align-items:center; gap:8px;\\">"'
+            '        + "<span style=\\"background:" + node.color + "; width:10px; height:10px;"'
+            '        + " border-radius:50%; display:inline-block;\\"></span>"'
+            '        + "<b style=\\"color:#eee; font-size:1rem;\\">" + node.label + "</b>"'
+            '        + "<span style=\\"color:#888; font-size:0.8rem;\\">(" + (node._type || "?") + ")</span>"'
+            '        + "<span style=\\"color:#666; font-size:0.75rem; margin-left:auto;\\">"'
+            '        + node._degree + " connections</span>"'
+            '        + "</div>"'
+            '        + (node._description ? "<div style=\\"margin-top:4px; color:#bbb;\\">" + node._description + "</div>" : "")'
+            '        + aliases + tags + relHtml;'
+            '      detail.style.display = "block";'
+            '    });'
+            # double-click → ego graph
+            '    G.network.on("doubleClick", function(params) {'
+            '      if (params.nodes.length === 0) return;'
+            '      G.refocusOnNode(params.nodes[0]);'
+            '    });'
+            '    return G.network;'
+            '  };'
+            # ── refocusOnNode: 2-hop BFS ──
+            '  G.refocusOnNode = function(nodeId) {'
+            '    var hops = 2, visited = new Set([nodeId]), frontier = [nodeId];'
+            '    for (var h = 0; h < hops; h++) {'
+            '      var next = [];'
+            '      for (var fi = 0; fi < frontier.length; fi++) {'
+            '        var fid = frontier[fi];'
+            '        for (var ei = 0; ei < G.allEdges.length; ei++) {'
+            '          var e = G.allEdges[ei];'
+            '          if (e.from === fid && !visited.has(e.to)) { visited.add(e.to); next.push(e.to); }'
+            '          if (e.to === fid && !visited.has(e.from)) { visited.add(e.from); next.push(e.from); }'
+            '        }'
+            '      }'
+            '      frontier = next;'
+            '    }'
+            '    var subNodes = G.allNodes.filter(function(n) { return visited.has(n.id); });'
+            '    var subEdges = G.allEdges.filter(function(e) { return visited.has(e.from) && visited.has(e.to); });'
+            '    G.currentNodes = subNodes; G.currentEdges = subEdges; G.isFullGraph = false;'
+            '    var toggle = document.getElementById("graph-full-toggle");'
+            '    if (toggle) toggle.checked = false;'
+            '    G.updateStatsLabel(subNodes.length, subEdges.length);'
+            '    G.createNetwork(subNodes, subEdges, nodeId);'
+            '  };'
+            # ── buildFilterPills ──
+            '  G.buildFilterPills = function() {'
+            '    var container = document.getElementById("graph-type-filters");'
+            '    if (!container) return;'
+            '    var typeSet = new Set(G.allNodes.map(function(n) { return n._type; }));'
+            '    var types = Array.from(typeSet).sort();'
+            '    container.innerHTML = "";'
+            '    for (var i = 0; i < types.length; i++) {'
+            '      (function(t) {'
+            '        var color = G.typeColors[t] || "#B0BEC5";'
+            '        var pill = document.createElement("button");'
+            '        pill.textContent = t; pill.dataset.type = t;'
+            '        pill.style.cssText = "border:1px solid " + color + "; background:none;"'
+            '          + " border-radius:12px; padding:1px 8px; font-size:0.72rem;"'
+            '          + " color:" + color + "; cursor:pointer; transition:all 0.2s;";'
+            '        pill.onclick = function() {'
+            '          if (G.activeFilters.has(t)) {'
+            '            G.activeFilters.delete(t); pill.style.background = "none"; pill.style.color = color;'
+            '          } else {'
+            '            G.activeFilters.add(t); pill.style.background = color; pill.style.color = "#121212";'
+            '          }'
+            '          G.applyFilters();'
+            '        };'
+            '        container.appendChild(pill);'
+            '      })(types[i]);'
+            '    }'
+            '  };'
+            # ── applyFilters ──
+            '  G.applyFilters = function() {'
+            '    var searchVal = (document.getElementById("graph-search") || {}).value || "";'
+            '    searchVal = searchVal.toLowerCase();'
+            '    var filtered = G.allNodes;'
+            '    if (G.activeFilters.size > 0) {'
+            '      filtered = filtered.filter(function(n) { return G.activeFilters.has(n._type); });'
+            '    }'
+            '    if (searchVal) {'
+            '      filtered = filtered.filter(function(n) {'
+            '        return n.label.toLowerCase().indexOf(searchVal) >= 0'
+            '          || (n._description || "").toLowerCase().indexOf(searchVal) >= 0'
+            '          || (n._aliases || "").toLowerCase().indexOf(searchVal) >= 0'
+            '          || (n._tags || "").toLowerCase().indexOf(searchVal) >= 0;'
+            '      });'
+            '    }'
+            '    var nodeIds = new Set(filtered.map(function(n) { return n.id; }));'
+            '    var filteredEdges = G.allEdges.filter(function(e) { return nodeIds.has(e.from) && nodeIds.has(e.to); });'
+            '    G.currentNodes = filtered; G.currentEdges = filteredEdges;'
+            '    G.updateStatsLabel(filtered.length, filteredEdges.length);'
+            '    G.createNetwork(filtered, filteredEdges, null);'
+            '  };'
+            # ── updateStatsLabel ──
+            '  G.updateStatsLabel = function(nodeCount, edgeCount) {'
+            '    var el = document.getElementById("graph-stats-label");'
+            '    if (el) el.textContent = nodeCount + " memories \u00b7 " + edgeCount + " connections";'
+            '  };'
+            # ── wireControls: attach event handlers to DOM elements ──
+            '  G.wireControls = function() {'
+            '    G.buildFilterPills();'
+            # search input
+            '    var searchInput = document.getElementById("graph-search");'
+            '    if (searchInput) {'
+            '      searchInput.oninput = function() {'
+            '        clearTimeout(G.searchDebounce);'
+            '        G.searchDebounce = setTimeout(function() { G.applyFilters(); }, 300);'
+            '      };'
+            '    }'
+            # fit button
+            '    var fitBtn = document.getElementById("graph-fit-btn");'
+            '    if (fitBtn) {'
+            '      fitBtn.onclick = function() { if (G.network) G.network.fit({ animation: true }); };'
+            '    }'
+            # full graph toggle
+            '    var fullToggle = document.getElementById("graph-full-toggle");'
+            '    if (fullToggle) {'
+            '      fullToggle.onchange = function() {'
+            '        if (fullToggle.checked) {'
+            '          G.isFullGraph = true; G.currentNodes = G.allNodes; G.currentEdges = G.allEdges;'
+            '          G.activeFilters.clear();'
+            '          var si = document.getElementById("graph-search"); if (si) si.value = "";'
+            '          document.querySelectorAll("#graph-type-filters button").forEach(function(b) {'
+            '            var c = G.typeColors[b.dataset.type] || "#B0BEC5";'
+            '            b.style.background = "none"; b.style.color = c;'
+            '          });'
+            '          G.updateStatsLabel(G.allNodes.length, G.allEdges.length);'
+            '          G.createNetwork(G.allNodes, G.allEdges, G.centerId);'
+            '        }'
+            '      };'
+            '    }'
+            '  };'
+            # ── boot: poll for vis lib + DOM, then full init ──
+            '  function boot() {'
+            '    if (typeof vis === "undefined" || !document.getElementById("graph-container")) {'
+            '      window._thothGraphBootTimer = setTimeout(boot, 100);'
+            '      return;'
+            '    }'
+            '    G.wireControls();'
+            '    G.createNetwork(G.allNodes, G.allEdges, G.centerId);'
+            # expose redraw: full reinit (pills + handlers + network)
+            '    window.thothGraphRedraw = function() {'
+            '      if (!document.getElementById("graph-container")) return;'
+            '      G.wireControls();'
+            '      G.createNetwork(G.currentNodes, G.currentEdges, null);'
+            '    };'
+            '  }'
+            '  boot();'
+            '})();'
+        )
+        ui.run_javascript(_graph_js)
+
     # ── Home screen ──────────────────────────────────────────────────────
 
     def _build_home() -> None:
@@ -4156,10 +4601,19 @@ async def index():
             "align=center"
         ).style("border-bottom: 1px solid rgba(255,255,255,0.08);") as home_tabs:
             tasks_tab = ui.tab("Tasks", icon="bolt")
+            graph_tab = ui.tab("Memory", icon="psychology")
             activity_tab = ui.tab("Activity", icon="assessment")
 
         # ── Tab panels ───────────────────────────────────────────────────
-        with ui.tab_panels(home_tabs, value=tasks_tab).classes(
+        def _on_tab_change(e):
+            if e.value == 'Memory':
+                ui.run_javascript(
+                    'setTimeout(function() {'
+                    '  if (window.thothGraphRedraw) window.thothGraphRedraw();'
+                    '}, 50);'
+                )
+
+        with ui.tab_panels(home_tabs, value=tasks_tab, on_change=_on_tab_change).classes(
             "w-full flex-grow"
         ).style("overflow: hidden;"):
 
@@ -4312,6 +4766,12 @@ async def index():
                         ui.label("No tasks yet — click + New Task to get started.").classes(
                             "text-grey-6 text-sm q-mt-sm"
                         )
+
+            # ── Graph panel ───────────────────────────────────────────
+            with ui.tab_panel(graph_tab).classes("h-full").style(
+                "padding: 0; overflow: hidden; display: flex; flex-direction: column;"
+            ):
+                _build_graph_panel()
 
             # ── Activity panel ───────────────────────────────────────────
             with ui.tab_panel(activity_tab).classes("h-full").style("padding: 0;"):
@@ -4751,6 +5211,11 @@ async def on_startup():
 # ═════════════════════════════════════════════════════════════════════════════
 
 if __name__ in {"__main__", "__mp_main__"}:
+    # Serve bundled JS libraries from static/
+    _static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    if os.path.isdir(_static_dir):
+        app.add_static_files("/static", _static_dir)
+
     # --native  → open in a native OS window (pywebview) instead of browser
     # --show   → open a browser tab (for development / fallback)
     _native = "--native" in sys.argv

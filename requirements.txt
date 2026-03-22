@@ -20,6 +20,9 @@ huggingface_hub
 transformers
 tokenizers
 
+# ── Knowledge Graph ─────────────────────────────────────────────────────────
+networkx
+
 # ── PyTorch (CPU-only for installer; swap for CUDA if GPU available) ────────
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
@@ -73,8 +76,7 @@ mss
 psutil
 
 # ── Charts & Visualisation ───────────────────────────────────────────────────
-plotly
-
+plotlykaleido
 # ── Messaging Channels ─────────────────────────────────────────────────────
 python-telegram-bot
 

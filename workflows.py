@@ -285,8 +285,8 @@ def run_workflow_background(
             }
 
         try:
-            from agent import _tlocal
-            _tlocal.background_workflow = True
+            from agent import _background_workflow_var
+            _background_workflow_var.set(True)
 
             config = {
                 "configurable": {"thread_id": thread_id},

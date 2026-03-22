@@ -1,5 +1,5 @@
 ; =============================================================================
-; Thoth v3.5.0 – Inno Setup Script
+; Thoth v3.6.0 – Inno Setup Script
 ; Installer: bundles embedded Python + app source code.
 ; Downloads Ollama and Python packages (incl. Kokoro TTS) at install time.
 ; =============================================================================
@@ -11,7 +11,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "3.5.0"
+#define MyAppVersion   "3.6.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -46,6 +46,7 @@ Source: "..\app_nicegui.py";             DestDir: "{app}\app"; Flags: ignorevers
 Source: "..\agent.py";                 DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\memory.py";                DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\memory_extraction.py";     DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\knowledge_graph.py";       DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\tasks.py";                 DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\models.py";                DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\data_reader.py";            DestDir: "{app}\app"; Flags: ignoreversion
@@ -60,6 +61,9 @@ Source: "..\notifications.py";         DestDir: "{app}\app"; Flags: ignoreversio
 Source: "..\prompts.py";               DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\requirements.txt";         DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\thoth.ico";                DestDir: "{app}\app"; Flags: ignoreversion
+
+; ── Static assets (JS libraries) ──────────────────────────────────────────────
+Source: "..\static\*";                 DestDir: "{app}\app\static"; Flags: ignoreversion
 
 ; ── Sounds ──────────────────────────────────────────────────────────────────────
 Source: "..\sounds\*.wav";              DestDir: "{app}\app\sounds"; Flags: ignoreversion
@@ -87,6 +91,7 @@ Source: "..\tools\memory_tool.py";     DestDir: "{app}\app\tools"; Flags: ignore
 Source: "..\tools\system_info_tool.py"; DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\tracker_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\task_tool.py";       DestDir: "{app}\app\tools"; Flags: ignoreversion
+Source: "..\tools\telegram_tool.py";   DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\url_reader_tool.py"; DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\vision_tool.py";     DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\weather_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
