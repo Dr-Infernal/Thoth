@@ -339,7 +339,21 @@ def _show_splash(port: int = _PORT, timeout: float = 60.0) -> subprocess.Popen |
 # ── Native window (pywebview subprocess) ─────────────────────────────────────
 
 _WINDOW_SCRIPT = r'''
-import sys, webview
+import sys
+
+# macOS: ensure the subprocess registers as a full GUI app so it can
+# receive mouse/keyboard events.  Without this, a window re-opened from
+# pystray renders but doesn't respond to input.
+if sys.platform == "darwin":
+    try:
+        from AppKit import NSApplication, NSApp
+        NSApplication.sharedApplication()
+        NSApp.setActivationPolicy_(0)           # Regular (Dock) app
+        NSApp.activateIgnoringOtherApps_(True)  # Bring to front
+    except Exception:
+        pass
+
+import webview
 url, title = sys.argv[1], sys.argv[2]
 w, h = int(sys.argv[3]), int(sys.argv[4])
 webview.create_window(title, url, width=w, height=h)
