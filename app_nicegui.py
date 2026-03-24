@@ -5754,6 +5754,9 @@ async def index():
             data = await e.file.read()
             name = e.file.name
             p.pending_files.append({"name": name, "data": data})
+            # Reset QUploader so it accepts subsequent drops / picks
+            if hasattr(e, 'sender') and hasattr(e.sender, 'reset'):
+                e.sender.reset()
             with p.file_chips_row:
                 idx = len(p.pending_files) - 1
                 def _remove(i=idx, badge=None):
@@ -5812,10 +5815,36 @@ async def index():
         ''')
 
         # ── Chat input + attach + send + stop ────────────────────────────
+        async def _on_attach():
+            """Attach files — native picker on macOS/native, JS click elsewhere."""
+            if sys.platform == "darwin" and os.environ.get("THOTH_NATIVE") == "1":
+                path = await _browse_file(
+                    title="Attach file",
+                    filetypes=[("Supported files", " ".join(f"*.{e}" for e in _ALLOWED_UPLOAD_SUFFIXES))],
+                )
+                if path and os.path.isfile(path):
+                    name = os.path.basename(path)
+                    data = await run.io_bound(pathlib.Path(path).read_bytes)
+                    p.pending_files.append({"name": name, "data": data})
+                    with p.file_chips_row:
+                        idx = len(p.pending_files) - 1
+                        def _remove(i=idx, badge=None):
+                            if i < len(p.pending_files):
+                                p.pending_files.pop(i)
+                            if badge:
+                                badge.delete()
+                        b = ui.badge(f"📎 {name} ✕", color="grey-8").props("outline")
+                        b.on("click", lambda b=b, i=idx: _remove(i, b))
+                        b.style("cursor: pointer;")
+            else:
+                await ui.run_javascript(
+                    f"document.getElementById('c{_hidden_upload.id}').querySelector('input[type=file]').click()"
+                )
+
         with ui.row().classes("w-full items-end gap-2 shrink-0"):
-            ui.button(icon="attach_file", on_click=lambda: ui.run_javascript(
-                f"document.getElementById('c{_hidden_upload.id}').querySelector('input[type=file]').click()"
-            )).props("flat round dense").tooltip("Attach files")
+            ui.button(icon="attach_file", on_click=_on_attach).props(
+                "flat round dense"
+            ).tooltip("Attach files")
 
             p.chat_input = ui.input(
                 placeholder="Ask anything…",
