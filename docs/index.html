@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>𓁟 Thoth — Personal AI Sovereignty</title>
-    <meta name="description" content="A local-first AI assistant built for personal AI sovereignty. 23 integrated tools, personal knowledge graph with interactive visualization, voice, vision, shell access, browser automation, scheduled tasks, habit tracking, messaging channels — all powered by a local LLM via Ollama. Your models, your data, your rules.">
+    <meta name="description" content="A local-first AI assistant built for personal AI sovereignty. 23 integrated tools, personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, habit tracking, messaging channels. Run everything locally via Ollama, or add opt-in cloud models (GPT-4o, Claude, Gemini) when you need frontier reasoning. Your data stays on your machine either way.">
     <style>
         :root {
             --bg: #0a0e14;
@@ -650,6 +650,7 @@
             .comparison td:first-child { white-space: normal; }
             .features h2, .how-it-works h2, .cta h2,
             .tools-section h2, .comparison h2 { font-size: 1.8rem; }
+            .dual-path-grid { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 480px) {
@@ -658,6 +659,94 @@
             .hero-meta { flex-direction: column; gap: 0.5rem; }
             .comparison th, .comparison td { padding: 0.6rem 0.5rem; }
         }
+
+        /* ── Dual-path section ───────────────────────────── */
+        .dual-path {
+            padding: 6rem 2rem;
+            background: var(--surface);
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .dual-path .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .dual-path h2 {
+            text-align: center;
+            font-size: 2.2rem;
+            font-weight: 700;
+            margin-bottom: 0.6rem;
+        }
+
+        .dual-path .subtitle {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 1.05rem;
+            margin-bottom: 3rem;
+        }
+
+        .dual-path-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        .path-card {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            transition: border-color 0.25s;
+        }
+
+        .path-card:hover { border-color: var(--accent); }
+
+        .path-card .path-icon { font-size: 2.2rem; margin-bottom: 0.8rem; }
+
+        .path-card h3 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .path-card p {
+            font-size: 0.92rem;
+            color: var(--text-muted);
+            line-height: 1.65;
+            margin-bottom: 0.75rem;
+        }
+
+        .path-card ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .path-card ul li {
+            font-size: 0.88rem;
+            color: var(--text-muted);
+            padding: 0.25rem 0;
+        }
+
+        .path-card ul li::before {
+            content: '✓ ';
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .bottom-line {
+            margin-top: 2.5rem;
+            text-align: center;
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            line-height: 1.7;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .bottom-line strong { color: var(--text); }
     </style>
 </head>
 <body>
@@ -670,8 +759,8 @@
             <a href="#tools">Tools</a>
             <a href="#comparison">vs Cloud AI</a>
             <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.6.0/ThothSetup_3.6.0.exe" class="btn-nav">⬇ Windows</a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.6.0/Thoth-3.6.0-macOS.zip" class="btn-nav">⬇ macOS</a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.7.0/ThothSetup_3.7.0.exe" class="btn-nav">⬇ Windows</a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.7.0/Thoth-3.7.0-macOS.zip" class="btn-nav">⬇ macOS</a>
         </div>
     </nav>
 
@@ -681,13 +770,13 @@
         <h1>Meet <span>Thoth</span></h1>
         <p class="subtitle">Personal AI Sovereignty</p>
         <p class="tagline">
-            A local-first AI assistant with 23 integrated tools, a personal knowledge graph with interactive visualization, voice, vision, shell access, browser automation, scheduled tasks, health tracking, and messaging channels — all running on your machine. Your models, your data, your rules.
+            A local-first AI assistant with 23 integrated tools, a personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, health tracking, and messaging channels. Run everything locally via Ollama, or add opt-in cloud models (GPT-4o, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data stays on your machine.
         </p>
         <div class="hero-buttons">
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.6.0/ThothSetup_3.6.0.exe" class="btn btn-primary">
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.7.0/ThothSetup_3.7.0.exe" class="btn btn-primary">
                 ⬇ Download for Windows
             </a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.6.0/Thoth-3.6.0-macOS.zip" class="btn btn-primary">
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.7.0/Thoth-3.7.0-macOS.zip" class="btn btn-primary">
                 ⬇ Download for macOS
             </a>
             <a href="https://github.com/siddsachar/Thoth" class="btn btn-secondary" target="_blank">
@@ -713,64 +802,95 @@
         </div>
     </section>
 
+    <!-- Dual Path: Local + Cloud -->
+    <section class="dual-path" id="dual-path">
+        <div class="container">
+            <h2>Two paths, one assistant</h2>
+            <p class="subtitle">Run local for full privacy, add cloud when you need it — or both at once</p>
+            <div class="dual-path-grid">
+                <div class="path-card">
+                    <div class="path-icon">🏠</div>
+                    <h3>Local Models (Ollama)</h3>
+                    <p>Full privacy — every LLM call runs on your hardware. No data leaves your machine, ever.</p>
+                    <ul>
+                        <li>39 curated models (Qwen, Llama, Gemma, Mistral, DeepSeek, Phi…)</li>
+                        <li>Works fully offline after initial download</li>
+                        <li>Free forever — your hardware, your compute</li>
+                        <li>Default: <code>qwen3:14b</code> (~9 GB, runs well on 16 GB RAM)</li>
+                    </ul>
+                </div>
+                <div class="path-card">
+                    <div class="path-icon">☁️</div>
+                    <h3>Cloud Models (Opt-in)</h3>
+                    <p>Frontier reasoning when you need it — no GPU required. Only the current conversation is sent; memories, files, and history never leave.</p>
+                    <ul>
+                        <li>OpenAI (GPT-4o, o3, GPT-4.1) + OpenRouter (100+ models)</li>
+                        <li>Per-thread &amp; per-task model switching — mix freely</li>
+                        <li>Pay-per-token — pennies per conversation with smart trimming</li>
+                        <li>Star favourite models for quick access</li>
+                    </ul>
+                </div>
+            </div>
+            <p class="bottom-line">
+                <strong>Bottom line:</strong> Cloud AI assistants rent you access to someone else's system. Thoth gives you <strong>personal AI sovereignty</strong> — run local models for full privacy, add cloud when you need it, and keep your data on your machine either way.
+            </p>
+            <p class="bottom-line" style="margin-top: 1rem;">
+                Start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
+            </p>
+        </div>
+    </section>
+
     <!-- Features -->
     <section class="features" id="features">
         <div class="container">
-            <h2>Everything runs locally</h2>
-            <p class="subtitle">No cloud dependencies. No subscriptions. No data leaving your machine.</p>
+            <h2>Everything you need, built in</h2>
+            <p class="subtitle">Local-first by design. Cloud-ready when you want it. Your data stays on your machine.</p>
             <div class="features-grid">
                 <div class="feature-card">
                     <div class="icon">🔒</div>
-                    <h3>100% Local AI</h3>
-                    <p>Every LLM call, every voice transcription, every memory lookup runs on your hardware. No data is sent to any cloud AI provider — ever. External APIs are opt-in and individually toggleable.</p>
+                    <h3>Local-First, Cloud-Ready</h3>
+                    <p>Every voice transcription, memory lookup, and conversation is stored on your machine — always. Run LLMs locally via Ollama for full privacy, or add opt-in cloud models when you need frontier reasoning. With cloud models, only the current conversation is sent; memories, files, and history never leave.</p>
                     <span class="feature-tag">Core Principle</span>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🤖</div>
                     <h3>Autonomous ReAct Agent</h3>
-                    <p>The agent reasons about your question, decides which of 23 tools to use, chains multiple lookups, and assembles a complete answer — all autonomously. Smart context trimming keeps multi-tool chains within window limits. Live token counter tracks usage in real time.</p>
+                    <p>The agent reasons about your question, decides which of 23 tools to use, chains multiple lookups, and assembles a complete answer — all autonomously. Smart context trimming keeps multi-tool chains within window limits and reduces API costs. Live token counter tracks usage in real time.</p>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🧠</div>
                     <h3>Personal Knowledge Graph</h3>
                     <p>Thoth builds a connected web of people, places, preferences, events, and their relationships — not just isolated facts. Entities are linked through typed relations (e.g. Dad &rarr; father_of &rarr; You), so the agent can reason about how things in your life connect. Graph-enhanced auto-recall surfaces relevant memories plus their connections before every response.</p>
-                    <span class="feature-tag">Upgraded in v3.6</span>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🕸️</div>
                     <h3>Memory Visualization</h3>
                     <p>An interactive network diagram renders your entire knowledge graph on the home screen — search, filter by entity type, click nodes for details, toggle between full-graph and ego-graph views. Color-coded categories, relation labels on edges, and a fit-to-view button make it easy to explore everything the agent knows about you.</p>
-                    <span class="feature-tag">New in v3.6</span>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🖥️</div>
                     <h3>Shell Access</h3>
                     <p>Run shell commands through natural conversation — install packages, manage git repos, run scripts, automate system tasks. 3-tier safety: safe commands run instantly, moderate commands require approval, dangerous commands are blocked outright. Persistent sessions per thread with inline terminal output.</p>
-                    <span class="feature-tag">New in v3.3</span>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🌐</div>
                     <h3>Browser Automation</h3>
-                    <p>Autonomous web browsing in a real, visible Chromium window — navigate, click, fill forms, scroll, and manage tabs through natural conversation. Accessibility-tree snapshots let the agent see and interact with page elements by number. Persistent profile keeps you logged in across sessions. Smart snapshot compression prevents context overflow during long browsing sessions.</p>
-                    <span class="feature-tag">New in v3.4</span>
+                    <p>Autonomous web browsing in a real, visible Chromium window — navigate, click, fill forms, scroll, and manage tabs through natural conversation. Accessibility-tree snapshots let the agent see and interact with page elements by number. Persistent profile keeps you logged in across sessions.</p>
                 </div>
                 <div class="feature-card">
                     <div class="icon">⚡</div>
                     <h3>Tasks &amp; Scheduling</h3>
-                    <p>Build named, multi-step tasks that run on 7 schedule types — daily, weekly, weekdays, weekends, interval, cron, or one-shot delay. Per-task model override, channel delivery to Telegram or Email, template variables, persistent run history, configurable background permissions for shell commands and email recipients, and 5 built-in templates to start.</p>
-                    <span class="feature-tag">New in v3.5</span>
+                    <p>Build named, multi-step tasks that run on 7 schedule types — daily, weekly, weekdays, weekends, interval, cron, or one-shot delay. Per-task model override (local or cloud), channel delivery to Telegram or Email, template variables, persistent run history, stop/cancel from anywhere, and 5 built-in templates.</p>
                 </div>
                 <div class="feature-card">
                     <div class="icon">📋</div>
                     <h3>Habit &amp; Health Tracker</h3>
                     <p>Track medications, symptoms, exercise, periods, mood, sleep — through natural conversation. <em>"I took my Lexapro"</em> → logged. 7 built-in analyses: adherence, streaks, trends, co-occurrence. Results auto-export to CSV and chain to interactive Plotly charts.</p>
-                    <span class="feature-tag">New in v3.0</span>
                 </div>
                 <div class="feature-card">
                     <div class="icon">📬</div>
                     <h3>Messaging Channels</h3>
-                    <p>Connect a Telegram bot or email channel so the agent meets you where you are. Every message is processed by the full ReAct agent with all tools available. Each chat gets its own conversation thread. The agent can also proactively send Telegram messages, photos, and documents via the Telegram tool.</p>
-                    <span class="feature-tag">New in v3.0</span>
+                    <p>Connect a Telegram bot or email channel so the agent meets you where you are. Every message is processed by the full ReAct agent with all tools available. Each chat gets its own conversation thread. The agent can also proactively send Telegram messages, photos, and documents.</p>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🎤</div>
@@ -780,22 +900,22 @@
                 <div class="feature-card">
                     <div class="icon">👁️</div>
                     <h3>Vision &amp; Screen Capture</h3>
-                    <p>Capture images from your webcam or take screenshots and ask questions about them. Local vision model analysis — multi-camera support, inline image display in chat.</p>
+                    <p>Capture images from your webcam or take screenshots and ask questions about them. Works with local vision models or cloud models with vision capability (GPT-4o, Claude). Multi-camera support, inline image display in chat.</p>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🖥️</div>
                     <h3>Native Desktop App</h3>
-                    <p>One-click installer, native OS window via pywebview, system tray with status indicator, branded splash screen, and a first-launch setup wizard that walks you through model selection. No Docker, no YAML, no terminal needed.</p>
+                    <p>One-click installer, native OS window via pywebview, system tray with status indicator, branded splash screen, and a first-launch setup wizard with Local and Cloud paths. No Docker, no YAML, no terminal needed.</p>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🧩</div>
-                    <h3>39 Curated Models</h3>
-                    <p>Switch freely between Qwen, Llama, Gemma, Mistral, DeepSeek, Phi, Nemotron, and more — only models verified for tool calling are included. Download buttons with live progress. Configurable context windows up to 256K tokens with automatic model-max capping.</p>
+                    <h3>Flexible Model Selection</h3>
+                    <p>39 curated local models (Qwen, Llama, Gemma, Mistral, DeepSeek, Phi, Nemotron) plus cloud models from OpenAI and OpenRouter. Per-thread and per-task model switching — mix local and cloud freely. Star your favourites for quick access. Configurable context windows up to 256K tokens.</p>
                 </div>
                 <div class="feature-card">
                     <div class="icon">📧</div>
                     <h3>Gmail &amp; Calendar</h3>
-                    <p>Search emails, read threads, draft and send messages. View, create, update, and manage calendar events — all through natural language. Tiered permissions let you control read, write, and destructive access independently.</p>
+                    <p>Search emails, read threads, draft and send messages with file attachments. View, create, update, and manage calendar events — all through natural language. Tiered permissions let you control read, write, and destructive access independently.</p>
                 </div>
                 <div class="feature-card">
                     <div class="icon">📁</div>
@@ -986,43 +1106,43 @@
                 <tbody>
                     <tr>
                         <td>Your data</td>
-                        <td>Sent to cloud servers, used for training</td>
-                        <td>Stays on your machine — always</td>
+                        <td>Stored on provider servers, subject to their privacy policies</td>
+                        <td>Stays on your machine — always. With opt-in cloud models, only the current conversation is sent; memories, files, and history never leave</td>
                     </tr>
                     <tr>
                         <td>Conversations</td>
-                        <td>Owned by the provider, can be leaked</td>
-                        <td>Local SQLite, fully yours</td>
+                        <td>Owned by the provider — can be deleted, leaked, or used for training</td>
+                        <td>Stored locally in SQLite, fully yours, exportable anytime</td>
                     </tr>
                     <tr>
                         <td>Cost</td>
                         <td>$20+/month per subscription</td>
-                        <td>Free forever — your hardware</td>
+                        <td>Free with local models. Cloud models use pay-per-token APIs — typically pennies per conversation</td>
                     </tr>
                     <tr>
                         <td>Memory</td>
                         <td>Limited, opaque, provider-controlled</td>
-                        <td>You control what's remembered</td>
+                        <td>Personal knowledge graph — entities, relationships, visual explorer, fully yours</td>
                     </tr>
                     <tr>
                         <td>Tools</td>
-                        <td>Sandboxed plugins, limited access</td>
-                        <td>Gmail, Calendar, filesystem, shell, webcam</td>
+                        <td>Sandboxed plugins, limited integrations</td>
+                        <td>Direct access to Gmail, Calendar, filesystem, shell, browser, webcam — 23 tools, 61 sub-operations</td>
+                    </tr>
+                    <tr>
+                        <td>Customisation</td>
+                        <td>Pick a model, write a system prompt</td>
+                        <td>Swap models per conversation or per task, mix local and cloud freely, build scheduled tasks with cron/daily/weekly triggers</td>
                     </tr>
                     <tr>
                         <td>Voice</td>
                         <td>Cloud-processed speech</td>
-                        <td>Local Whisper + Kokoro TTS</td>
-                    </tr>
-                    <tr>
-                        <td>Health tracking</td>
-                        <td>None</td>
-                        <td>Conversational tracker + analysis</td>
+                        <td>Local Whisper STT + Kokoro TTS — never leaves your mic</td>
                     </tr>
                     <tr>
                         <td>Availability</td>
-                        <td>Requires internet, subject to outages</td>
-                        <td>Works offline, no throttling</td>
+                        <td>Requires internet, subject to outages &amp; rate limits</td>
+                        <td>Local models work offline; cloud models available when connected</td>
                     </tr>
                 </tbody>
             </table>
@@ -1038,21 +1158,21 @@
                     <div class="step-number">1</div>
                     <div class="step-content">
                         <h3>Download &amp; install</h3>
-                        <p>Run the one-click <strong>Windows installer</strong> or unzip the <strong>macOS zip</strong> and double-click <code>Start Thoth.command</code> — both set up Ollama, Python, and all dependencies automatically. Or clone the repo and run from source in 5 commands.</p>
+                        <p>Run the one-click <strong>Windows installer</strong> or unzip the <strong>macOS zip</strong> and double-click <code>Start Thoth.command</code> — both set up Python and all dependencies automatically. Or clone the repo and run from source in 5 commands.</p>
                     </div>
                 </div>
                 <div class="step">
                     <div class="step-number">2</div>
                     <div class="step-content">
-                        <h3>Choose your models</h3>
-                        <p>On first launch, a setup wizard walks you through selecting and downloading a brain model and vision model. The default (<code>qwen3:14b</code>) is recommended for the best balance of speed and capability.</p>
+                        <h3>Choose your path</h3>
+                        <p>On first launch, a setup wizard offers two paths: <strong>Local</strong> — select and download an Ollama model (default: <code>qwen3:14b</code>), or <strong>Cloud</strong> — enter your OpenAI or OpenRouter API key and pick a model. No GPU required for cloud.</p>
                     </div>
                 </div>
                 <div class="step">
                     <div class="step-number">3</div>
                     <div class="step-content">
                         <h3>Start talking</h3>
-                        <p>Ask anything in natural language — the agent figures out which tools to use. Search the web, check your email, analyze your screen, track a medication, schedule a task. Just ask.</p>
+                        <p>Ask anything in natural language — the agent figures out which tools to use. Search the web, check your email, analyze your screen, track a medication, schedule a task. Switch models per-thread anytime.</p>
                     </div>
                 </div>
             </div>
@@ -1064,11 +1184,14 @@
         <div class="container">
             <h2>🔒 Privacy by architecture</h2>
             <p>
-                Thoth doesn't just promise privacy — it enforces it structurally. All LLM inference, voice processing, memory storage, and conversation history runs entirely on your machine. External network calls only happen when you explicitly use an online tool — and each one can be individually disabled.
+                Thoth doesn't just promise privacy — it enforces it structurally. Voice processing, memory storage, conversation history, and knowledge graphs run entirely on your machine. LLM inference runs locally by default; opt-in cloud models send only the current conversation — memories, files, and history never leave. External network calls only happen when you explicitly use an online tool — and each one can be individually disabled.
             </p>
             <div class="privacy-badges">
                 <div class="privacy-badge">
-                    <span class="icon">🖥️</span> Local inference
+                    <span class="icon">🖥️</span> Local inference (default)
+                </div>
+                <div class="privacy-badge">
+                    <span class="icon">☁️</span> Cloud opt-in only
                 </div>
                 <div class="privacy-badge">
                     <span class="icon">💾</span> Local storage
@@ -1092,12 +1215,12 @@
     <!-- CTA -->
     <section class="cta">
         <h2>Take back your <span>AI sovereignty</span></h2>
-        <p>Free, open source, and yours to keep. No accounts. No subscriptions. No data harvesting.</p>
+        <p>Free, open source, and yours to keep. Run local, add cloud, or both. No accounts. No subscriptions. No data harvesting.</p>
         <div class="hero-buttons">
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.6.0/ThothSetup_3.6.0.exe" class="btn btn-primary">
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.7.0/ThothSetup_3.7.0.exe" class="btn btn-primary">
                 ⬇ Download for Windows
             </a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.6.0/Thoth-3.6.0-macOS.zip" class="btn btn-primary">
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.7.0/Thoth-3.7.0-macOS.zip" class="btn btn-primary">
                 ⬇ Download for macOS
             </a>
             <a href="https://github.com/siddsachar/Thoth" class="btn btn-secondary" target="_blank">
@@ -1109,7 +1232,7 @@
     <!-- Footer -->
     <footer>
         <p>
-            𓁟 Thoth · v3.6.0 · MIT License ·
+            𓁟 Thoth · v3.7.0 · MIT License ·
             <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a> ·
             Built with NiceGUI, LangGraph, LangChain, Ollama, FAISS &amp; Kokoro TTS
         </p>
