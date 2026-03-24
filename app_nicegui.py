@@ -2162,7 +2162,7 @@ async def index():
         In browser mode we use the normal ``ui.download()`` API.
         """
         filename = _safe_filename(filename)
-        if "--native" in sys.argv:
+        if os.environ.get("THOTH_NATIVE") == "1":
             dl_dir = pathlib.Path.home() / "Downloads"
             dl_dir.mkdir(parents=True, exist_ok=True)
             dest = dl_dir / filename

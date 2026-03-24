@@ -3,9 +3,10 @@
 Responsibilities:
     • Splash screen while the server starts (tkinter — no extra deps)
     • System-tray icon (green = running, grey = stopped)
-    • Launch  ``python app_nicegui.py``  as a managed subprocess
-    • Open the browser to http://localhost:8080
-    • Detect an already-running instance and just open the browser
+    • Launch  ``python app_nicegui.py``  as a headless server subprocess
+    • Open a pywebview native window pointing at the server
+    • Closing the window keeps the server (and tasks/channels) alive
+    • Detect an already-running instance and just open a window
     • Graceful shutdown on Quit
 """
 
@@ -154,11 +155,12 @@ class _ThothProcess:
         self._proc: subprocess.Popen | None = None
         self._log_file: Path | None = None
 
-    def start(self, *, native: bool = True) -> None:
-        """Launch ``python app_nicegui.py`` in the project directory.
+    def start(self) -> None:
+        """Launch ``python app_nicegui.py`` as a headless server.
 
-        If *native* is True (default) the app opens in a pywebview
-        native OS window instead of a browser tab.
+        The server runs without ``--native`` so it stays alive
+        independently of any UI window.  The launcher opens a
+        separate pywebview window to display the UI.
         """
         app_dir = Path(__file__).resolve().parent
         app_py = app_dir / "app_nicegui.py"
@@ -167,8 +169,6 @@ class _ThothProcess:
         python = sys.executable
 
         cmd = [python, str(app_py)]
-        if native:
-            cmd.append("--native")
 
         # Log file for diagnosing startup crashes —
         # lives in  ~/.thoth/thoth_app.log
@@ -189,7 +189,14 @@ class _ThothProcess:
 
         # Isolate from any system-wide Python site-packages
         # Force UTF-8 I/O so emoji in print() never crash on cp1252 consoles
-        env = {**os.environ, "PYTHONNOUSERSITE": "1", "PYTHONIOENCODING": "utf-8"}
+        # THOTH_NATIVE=1 tells the app it's behind a pywebview window
+        # (used by _save_export to write to ~/Downloads on macOS WebKit)
+        env = {
+            **os.environ,
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "THOTH_NATIVE": "1",
+        }
 
         self._proc = subprocess.Popen(
             cmd,
@@ -200,8 +207,8 @@ class _ThothProcess:
             # On Windows, CREATE_NO_WINDOW prevents a visible console
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        logger.info("Thoth started (PID %s, native=%s, log=%s)",
-                     self._proc.pid, native, self._log_file)
+        logger.info("Thoth server started (PID %s, log=%s)",
+                     self._proc.pid, self._log_file)
 
     def stop(self) -> None:
         """Terminate the NiceGUI process."""
@@ -329,16 +336,59 @@ def _show_splash(port: int = _PORT, timeout: float = 60.0) -> subprocess.Popen |
         return None
 
 
+# ── Native window (pywebview subprocess) ─────────────────────────────────────
+
+_WINDOW_SCRIPT = r'''
+import sys, webview
+url, title = sys.argv[1], sys.argv[2]
+w, h = int(sys.argv[3]), int(sys.argv[4])
+webview.create_window(title, url, width=w, height=h)
+webview.start()
+'''
+
+
+def _open_window() -> subprocess.Popen | None:
+    """Open a pywebview native window pointing at the running server.
+
+    Returns the subprocess handle, or None on failure.
+    The window is a standalone process — closing it does NOT
+    affect the server.
+    """
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _WINDOW_SCRIPT,
+             _URL, "Thoth", "1280", "900"],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        logger.info("Native window opened (PID %s)", proc.pid)
+        return proc
+    except Exception as exc:
+        logger.warning("Could not open native window: %s — falling back to browser", exc)
+        webbrowser.open(_URL)
+        return None
+
+
+def _wait_for_server(timeout: float = 60.0) -> bool:
+    """Block until the NiceGUI server is reachable, or *timeout* expires."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _is_port_in_use(_PORT):
+            return True
+        time.sleep(0.3)
+    return False
+
+
 # ── Tray application ────────────────────────────────────────────────────────
 
 class ThothTray:
-    """System-tray icon that manages the NiceGUI server."""
+    """System-tray icon that manages the NiceGUI server and native window."""
 
     def __init__(self) -> None:
         import pystray
 
         self._server = _ThothProcess()
         self._owns_server = False          # True if *we* started it
+        self._window_proc: subprocess.Popen | None = None
         self._stop_event = threading.Event()
 
         menu = pystray.Menu(
@@ -352,34 +402,49 @@ class ThothTray:
             menu=menu,
         )
 
+    # ── Helpers ──────────────────────────────────────────────────────────
+
+    def _is_window_alive(self) -> bool:
+        return self._window_proc is not None and self._window_proc.poll() is None
+
     # ── Menu callbacks ───────────────────────────────────────────────────
 
     def _on_open(self, icon=None, item=None) -> None:   # noqa: ARG002
-        if self._owns_server:
-            if not self._server.is_alive:
-                # Native window was closed — restart the process to reopen it
-                logger.info("Re-launching Thoth native window")
+        """Open (or re-open) the native window."""
+        if self._is_window_alive():
+            # Window already open — nothing to do
+            return
 
-                # Clean up the old (dead) process handle first
-                self._server.stop()
+        if self._owns_server and not self._server.is_alive:
+            # Server crashed — restart it first
+            logger.info("Server not running — restarting before opening window")
+            self._server.stop()
+            for _ in range(10):
+                if not _is_port_in_use(_PORT):
+                    break
+                time.sleep(0.5)
+            self._server.start()
+            _wait_for_server()
 
-                # Wait for the port to free (the old process may linger)
-                for _ in range(10):          # up to ~5 s
-                    if not _is_port_in_use(_PORT):
-                        break
-                    time.sleep(0.5)
-                else:
-                    logger.warning("Port %s still in use — restarting anyway", _PORT)
-
-                self._server.start(native=True)
-            # else: native window is already open, nothing to do
-        else:
-            # Someone else started the server (e.g. dev mode) — open browser
+        if not self._owns_server and not _is_port_in_use(_PORT):
+            # External server died — just open browser and hope
             webbrowser.open(_URL)
+            return
+
+        logger.info("Opening Thoth window")
+        self._window_proc = _open_window()
 
     def _on_quit(self, icon=None, item=None) -> None:    # noqa: ARG002
         logger.info("Quit requested")
         self._stop_event.set()
+        # Close the window first
+        if self._is_window_alive():
+            try:
+                self._window_proc.terminate()
+                self._window_proc.wait(timeout=3)
+            except Exception:
+                pass
+        # Then stop the server
         if self._owns_server:
             self._server.stop()
         self._icon.stop()
@@ -387,7 +452,7 @@ class ThothTray:
     # ── Background poller ────────────────────────────────────────────────
 
     def _poll_loop(self) -> None:
-        """Periodically check if the app is still alive and update icon."""
+        """Periodically check if the server is alive and update icon."""
         _POLL_INTERVAL = 3.0  # seconds
         _crash_logged = False
         while not self._stop_event.is_set():
@@ -401,16 +466,15 @@ class ThothTray:
             else:
                 self._icon.icon = _get_icon("stopped")
                 self._icon.title = "Thoth — stopped"
-                # Log once when the app process dies unexpectedly
+                # Log once when the server process dies unexpectedly
                 if self._owns_server and not _crash_logged:
                     _crash_logged = True
                     rc = (self._server._proc.returncode
                           if self._server._proc else "?")
                     log_path = self._server._log_file or "?"
                     logger.error(
-                        "Thoth app exited (code %s). "
+                        "Thoth server exited (code %s). "
                         "Check %s for details.", rc, log_path)
-                    # Show the last few lines of the log for quick diagnosis
                     if self._server._log_file and self._server._log_file.exists():
                         try:
                             tail = self._server._log_file.read_text(
@@ -429,7 +493,7 @@ class ThothTray:
     # ── Entry point ──────────────────────────────────────────────────────
 
     def run(self) -> None:
-        """Start the tray icon and (if needed) the NiceGUI server."""
+        """Start the tray icon, the NiceGUI server, and a native window."""
         # Ensure Ollama is running before we start the app
         _start_ollama()
 
@@ -450,9 +514,11 @@ class ThothTray:
         poller = threading.Thread(target=self._poll_loop, daemon=True, name="tray-poll")
         poller.start()
 
-        # In native mode, the pywebview window opens automatically.
-        # Only open a browser if we didn't start the server (external instance).
-        if already_running:
+        # Wait for server to be ready, then open a native window
+        if _wait_for_server():
+            self._window_proc = _open_window()
+        else:
+            logger.warning("Server did not start in time — opening browser as fallback")
             webbrowser.open(_URL)
 
         # Blocking — runs the tray icon's event loop on the main thread
