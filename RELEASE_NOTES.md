@@ -2,6 +2,105 @@
 
 ---
 
+## v3.7.0 — Cloud-Primary Mode, Per-Thread Model Switching & Task Stop
+
+Thoth now works **without Ollama**. Connect your OpenAI or OpenRouter API key and use cloud models (GPT-4o, Claude, Gemini, etc.) as your default — or mix cloud and local models across different conversations. A new **per-thread model picker** lets you switch models mid-conversation, and a **task stop** feature lets you cancel running tasks at any point.
+
+### ☁️ Cloud-Primary Mode
+
+New `models.py` cloud engine — Thoth can now run entirely on cloud LLMs with no local Ollama dependency.
+
+- **Dual-provider support** — connect OpenAI (direct API) and/or OpenRouter (100+ models from all major providers); keys stored in `api_keys.json` and managed via Settings → Cloud
+- **Setup wizard** — fresh installs present two paths: **🖥️ Local (Ollama)** or **☁️ Cloud (API key)**; cloud path validates keys, fetches available models, and lets you pick a default — no Ollama needed
+- **Starred models** — star your favorite cloud models in Settings → Cloud; starred models appear in the chat header model picker alongside local models
+- **Cloud-first startup** — when the default model is cloud, Thoth skips Ollama auto-start entirely; no "Ollama not found" warnings on machines without it
+- **Context-size catalog** — OpenRouter model metadata is cached locally; for OpenAI models (which don't expose context length), a built-in heuristic table covers GPT-4o/4.1/4.5/5, o1/o3/o4, Claude 2–4, and Gemini 2–3 families
+- **Cloud vision detection** — cloud models with vision capability (e.g. `gpt-4o`, `claude-3.5-sonnet`) are auto-detected from provider metadata; the vision tool works seamlessly with cloud models
+- **Privacy controls** — Settings → Cloud includes toggles for auto-recall, memory extraction, and conversation history; memory extraction defaults to OFF for cloud threads
+
+### 🔀 Per-Thread Model Switching
+
+Every conversation can now use a different model — cloud or local.
+
+- **Chat header model picker** — dropdown in the chat header shows: "Default (current model)" + starred cloud models + local Ollama models; selecting a model sets the override for that thread only
+- **Thread-level persistence** — `model_override` column added to `thread_meta` (auto-migrated); overrides survive app restarts
+- **Cloud warning banner** — when a thread uses a cloud model, a colored banner shows: "☁️ Using gpt-4o via OpenAI — data is sent to the cloud"
+- **Sidebar icons** — threads show ☁️ (cyan) for cloud models, 🖥️ (grey) for local models
+- **Reset to default** — selecting "Default" in the picker clears the override; thread reverts to the app-wide default model
+- **Summarization uses override** — context compression uses the thread's override model, not the global default
+- **Telegram /model command** — `/model` lists available models; `/model gpt-4o` switches; `/model default` resets; invalid model names show an error with available options
+
+### ⏹️ Task Stop / Cancel
+
+Running tasks can now be stopped from the UI at any point during execution.
+
+- **Node-level cancellation** — when a task has a `stop_event`, `invoke_agent()` uses `agent.stream(stream_mode="updates")` instead of `agent.invoke()`, checking the stop event between every LangGraph node; tasks stop between steps, not mid-LLM-call
+- **`TaskStoppedError`** — new exception raised when a stop is detected; caught by the task runner for clean shutdown
+- **`stop_task(thread_id)`** — signals the stop event for a running task; returns `True` if found
+- **Three stop buttons** — red stop button in: (1) chat header when viewing a running task's thread, (2) Activity tab "Running Now" section per task, (3) task card (replaces the play button while running)
+- **Stopped state** — stopped tasks are recorded as status "stopped" in run history; thread is renamed with "(stopped)"; orange `stop_circle` icon in Recent Runs; notification sent; delivery and auto-delete are skipped
+- **Delete stops task** — deleting a thread while a task is running now signals `stop_task()` first; thread stays deleted (no ghost re-creation)
+- **Thread existence guard** — task completion/stop handlers check if the thread still exists before renaming, preventing `INSERT ON CONFLICT` from re-creating deleted threads
+- **Orphaned tool-call repair** — if stopped mid-tool-call, orphaned tool calls are auto-repaired before the thread is finalized
+- **Backward compatible** — when `stop_event` is `None` (chat, Telegram, CLI), `invoke_agent()` uses the original `agent.invoke()` path unchanged
+
+### 🔧 Displaced Tool-Call Repair
+
+New repair logic in `invoke_agent()` fixes a class of LangGraph checkpoint corruption bugs.
+
+- **Problem** — `trim_messages` or checkpoint corruption can displace `ToolMessage` responses away from their parent `AIMessage` with `tool_calls`, violating OpenAI's strict ordering requirement (tool_calls must be immediately followed by their ToolMessages)
+- **Fix** — after trimming, a scan detects AIMessages whose tool_calls are not immediately followed by matching ToolMessages; stubs are injected in the correct position and displaced originals are removed
+- **Auto-retry on orphan errors** — both `invoke_agent()` and `_stream_graph()` catch "tool_call without response" errors, run `repair_orphaned_tool_calls()`, and retry once automatically
+
+### ⚡ FAISS Rebuild Optimization
+
+Reduced redundant FAISS index rebuilds during memory extraction.
+
+- **Before** — `_dedup_and_save()` called `rebuild_index()` at the end of each thread's extraction; processing 4 threads meant 4 full FAISS rebuilds (re-embedding all entities each time)
+- **After** — `rebuild_index()` moved to `run_extraction()`, called once after all threads are processed; per-entity upserts are still suppressed via `_skip_reindex` during batch processing
+- **Incremental upsert** — new `_upsert_index()` in `knowledge_graph.py` adds/updates a single entity vector without rebuilding the entire index; used for individual memory saves outside of batch extraction
+
+### 🐛 Bug Fixes
+
+- **Scheduled tasks missing thread** — `_on_task_fire()` now calls `_save_thread_meta()` and `_set_thread_model_override()` before `run_task_background()`, matching the manual-run handler; previously scheduled tasks never created a `thread_meta` row, so threads never appeared in the sidebar and the completion handler's `_thread_exists()` guard silently skipped the final save
+- **Telegram displaced tool_call** — Telegram channel now propagates `model_override` from thread config to the LangGraph configurable, fixing "tool_call without response" errors when using cloud models via Telegram
+- **Memory system concurrent access** — additional `threading.Lock()` protection around FAISS operations during incremental upserts
+- **Email channel import** — fixed minor import path issue in `channels/email.py`
+- **Conversation search tool** — minor fix for result formatting
+- **Voice module** — minor compatibility fix
+
+### 🧪 Tests
+
+- **745 PASS**, 0 FAIL, 2 WARN (up from 676 in v3.6.0)
+- New test sections: Cloud model engine (model detection, provider routing, context heuristics, starred models, vision detection)
+- New test sections: Per-thread model override (DB migration, override persistence, picker logic, cloud banner, sidebar icons)
+- New test sections: Task stop (TaskStoppedError, stop_event propagation, stop_task(), get_running_task_thread(), stopped state handling, thread existence guard, delete-while-running)
+- New test sections: Displaced tool-call repair (stub injection, displaced ToolMessage removal, ordering validation)
+- New test sections: FAISS incremental upsert, rebuild optimization
+- Extended integration tests for cloud model routing and Telegram /model command
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`models.py`** | **Major** — cloud model engine: dual-provider support (OpenAI + OpenRouter), model fetching/caching, starred models, context-size catalog + heuristics, cloud vision detection, `get_llm_for()` / `_get_cloud_llm()` / `is_cloud_model()` / `get_cloud_provider()` |
+| **`agent.py`** | **Major** — `TaskStoppedError` exception; `invoke_agent()` rewritten with `stop_event` param and node-level streaming path; displaced tool-call repair after `trim_messages`; auto-retry on orphan errors in both `invoke_agent()` and `_stream_graph()`; cloud model override support in agent/summarizer |
+| **`tasks.py`** | **Major** — `stop_task()`, `get_running_task_thread()`, `stop_event` in `_active_runs`, `TaskStoppedError` handling, `_thread_exists()` guard on thread rename, stopped state (status, naming, notification, skip delivery); `_on_task_fire()` now saves thread meta + model override before launching background run |
+| **`app_nicegui.py`** | **Major** — cloud setup wizard, Settings → Cloud tab, chat header model picker, cloud warning banner, sidebar cloud/local icons; task stop buttons (3 locations), `stop_task()` in delete handlers, delayed refresh timer; privacy toggles |
+| **`threads.py`** | `model_override` column with auto-migration; `_get_thread_model_override()` / `_set_thread_model_override()` |
+| **`api_keys.py`** | OpenAI + OpenRouter key definitions; `cloud_config.json` management (starred models, privacy toggles) |
+| **`channels/telegram.py`** | `/model` command (list, set, reset); model override propagation to LangGraph config |
+| **`memory_extraction.py`** | FAISS rebuild moved from per-thread `_dedup_and_save()` to single call in `run_extraction()` |
+| **`knowledge_graph.py`** | `_upsert_index()` for incremental FAISS updates; additional thread-safety |
+| **`vision.py`** | Cloud vision model compatibility |
+| **`test_suite.py`** | ~67 new tests across cloud, model switching, task stop, tool-call repair, FAISS optimization |
+| **`requirements.txt`** | Added `openai` |
+| **`installer/*`** | Version bump to 3.7.0; cloud-aware launcher (skip Ollama warning when cloud default) |
+| **`.github/workflows/ci.yml`** | CI updates for cloud test coverage |
+| **`.gitignore`** | New ignore patterns |
+
+---
+
 ## v3.6.0 — Knowledge Graph, Memory Visualization & Triple Extraction
 
 Thoth now builds a **personal knowledge graph** from your conversations — a connected web of people, places, facts, and their relationships. Memories are no longer isolated records: they are linked entities that the agent can traverse, explore, and reason about. A new interactive **Memory tab** visualizes the graph in real time, and the extraction pipeline now produces structured triples (entity + relation + entity) instead of flat facts.

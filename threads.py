@@ -22,6 +22,10 @@ def _init_thread_db():
             "CREATE TABLE IF NOT EXISTS thread_meta "
             "(thread_id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT)"
         )
+        # Migration: add model_override column if missing
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(thread_meta)").fetchall()}
+        if "model_override" not in cols:
+            conn.execute("ALTER TABLE thread_meta ADD COLUMN model_override TEXT DEFAULT ''")
         conn.commit()
         conn.close()
         logger.debug("Thread database initialised at %s", DB_PATH)
@@ -31,7 +35,8 @@ def _init_thread_db():
 def _list_threads():
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT thread_id, name, created_at, updated_at FROM thread_meta ORDER BY updated_at DESC"
+        "SELECT thread_id, name, created_at, updated_at, COALESCE(model_override, '') "
+        "FROM thread_meta ORDER BY updated_at DESC"
     ).fetchall()
     conn.close()
     return rows
@@ -58,6 +63,28 @@ def _delete_thread(thread_id: str):
     conn.close()
 
 
+def _get_thread_model_override(thread_id: str) -> str:
+    """Return the model override for a thread (empty string if none)."""
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT COALESCE(model_override, '') FROM thread_meta WHERE thread_id = ?",
+        (thread_id,),
+    ).fetchone()
+    conn.close()
+    return row[0] if row else ""
+
+
+def _set_thread_model_override(thread_id: str, model_name: str) -> None:
+    """Set or clear the model override for a thread."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE thread_meta SET model_override = ? WHERE thread_id = ?",
+        (model_name, thread_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 checkpointer = SqliteSaver(conn)
 
@@ -67,7 +94,7 @@ def pick_or_create_thread() -> dict:
     threads = _list_threads()
     print("\n=== Thoth — Thread Manager ===")
     print("  [0] Start a new conversation")
-    for idx, (tid, name, created, updated) in enumerate(threads, start=1):
+    for idx, (tid, name, created, updated, *_pick_rest) in enumerate(threads, start=1):
         print(f"  [{idx}] {name}  (last used: {updated[:16]})")
     print()
 
@@ -80,7 +107,7 @@ def pick_or_create_thread() -> dict:
             print(f"\nStarted new thread: {name}\n")
             return {"configurable": {"thread_id": thread_id}}
         elif choice.isdigit() and 1 <= int(choice) <= len(threads):
-            tid, name, _, _ = threads[int(choice) - 1]
+            tid, name, _, _, *_pick_rest2 = threads[int(choice) - 1]
             _save_thread_meta(tid, name)  # bump updated_at
             print(f"\nResuming thread: {name}\n")
             return {"configurable": {"thread_id": tid}}

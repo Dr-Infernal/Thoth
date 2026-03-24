@@ -19,16 +19,15 @@ set "PYTHONIOENCODING=utf-8"
 set "TCL_LIBRARY=%PYTHON_DIR%\tcl\tcl8.6"
 set "TK_LIBRARY=%PYTHON_DIR%\tcl\tk8.6"
 
-:: ── Find Ollama ─────────────────────────────────────────────────────────────
+:: ── Find Ollama (optional — only needed for local models) ────────────────────
 set "OLLAMA_APP="
 if exist "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe" (
     set "OLLAMA_APP=%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"
 )
 
-:: ── Ensure Ollama is running ────────────────────────────────────────────────
+:: ── Start Ollama if installed (launcher.py skips this for cloud defaults) ───
 if not defined OLLAMA_APP (
-    echo WARNING: Ollama not found. Install from https://ollama.com
-    echo          Thoth requires Ollama to run language models.
+    :: Ollama not installed — this is fine for cloud-only setups
     goto :launch_app
 )
 

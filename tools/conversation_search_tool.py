@@ -101,7 +101,7 @@ def _search_conversations(query: str, max_results: int = 15) -> str:
     matches: list[dict] = []
     threads_scanned = 0
 
-    for tid, name, created_at, updated_at in threads[:_MAX_THREADS]:
+    for tid, name, created_at, updated_at, *_cs_rest in threads[:_MAX_THREADS]:
         messages = _get_thread_messages(tid)
         threads_scanned += 1
 
@@ -149,7 +149,7 @@ def _list_conversations() -> str:
         return "No saved conversations found."
 
     lines: list[str] = []
-    for tid, name, created_at, updated_at in threads:
+    for tid, name, created_at, updated_at, *_cs_rest2 in threads:
         date_str = (updated_at or created_at or "")[:16].replace("T", " ")
         lines.append(f"• \"{name}\" — last used: {date_str}")
 

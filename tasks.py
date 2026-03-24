@@ -98,6 +98,7 @@ def _init_db() -> None:
     for col, defn in [
         ("allowed_commands", "TEXT DEFAULT '[]'"),
         ("allowed_recipients", "TEXT DEFAULT '[]'"),
+        ("model_override", "TEXT"),
     ]:
         try:
             conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {defn}")
@@ -524,6 +525,27 @@ def get_running_tasks() -> dict[str, dict]:
         return dict(_active_runs)
 
 
+def stop_task(thread_id: str) -> bool:
+    """Signal a running task to stop.  Returns True if found & signalled."""
+    with _active_lock:
+        info = _active_runs.get(thread_id)
+        if info and "stop_event" in info:
+            info["stop_event"].set()
+            logger.info("stop_task: signalled stop for thread %s (task %s)",
+                        thread_id, info.get("name", "?"))
+            return True
+    return False
+
+
+def get_running_task_thread(task_id: str) -> str | None:
+    """Return the thread_id of a currently-running task, or None."""
+    with _active_lock:
+        for tid, info in _active_runs.items():
+            if info.get("task_id") == task_id:
+                return tid
+    return None
+
+
 # Backward-compat alias used by app_nicegui sidebar
 get_running_workflows = get_running_tasks
 
@@ -666,8 +688,13 @@ def run_task_background(
                                task_name=task["name"], task_icon=task["icon"])
 
     def _run():
-        from agent import invoke_agent
-        from threads import _save_thread_meta
+        from agent import invoke_agent, TaskStoppedError
+        from threads import _save_thread_meta, _list_threads
+
+        def _thread_exists(tid):
+            return any(t[0] == tid for t in _list_threads())
+
+        _stop_event = threading.Event()
 
         with _active_lock:
             _active_runs[thread_id] = {
@@ -676,9 +703,11 @@ def run_task_background(
                 "step": start_step,
                 "total": total,
                 "name": task["name"],
+                "stop_event": _stop_event,
             }
 
         last_response = ""
+        stopped = False
 
         try:
             from agent import _background_workflow_var
@@ -692,6 +721,10 @@ def run_task_background(
             # Model override
             if task.get("model_override"):
                 config["configurable"]["model_override"] = task["model_override"]
+                # Set on thread immediately so the UI shows the correct model
+                # while the task is still running.
+                from threads import _set_thread_model_override
+                _set_thread_model_override(thread_id, task["model_override"])
 
             # Task-scoped permissions — propagate via ContextVars
             # so tools can check them at runtime.
@@ -707,15 +740,28 @@ def run_task_background(
             )
 
             for i in range(start_step, total):
+                # ── Check stop before each step ──────────────────────
+                if _stop_event.is_set():
+                    stopped = True
+                    logger.info("Task '%s' stopped before step %d/%d",
+                                task["name"], i + 1, total)
+                    break
+
                 with _active_lock:
                     _active_runs[thread_id]["step"] = i
 
                 prompt = expand_template_vars(prompts[i])
 
                 try:
-                    result = invoke_agent(prompt, enabled_tool_names, config)
+                    result = invoke_agent(prompt, enabled_tool_names, config,
+                                         stop_event=_stop_event)
                     if result:
                         last_response = result
+                except TaskStoppedError:
+                    stopped = True
+                    logger.info("Task '%s' stopped during step %d/%d",
+                                task["name"], i + 1, total)
+                    break
                 except Exception as exc:
                     err_str = str(exc).lower()
                     # If the override model failed to load, fall back to the
@@ -730,9 +776,15 @@ def run_task_background(
                             task["name"], i + 1, override, exc,
                         )
                         try:
-                            result = invoke_agent(prompt, enabled_tool_names, config)
+                            result = invoke_agent(prompt, enabled_tool_names, config,
+                                                 stop_event=_stop_event)
                             if result:
                                 last_response = result
+                        except TaskStoppedError:
+                            stopped = True
+                            logger.info("Task '%s' stopped during step %d/%d (retry)",
+                                        task["name"], i + 1, total)
+                            break
                         except Exception as retry_exc:
                             logger.error(
                                 "Task %s step %d failed on retry with default model: %s",
@@ -750,6 +802,29 @@ def run_task_background(
 
                 _update_run_progress(run_id, i + 1)
 
+            # ── Handle stopped task ────────────────────────────────────
+            if stopped:
+                # Repair any orphaned tool calls left mid-step
+                try:
+                    from agent import repair_orphaned_tool_calls
+                    repair_orphaned_tool_calls(enabled_tool_names, config)
+                except Exception:
+                    pass
+                _finish_run(run_id, "stopped")
+                if _thread_exists(thread_id):
+                    thread_name = (f"⚡ {task['name']} (stopped) — "
+                                   f"{datetime.now().strftime('%b %d, %I:%M %p')}")
+                    _save_thread_meta(thread_id, thread_name)
+                if notification:
+                    from notifications import notify
+                    notify(
+                        title="⏹️ Task Stopped",
+                        message=f"{task['name']} was stopped.",
+                        sound="workflow",
+                        icon="⏹️",
+                    )
+                return  # skip delivery, skip delete_after_run
+
             # ── Determine final status ────────────────────────────────
             delivery_status, delivery_detail = "", ""
             if task.get("delivery_channel") and task.get("delivery_target"):
@@ -764,9 +839,10 @@ def run_task_background(
             _finish_run(run_id, final_status, status_message=delivery_detail)
             update_task(task_id, last_run=datetime.now().isoformat())
 
-            # Thread naming
-            thread_name = f"⚡ {task['name']} — {datetime.now().strftime('%b %d, %I:%M %p')}"
-            _save_thread_meta(thread_id, thread_name)
+            # Thread naming (skip if thread was deleted while running)
+            if _thread_exists(thread_id):
+                thread_name = f"⚡ {task['name']} — {datetime.now().strftime('%b %d, %I:%M %p')}"
+                _save_thread_meta(thread_id, thread_name)
 
             # Desktop + in-app notification (always)
             if notification:
@@ -984,6 +1060,22 @@ def _on_task_fire(task_id: str) -> None:
 
     thread_id = task.get("persistent_thread_id") or uuid.uuid4().hex[:12]
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
+
+    # Create thread_meta row BEFORE starting the background run so
+    # (a) the thread appears in the sidebar immediately, and
+    # (b) _thread_exists() returns True at completion, allowing the
+    #     final rename/save.  Mirrors the manual-run handler in
+    #     app_nicegui.py.
+    from threads import _save_thread_meta
+    thread_name = (
+        f"\u26a1 {task['name']} — "
+        f"{datetime.now().strftime('%b %d, %I:%M %p')}"
+    )
+    _save_thread_meta(thread_id, thread_name)
+
+    if task.get("model_override"):
+        from threads import _set_thread_model_override
+        _set_thread_model_override(thread_id, task["model_override"])
 
     run_task_background(task_id, thread_id, enabled, notification=True)
 

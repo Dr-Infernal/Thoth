@@ -346,6 +346,66 @@ def rebuild_index() -> None:
     logger.info("Rebuilt FAISS index with %d entities", len(id_map))
 
 
+def _upsert_index(entity_id: str) -> None:
+    """Add or update a single entity in the FAISS index incrementally.
+
+    Much faster than ``rebuild_index()`` because it only embeds one text
+    and appends/replaces one vector.  Stale duplicate entries (from
+    updates) are cleaned up on the next ``rebuild_index()`` call.
+    """
+    import faiss as _faiss
+
+    _VECTOR_DIR.mkdir(parents=True, exist_ok=True)
+    index_path = _VECTOR_DIR / "index.faiss"
+    map_path = _VECTOR_DIR / "id_map.json"
+
+    entity = get_entity(entity_id)
+    if not entity:
+        return
+
+    emb = _get_embedding_model()
+    text = _entity_text(entity)
+    vec = np.array(emb.embed_query(text), dtype=np.float32).reshape(1, -1)
+    norm = np.linalg.norm(vec)
+    if norm > 0:
+        vec = vec / norm
+
+    with _faiss_lock:
+        # Load existing index, or create empty one
+        if index_path.exists() and map_path.exists():
+            index = _faiss.read_index(str(index_path))
+            id_map: list[str] = json.loads(map_path.read_text())
+        else:
+            dim = vec.shape[1]
+            index = _faiss.IndexFlatIP(dim)
+            id_map = []
+
+        # If entity already in id_map (update), remove old entry
+        if entity_id in id_map:
+            old_idx = id_map.index(entity_id)
+            # Rebuild without the old vector — IndexFlatIP doesn't
+            # support removal, so reconstruct from remaining vectors
+            n = index.ntotal
+            if n > 1:
+                all_vecs = np.vstack([index.reconstruct(i) for i in range(n) if i != old_idx])
+                new_map = [eid for i, eid in enumerate(id_map) if i != old_idx]
+                dim = all_vecs.shape[1]
+                index = _faiss.IndexFlatIP(dim)
+                index.add(all_vecs)
+                id_map = new_map
+            else:
+                dim = vec.shape[1]
+                index = _faiss.IndexFlatIP(dim)
+                id_map = []
+
+        # Append new vector
+        index.add(vec)
+        id_map.append(entity_id)
+
+        _faiss.write_index(index, str(index_path))
+        map_path.write_text(json.dumps(id_map))
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Entity CRUD
 # ═════════════════════════════════════════════════════════════════════════════
@@ -431,7 +491,7 @@ def save_entity(
 
     # Update FAISS (skipped during batch extraction)
     if not _skip_reindex:
-        rebuild_index()
+        _upsert_index(entity_id)
 
     return entity
 
@@ -508,7 +568,7 @@ def update_entity(
         else:
             g.add_node(entity_id, **entity)
         if not _skip_reindex:
-            rebuild_index()
+            _upsert_index(entity_id)
         return entity
     return None
 
@@ -660,12 +720,17 @@ def semantic_search(
     scores, indices = index.search(qvec, k)
 
     results = []
+    _seen_ids: set[str] = set()
     for score, idx in zip(scores[0], indices[0]):
         if idx < 0 or idx >= len(id_map):
             continue
         if float(score) < threshold:
             continue
-        entity = get_entity(id_map[idx])
+        eid = id_map[idx]
+        if eid in _seen_ids:
+            continue  # dedup stale vectors from incremental updates
+        _seen_ids.add(eid)
+        entity = get_entity(eid)
         if entity:
             entity["score"] = round(float(score), 4)
             results.append(entity)
@@ -748,30 +813,8 @@ def add_relation(
         )
         conn.commit()
     except sqlite3.IntegrityError:
-        # Duplicate edge — update instead
-        conn.execute(
-            "UPDATE relations SET confidence = ?, properties = ?, source = ?, updated_at = ? "
-            "WHERE source_id = ? AND target_id = ? AND relation_type = ?",
-            (confidence, props_json, source, now, source_id, target_id, relation_type),
-        )
-        conn.commit()
-        row = conn.execute(
-            "SELECT * FROM relations WHERE source_id = ? AND target_id = ? AND relation_type = ?",
-            (source_id, target_id, relation_type),
-        ).fetchone()
+        # Duplicate edge — already exists, nothing to do
         conn.close()
-        if row:
-            rel = dict(row)
-            # Update NetworkX edge
-            g = _ensure_graph()
-            if g.has_edge(source_id, target_id):
-                g[source_id][target_id].update(
-                    relation_type=relation_type,
-                    confidence=confidence,
-                    properties=props_json,
-                    updated_at=now,
-                )
-            return rel
         return None
 
     conn.close()

@@ -113,16 +113,13 @@ def _extract_from_conversation(conversation_text: str) -> list[dict]:
     """Call the LLM to extract personal facts from a conversation."""
     import re
     try:
-        from models import get_current_model
-        import ollama
+        from models import get_current_model, get_llm_for
+        from langchain_core.messages import HumanMessage
 
         prompt = EXTRACTION_PROMPT.format(conversation=conversation_text)
-        response = ollama.chat(
-            model=get_current_model(),
-            messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.1, "num_ctx": 4096},
-        )
-        raw = response["message"]["content"].strip()
+        llm = get_llm_for(get_current_model())
+        response = llm.invoke([HumanMessage(content=prompt)])
+        raw = (response.content or "").strip()
 
         # Strip <think>...</think> blocks from reasoning models
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
@@ -226,13 +223,14 @@ def _dedup_and_save(extracted: list[dict]) -> int:
                         subject_to_id[kg._normalize_subject(alias)] = existing["id"]
 
             # Memory about this subject already exists — only update if
-            # the extracted content is richer than what we have.
-            if len(content) > len(existing.get("content", "")) or update_kwargs:
+            # the extracted content is strictly richer than what we have,
+            # or if there are genuinely new aliases to merge.
+            content_is_richer = len(content) > len(existing.get("content", ""))
+            if content_is_richer or update_kwargs:
                 try:
-                    new_content = content if len(content) > len(existing.get("content", "")) else None
                     update_memory(
                         existing["id"],
-                        new_content or existing["content"],
+                        content if content_is_richer else existing["content"],
                         source="extraction",
                         **update_kwargs,
                     )
@@ -309,14 +307,6 @@ def _dedup_and_save(extracted: list[dict]) -> int:
             except Exception as exc:
                 logger.debug("Failed to save relation: %s", exc)
 
-    # Single FAISS rebuild after all entities + relations are saved
-    kg._skip_reindex = False
-    if saved_count:
-        try:
-            kg.rebuild_index()
-        except Exception as exc:
-            logger.debug("Post-extraction rebuild_index failed: %s", exc)
-
     return saved_count
 
 
@@ -354,7 +344,7 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
 
     # Find threads updated since last extraction, excluding active ones
     new_threads = []
-    for tid, name, created, updated in threads:
+    for tid, name, created, updated, *rest in threads:
         if tid in exclude:
             continue
         if updated and updated > last_run:
@@ -391,6 +381,15 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
             count = _dedup_and_save(extracted)
             total_saved += count
             logger.info("Thread '%s': extracted %d, saved %d", name, len(extracted), count)
+
+    # Single FAISS rebuild after ALL threads processed (not per-thread)
+    if total_saved:
+        try:
+            import knowledge_graph as kg
+            kg._skip_reindex = False
+            kg.rebuild_index()
+        except Exception as exc:
+            logger.debug("Post-extraction rebuild_index failed: %s", exc)
 
     state["last_extraction"] = datetime.now().isoformat()
     _save_state(state)

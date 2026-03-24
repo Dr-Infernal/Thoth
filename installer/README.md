@@ -1,10 +1,10 @@
 # Building the Thoth Windows Installer
 
-This guide explains how to build a distributable Windows installer for Thoth v3.6.0.
+This guide explains how to build a distributable Windows installer for Thoth v3.7.0.
 
 ## Architecture
 
-The installer (~30 MB) bundles the embedded Python runtime and app source code. Kokoro TTS model files (~169 MB) are auto-downloaded on first use. Ollama and Python packages are downloaded at install time.
+The installer (~30 MB) bundles the embedded Python runtime and app source code. Kokoro TTS model files (~169 MB) are auto-downloaded on first use. Ollama and Python packages are downloaded at install time. Ollama is optional — Thoth can run entirely with cloud models (OpenAI / OpenRouter).
 
 | Bundled in .exe | Downloaded at install time |
 |----------------|---------------------------|
@@ -33,7 +33,7 @@ The installer (~30 MB) bundles the embedded Python runtime and app source code. 
 This will:
 1. Download Python 3.13 embeddable package (~15 MB)
 2. Download `get-pip.py` (~2.5 MB)
-3. Compile everything into `dist\ThothSetup_3.6.0.exe`
+3. Compile everything into `dist\ThothSetup_3.7.0.exe`
 
 ### Options
 
@@ -64,7 +64,7 @@ C:\Program Files\Thoth\            # Installation directory
     ├── memory.py                   # Long-term memory DB + FAISS vector search
     ├── memory_extraction.py        # Background memory extraction from conversations
     ├── knowledge_graph.py          # Knowledge graph (triple store + NetworkX + FAISS)
-    ├── models.py                   # Ollama model management
+    ├── models.py                   # Ollama + cloud model management
     ├── documents.py                # Document ingestion
     ├── threads.py                  # Thread/conversation persistence
     ├── api_keys.py                 # API key management
@@ -88,7 +88,7 @@ C:\Program Files\Thoth\            # Installation directory
     ├── thoth.ico
     ├── static/                     # Vendored JS libraries
     │   └── vis-network.min.js
-    ├── tools/                      # 21 tool modules
+    ├── tools/                      # 23 tool modules
     │   ├── __init__.py
     │   ├── base.py
     │   ├── registry.py
@@ -98,11 +98,11 @@ C:\Program Files\Thoth\            # Installation directory
 
 %USERPROFILE%\.thoth\               # User data directory (auto-created at runtime)
 ├── threads.db                      # Conversation history & checkpoints
-├── memory.db                       # Long-term memories
+├── memory.db                       # Long-term memories (knowledge graph entities & relations)
 ├── memory_vectors/                 # FAISS index for semantic memory search
 ├── memory_extraction_state.json    # Tracks last extraction run
-├── knowledge_graph.db             # Triple store (knowledge graph)
-├── api_keys.json                   # API keys
+├── api_keys.json                   # Tool API keys (Tavily, Wolfram, etc.)
+├── cloud_config.json               # Cloud LLM provider keys and starred models
 ├── app_config.json                 # Onboarding / first-run state
 ├── tools_config.json               # Tool enable/disable state
 ├── model_settings.json             # Selected model & context size
@@ -112,9 +112,12 @@ C:\Program Files\Thoth\            # Installation directory
 ├── processed_files.json            # Tracked indexed documents
 ├── tasks.db                        # Task definitions, schedules, run history & delivery config
 ├── channels_config.json            # Channel settings (Telegram, Email)
+├── shell_history.json              # Shell command history per thread
+├── thoth_app.log                   # Application log
 ├── vector_store/                   # FAISS index for uploaded documents
 ├── gmail/                          # Gmail OAuth tokens
 ├── calendar/                       # Calendar OAuth tokens
+├── browser_profile/                # Playwright persistent browser profile
 └── kokoro/                         # Kokoro TTS model & voice data (auto-downloaded)
 ```
 
@@ -138,15 +141,15 @@ The Inno Setup installer runs these steps:
 
 ## End-User Experience
 
-1. Run `ThothSetup_3.6.0.exe`
+1. Run `ThothSetup_3.7.0.exe`
 2. Follow the wizard — dependencies download and install automatically (5-15 min)
 3. Launch Thoth from Start Menu or Desktop shortcut
 4. The system tray icon appears; the app opens at `http://localhost:8080`
-5. First launch downloads the default brain model (`qwen3:14b`, ~9 GB one-time)
+5. First launch shows a setup wizard — choose **Local** (download an Ollama model) or **Cloud** (enter an API key and pick a cloud model)
 
 ## Notes
 
 - **CPU-only PyTorch**: `requirements.txt` uses CPU-only torch. Users with NVIDIA GPUs can upgrade to CUDA torch after install.
-- **Ollama detection**: `install_deps.bat` checks if Ollama is already on PATH and skips the download if so.
+- **Ollama is optional**: `install_deps.bat` offers to install Ollama, but it can be skipped for cloud-only setups. Thoth works entirely with cloud models (OpenAI / OpenRouter) and no local GPU.
 - **Launcher**: Uses `launcher.py` (system tray icon + native window + splash screen) instead of running NiceGUI directly. The tray icon shows app status (running/stopped) and provides graceful shutdown.
 - **Uninstall**: Registered with Windows Add/Remove Programs. The uninstaller removes the installation directory but does **not** delete user data in `~/.thoth/` — users can remove it manually if desired.

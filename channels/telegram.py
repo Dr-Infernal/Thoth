@@ -48,6 +48,7 @@ MAX_TG_MESSAGE_LEN = 4096  # Telegram text message character limit
 BOT_COMMANDS = [
     BotCommand("help", "Show available commands"),
     BotCommand("newthread", "Start a new conversation"),
+    BotCommand("model", "Switch model (cloud/local)"),
     BotCommand("tools", "List enabled tools"),
     BotCommand("status", "Check bot status"),
 ]
@@ -106,10 +107,14 @@ def _get_or_create_thread(chat_id: int) -> dict:
     thread_id = f"tg_{chat_id}"
 
     existing = _list_threads()
-    for tid, name, _, _ in existing:
+    for tid, name, _, _, *rest in existing:
         if tid == thread_id:
             _save_thread_meta(tid, name)  # bump updated_at
-            return {"configurable": {"thread_id": tid}}
+            mo = rest[0] if rest else ""
+            cfg = {"configurable": {"thread_id": tid}}
+            if mo:
+                cfg["configurable"]["model_override"] = mo
+            return cfg
 
     name = f"✈️ Telegram – {chat_id}"
     _save_thread_meta(thread_id, name)
@@ -336,6 +341,7 @@ async def _cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "Send me any message and I'll respond using your configured agent.\n\n"
         "Commands:\n"
         "/newthread — Start a fresh conversation\n"
+        "/model — Switch model (cloud/local)\n"
         "/tools — List enabled tools\n"
         "/status — Check connection status\n"
         "/help — Show this message",
@@ -360,6 +366,83 @@ async def _cmd_newthread(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Clear any pending interrupts
     _pending_interrupts.pop(chat_id, None)
     await update.message.reply_text("🆕 Started a new conversation thread.")
+
+
+async def _cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /model — switch the model for this thread."""
+    if not _is_authorised(update):
+        return
+
+    from models import (
+        is_cloud_model, is_cloud_available, list_starred_cloud_models,
+        get_current_model, get_cloud_provider,
+    )
+    from threads import _set_thread_model_override
+
+    args = (update.message.text or "").split(maxsplit=1)
+    if len(args) < 2:
+        # Show current model + list available starred cloud models
+        config = context.chat_data.get("thread_config") or {}
+        current_ov = (config.get("configurable") or {}).get("model_override", "")
+        _def = get_current_model()
+        if current_ov:
+            _prov = get_cloud_provider(current_ov)
+            _tag = "☁️" if _prov else "🖥️"
+            current_display = f"{_tag} {current_ov}"
+        else:
+            _prov = get_cloud_provider(_def)
+            _tag = "☁️" if _prov else "🖥️"
+            current_display = f"{_tag} {_def} (default)"
+        lines = [f"<b>Current model:</b> {_escape_html(current_display)}\n"]
+        starred = list_starred_cloud_models()
+        if starred:
+            lines.append("<b>Starred cloud models:</b>")
+            for cid in starred:
+                lines.append(f"• <code>{cid}</code>")
+            lines.append("\nUsage: <code>/model gpt-4o</code>")
+            lines.append("Reset to default: <code>/model default</code>")
+        elif is_cloud_available():
+            lines.append("No starred cloud models. Star models in Thoth → Settings → Cloud.")
+        else:
+            lines.append("⚠️ No cloud API keys configured.\nSet them in Thoth → Settings → Cloud.")
+        await _send_html(update.message, "\n".join(lines))
+        return
+
+    model_id = args[1].strip()
+
+    if model_id.lower() == "default":
+        # Reset to global default
+        config = context.chat_data.get("thread_config")
+        if config:
+            tid = (config.get("configurable") or {}).get("thread_id", "")
+            config["configurable"]["model_override"] = ""
+            _set_thread_model_override(tid, "")
+            context.chat_data["thread_config"] = config
+        await update.message.reply_text(f"✅ Switched to default: {get_current_model()}")
+        return
+
+    if not is_cloud_model(model_id):
+        await update.message.reply_text(
+            f"⚠️ Unknown cloud model: {model_id}\n"
+            "Use /model to see available models."
+        )
+        return
+
+    if not is_cloud_available():
+        await update.message.reply_text("⚠️ No cloud API keys configured.")
+        return
+
+    # Set the model override
+    config = context.chat_data.get("thread_config")
+    if config is None:
+        chat_id = update.effective_chat.id
+        config = _get_or_create_thread(chat_id)
+    tid = (config.get("configurable") or {}).get("thread_id", "")
+    config["configurable"]["model_override"] = model_id
+    _set_thread_model_override(tid, model_id)
+    context.chat_data["thread_config"] = config
+
+    await update.message.reply_text(f"☁️ Switched to {model_id}")
 
 
 async def _cmd_tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -410,6 +493,9 @@ async def _send_html_msg(chat, text: str, **kwargs) -> None:
 _THREAD_CORRUPT_PATTERNS = (
     "tool call.*without.*result",
     "tool_calls.*without.*tool_results",
+    "tool_calls that do not have a corresponding",
+    "tool_call_ids did not have response",
+    "must be followed by tool messages",
     "expected.*tool.*message",
 )
 
@@ -457,17 +543,30 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
     except Exception as exc:
         log.error("Agent error for chat %s: %s", chat_id, exc)
-        # If thread is corrupt (stuck tool call), auto-recover
+        # If thread is corrupt (stuck tool call), repair and retry
         if _is_corrupt_thread_error(exc):
-            config = _new_thread(chat_id)
-            context.chat_data["thread_config"] = config
-            await update.message.reply_text(
-                "⚠️ The previous conversation had a stuck tool call and couldn't continue.\n"
-                "🆕 I've started a fresh thread — please resend your message."
-            )
+            try:
+                from agent import repair_orphaned_tool_calls
+                await loop.run_in_executor(
+                    None, repair_orphaned_tool_calls, None, config
+                )
+                log.info("Repaired orphaned tool calls for chat %s, retrying", chat_id)
+                answer, interrupt_data, captured_image = await loop.run_in_executor(
+                    None, _run_agent_sync, text, config
+                )
+            except Exception as retry_exc:
+                log.error("Retry after repair failed for chat %s: %s", chat_id, retry_exc)
+                # Repair failed — fall back to a fresh thread
+                config = _new_thread(chat_id)
+                context.chat_data["thread_config"] = config
+                await update.message.reply_text(
+                    "⚠️ The previous conversation had a stuck tool call and couldn't be repaired.\n"
+                    "🆕 I've started a fresh thread — please resend your message."
+                )
+                return
         else:
             await update.message.reply_text(f"⚠️ Error: {exc}")
-        return
+            return
 
     # Send captured vision image if available
     if captured_image:
@@ -603,6 +702,7 @@ async def start_bot() -> bool:
     _app.add_handler(CommandHandler("start", _cmd_start))
     _app.add_handler(CommandHandler("help", _cmd_help))
     _app.add_handler(CommandHandler("newthread", _cmd_newthread))
+    _app.add_handler(CommandHandler("model", _cmd_model))
     _app.add_handler(CommandHandler("tools", _cmd_tools))
     _app.add_handler(CommandHandler("status", _cmd_status))
     _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))

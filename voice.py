@@ -49,7 +49,7 @@ _MAX_RECORDING_S = 30       # hard cap on a single utterance
 _MIN_SPEECH_CHUNKS = 5      # minimum chunks to count as real speech (~400 ms)
 
 # Whisper
-_DEFAULT_WHISPER_SIZE = "base"
+_DEFAULT_WHISPER_SIZE = "small"
 
 # Grace period after TTS unmutes — discard audio to let speaker buffer drain
 _UNMUTE_GRACE_S = 0.6

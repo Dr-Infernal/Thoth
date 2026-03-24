@@ -24,8 +24,9 @@ import subprocess
 import sys
 import threading
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 # ── Configure root logger so all module loggers emit to stderr ──────────────
 # stderr is captured by launcher.py and written to ~/.thoth/thoth_app.log
@@ -81,11 +82,18 @@ from documents import (
 )
 from models import (
     get_current_model, set_model, list_all_models, list_local_models,
-    is_model_local, is_tool_compatible, check_tool_support, pull_model,
+    is_model_local, is_cloud_model, is_cloud_available,
+    is_openai_available, is_openrouter_available,
+    is_tool_compatible, check_tool_support, pull_model,
     get_context_size, get_user_context_size, set_context_size, get_model_max_context,
+    list_cloud_models, list_starred_cloud_models, star_cloud_model, unstar_cloud_model,
+    fetch_cloud_models, refresh_cloud_models, get_cloud_provider,
+    list_cloud_vision_models, is_cloud_vision_model,
+    fetch_trending_ollama_models, get_trending_models, get_provider_emoji,
+    validate_openrouter_key,
     DEFAULT_MODEL, DEFAULT_CONTEXT_SIZE, CONTEXT_SIZE_OPTIONS, CONTEXT_SIZE_LABELS,
 )
-from api_keys import get_key, set_key, apply_keys
+from api_keys import get_key, set_key, apply_keys, get_cloud_config, set_cloud_config
 from tools import registry as tool_registry
 from voice import get_voice_service, get_available_whisper_sizes
 from tts import TTSService, VOICE_CATALOG
@@ -97,6 +105,8 @@ from tasks import (
     duplicate_task, get_task,
     run_task_background,
     get_running_tasks,
+    get_running_task_thread,
+    stop_task,
     get_recent_runs,
     get_next_fire_times,
     get_run_history,
@@ -110,36 +120,48 @@ import memory as memory_db
 # CONSTANTS
 # ═════════════════════════════════════════════════════════════════════════════
 
-_WELCOME_MESSAGE = """\
-👋 **Welcome to Thoth — your private AI assistant.**
-
-Everything runs locally on your machine. Your conversations, memories, and files never leave your computer.
+_WELCOME_BODY = """\
 
 ---
 
-🤖 **Agent** — I autonomously pick from 19 tools to answer your questions — search the web, read files, send emails, check your calendar, and more.
+🤖 **Agent** — I autonomously pick from 22+ tools to answer your questions — search the web, read files, send emails, check your calendar, and more.
 
-🧠 **Memory** — I remember things you tell me across conversations and learn from past chats automatically.
+🧠 **Memory** — I build a knowledge graph from our conversations and remember things you tell me across sessions.
+
+⚡ **Tasks** — Create scheduled automations — daily briefings, email digests, research summaries — from the Tasks tab or just ask.
 
 🎤 **Voice** — Toggle the mic to talk hands-free. I can speak back too — all processed locally, never sent to the cloud.
 
 👁️ **Vision** — I can see your webcam or screen and answer questions about what's there.
 
-⚡ **Workflows** — Build multi-step automations that run on a schedule — daily briefings, email digests, research summaries.
-
 📬 **Channels** — Connect Telegram or Email so I can respond to messages even when the app window is closed.
 
 ---
 
-⚙️ Head to **Settings** to configure tools and explore options. Just type or speak — I'll figure out which tools to use.
+⚙️ Head to **Settings** to connect accounts and explore options. Just type or speak — I'll figure out which tools to use.
 """
 
+def _welcome_message(cloud: bool = False) -> str:
+    if cloud:
+        header = (
+            "👋 **Welcome to Thoth — your AI assistant.**\n\n"
+            "Your model runs in the cloud, but your conversations, "
+            "memories, and files are stored locally on your machine."
+        )
+    else:
+        header = (
+            "👋 **Welcome to Thoth — your private AI assistant.**\n\n"
+            "Everything runs locally on your machine. Your conversations, "
+            "memories, and files never leave your computer."
+        )
+    return header + _WELCOME_BODY
+
 _EXAMPLE_PROMPTS = [
-    "What's the weather in New York?",
+    "What's the weather this week?",
     "Summarize the latest AI research papers",
     "What do you remember about me?",
-    "Read and summarize report.pdf in my workspace",
-    "Send an email to Mom saying I'll be home at 5",
+    "Create a daily morning briefing task",
+    "Read and summarize report.pdf from my workspace",
     "What am I looking at? (with camera)",
 ]
 
@@ -240,6 +262,7 @@ class AppState:
     def __init__(self) -> None:
         self.thread_id: str | None = None
         self.thread_name: str | None = None
+        self.thread_model_override: str = ""  # cloud model override for current thread
         self.messages: list[dict] = []
         self.current_model: str = get_current_model()
         self.context_size: int = get_user_context_size()
@@ -257,6 +280,55 @@ class AppState:
 
 
 state = AppState()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PER-THREAD GENERATION STATE
+# ═════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class GenerationState:
+    """Tracks an in-flight generation for one thread.
+
+    Allows concurrent streaming across multiple threads.  The consumer
+    task checks ``detached`` before every UI update — when the user
+    switches away, UI writes stop but accumulation continues so the
+    response is ready when the user switches back.
+    """
+    thread_id: str
+    q: queue.Queue
+    stop_event: threading.Event
+    config: dict
+    enabled_tools: list
+    # Accumulated output
+    accumulated: str = ""
+    thinking_text: str = ""
+    tool_results: list = field(default_factory=list)
+    chart_data: list = field(default_factory=list)
+    captured_images: list = field(default_factory=list)
+    interrupt_data: Any = None
+    status: str = "streaming"  # streaming | done | error | stopped
+    error: str = ""
+    # TTS / voice
+    voice_mode: bool = False
+    tts_active: bool = False
+    tts_buffer: str = ""
+    tts_spoken: int = 0
+    tts_in_code: bool = False
+    # Consumer tracking
+    first_content: bool = False
+    thinking_collapsed: bool = False
+    # UI attachment — set to None when detached
+    detached: bool = False
+    assistant_md: Any = None
+    thinking_label: Any = None
+    thinking_md: Any = None
+    tool_col: Any = None
+    wrapper: Any = None
+
+
+_active_generations: dict[str, GenerationState] = {}
+
 
 # ── Startup gate ─────────────────────────────────────────────────────────
 _startup_ready = False
@@ -666,9 +738,10 @@ async def index():
         def _poll_ready():
             status_label.text = _startup_status
             if _startup_ready:
+                _poll_timer.deactivate()
                 ui.navigate.to("/")
 
-        ui.timer(0.3, _poll_ready)
+        _poll_timer = ui.timer(0.3, _poll_ready)
         return  # page is complete; timer keeps polling
 
     # ── Show startup warnings (channel auto-start failures, etc.) ────────
@@ -758,6 +831,8 @@ async def index():
             0%, 80%, 100% { opacity: 0; }
             40% { opacity: 1; }
         }
+        @keyframes thoth-spin { to { transform: rotate(360deg); } }
+        .thoth-spin { animation: thoth-spin 1s linear infinite; }
     </style>
     <script>
     // Make all links in chat messages open in a new tab
@@ -796,12 +871,16 @@ async def index():
 
     # ── Health check ─────────────────────────────────────────────────────
     def _run_health_check() -> tuple[bool, str]:
-        try:
-            import ollama as _oll
-            _oll.list()
-        except Exception:
-            return False, "Cannot connect to Ollama. Make sure it is running (`ollama serve`)."
         current = get_current_model()
+        # Cloud default — no Ollama needed
+        if is_cloud_model(current):
+            if not is_cloud_available():
+                return False, "Cloud model selected but no API key configured. Open Settings → Cloud."
+            return True, ""
+        # Local default — check Ollama
+        from models import _ollama_reachable
+        if not _ollama_reachable():
+            return False, "Cannot connect to Ollama. Make sure it is running (`ollama serve`)."
         if not is_model_local(current):
             return False, f"Model {current} is not downloaded. Open Settings → Models to download it."
         return True, ""
@@ -833,143 +912,314 @@ async def index():
 
                 ui.separator()
 
-                # ── Brain Model ──────────────────────────────────────────
-                ui.label("🧠 Brain Model").classes("text-h6")
+                # ── Setup Path Toggle ────────────────────────────────────
+                ui.label("⚡ How will you run Thoth?").classes("text-h6")
                 ui.label(
-                    "The main reasoning model that powers conversations and tool use. "
-                    "14B+ recommended for best accuracy."
+                    "Choose Local if you have a GPU and want full privacy. "
+                    "Choose Cloud if you prefer using OpenAI, Claude, or other cloud APIs."
                 ).classes("text-grey-6 text-sm")
 
-                local_now = await run.io_bound(list_local_models)
-                setup_all_models = list_all_models()
-                brain_default = state.current_model
+                setup_path = {"mode": None}
 
-                setup_brain_opts = {
-                    m: f"{'✅' if m in local_now else '⬇️'}  {m}"
-                    for m in setup_all_models
-                }
-                setup_brain_select = ui.select(
-                    label="Brain model",
-                    options=setup_brain_opts,
-                    value=brain_default,
-                ).classes("w-full")
-
-                brain_status = ui.label("").classes("text-sm")
-                brain_status.visible = False
-                brain_done = {"value": brain_default in local_now}
-
-                setup_brain_dl = ui.button(f"⬇️ Download {brain_default}").props("color=primary")
-                setup_brain_dl.visible = brain_default not in local_now
-                if brain_default in local_now:
-                    brain_status.text = f"✅ {brain_default} is ready"
-                    brain_status.visible = True
-
-                async def _setup_dl_brain():
-                    sel = setup_brain_select.value
-                    if is_model_local(sel):
-                        brain_status.text = f"✅ {sel} is already downloaded"
-                        brain_status.visible = True
-                        brain_done["value"] = True
-                        setup_brain_dl.visible = False
+                with ui.row().classes("w-full gap-4 q-my-sm"):
+                    def _pick_local():
+                        setup_path["mode"] = "local"
+                        _local_section.visible = True
+                        _cloud_section.visible = False
                         _update_finish()
-                        return
-                    setup_brain_dl.disable()
-                    brain_status.text = f"⏳ Downloading {sel}… this may take a few minutes"
-                    brain_status.visible = True
-                    n = ui.notification(f"Downloading {sel}…", type="ongoing", spinner=True, timeout=None)
-                    await run.io_bound(lambda: list(pull_model(sel)))
-                    n.dismiss()
-                    brain_status.text = f"✅ {sel} downloaded successfully!"
-                    setup_brain_dl.visible = False
-                    setup_brain_dl.enable()
-                    brain_done["value"] = True
-                    set_model(sel)
-                    state.current_model = sel
-                    clear_agent_cache()
-                    _update_finish()
+                    def _pick_cloud():
+                        setup_path["mode"] = "cloud"
+                        _local_section.visible = False
+                        _cloud_section.visible = True
+                        _update_finish()
 
-                setup_brain_dl.on_click(_setup_dl_brain)
+                    ui.button("🖥️ Local (Ollama)", on_click=_pick_local).props(
+                        "color=primary outline"
+                    ).classes("flex-grow")
+                    ui.button("☁️ Cloud (API key)", on_click=_pick_cloud).props(
+                        "color=cyan outline"
+                    ).classes("flex-grow")
 
-                def _on_setup_brain_change(e):
-                    sel = e.value
-                    setup_brain_dl.text = f"⬇️ Download {sel}"
-                    already = is_model_local(sel)
-                    setup_brain_dl.visible = not already
-                    brain_done["value"] = already
-                    if already:
-                        brain_status.text = f"✅ {sel} is ready"
+                _cloud_section = ui.column().classes("w-full")
+                _cloud_section.visible = False
+                _local_section = ui.column().classes("w-full")
+                _local_section.visible = False
+
+                # ── Cloud Setup Path ─────────────────────────────────────
+                cloud_done = {"value": False}
+                with _cloud_section:
+                    ui.label(
+                        "Enter at least one API key. OpenAI gives direct access to GPT models. "
+                        "OpenRouter gives access to Claude, Gemini, Llama, and 100+ more."
+                    ).classes("text-grey-6 text-sm")
+
+                    setup_openai_key = ui.input(
+                        "OpenAI API Key (optional)",
+                        password=True, password_toggle_button=True,
+                    ).classes("w-full")
+                    setup_or_key = ui.input(
+                        "OpenRouter API Key (optional)",
+                        password=True, password_toggle_button=True,
+                    ).classes("w-full")
+
+                    cloud_status = ui.label("").classes("text-sm")
+                    cloud_status.visible = False
+                    cloud_model_select = ui.select(
+                        label="Default cloud model",
+                        options=[],
+                    ).classes("w-full").props('use-input input-debounce=300')
+                    cloud_model_select.visible = False
+
+                    cloud_vision_select = ui.select(
+                        label="Vision model (optional — for camera/screenshot analysis)",
+                        options=[],
+                    ).classes("w-full").props('use-input input-debounce=300')
+                    cloud_vision_select.visible = False
+
+                    async def _validate_cloud_keys():
+                        oai_val = setup_openai_key.value.strip()
+                        or_val = setup_or_key.value.strip()
+                        if not oai_val and not or_val:
+                            ui.notify("Enter at least one API key", type="warning")
+                            return
+                        cloud_status.text = "⏳ Validating key(s)…"
+                        cloud_status.visible = True
+                        # Validate OpenRouter key if provided
+                        if or_val:
+                            or_valid = await run.io_bound(validate_openrouter_key, or_val)
+                            if not or_valid:
+                                cloud_status.text = "❌ Invalid OpenRouter API key."
+                                # Don't save the bad key
+                                cloud_done["value"] = False
+                                _update_finish()
+                                return
+                            set_key("OPENROUTER_API_KEY", or_val)
+                        if oai_val:
+                            set_key("OPENAI_API_KEY", oai_val)
+                        cloud_status.text = "⏳ Fetching available models…"
+                        count = await run.io_bound(refresh_cloud_models)
+                        if count == 0:
+                            cloud_status.text = "❌ No models found. Check your API key(s)."
+                            cloud_done["value"] = False
+                            _update_finish()
+                            return
+                        models = list_cloud_models()
+                        opts = {m: f"{get_provider_emoji(m)} {m}" for m in models}
+                        cloud_model_select.options = opts
+                        cloud_model_select.visible = True
+                        # Pre-select gpt-5 if available, else first
+                        first = "gpt-5" if "gpt-5" in models else models[0]
+                        cloud_model_select.set_value(first)
+                        # Populate cloud vision picker
+                        vision_models = list_cloud_vision_models()
+                        if vision_models:
+                            v_opts = {m: f"{get_provider_emoji(m)} {m}" for m in vision_models}
+                            cloud_vision_select.options = v_opts
+                            v_first = "gpt-5" if "gpt-5" in vision_models else vision_models[0]
+                            cloud_vision_select.set_value(v_first)
+                            cloud_vision_select.visible = True
+                        cloud_status.text = f"✅ Found {count} models"
+                        cloud_done["value"] = True
+                        _update_finish()
+
+                    ui.button("🔑 Validate & Fetch Models", on_click=_validate_cloud_keys).props(
+                        "color=cyan"
+                    )
+
+                    def _on_cloud_model_change(e):
+                        if e.value:
+                            cloud_done["value"] = True
+                            _update_finish()
+                    cloud_model_select.on_value_change(_on_cloud_model_change)
+
+                # ── Brain Model (Local path) ─────────────────────────────
+                with _local_section:
+                    from models import _ollama_reachable as _wiz_ollama_check
+
+                    # Single io_bound call: probe Ollama once, then list if up
+                    def _wiz_probe():
+                        up = _wiz_ollama_check()
+                        local = list_local_models() if up else []
+                        return up, local
+                    _wiz_ollama_up, local_now = await run.io_bound(_wiz_probe)
+
+                    # Show Ollama install instructions when not running
+                    import sys as _wiz_sys
+                    if _wiz_sys.platform == "win32":
+                        _wiz_install = (
+                            "1. Download Ollama from ollama.com/download\n"
+                            "2. Run the installer — Ollama starts automatically\n"
+                            "3. Come back here and click 🖥️ Local again"
+                        )
+                    elif _wiz_sys.platform == "darwin":
+                        _wiz_install = (
+                            "1. Download from ollama.com/download (or: brew install ollama)\n"
+                            "2. Run: ollama serve\n"
+                            "3. Come back here and click 🖥️ Local again"
+                        )
+                    else:
+                        _wiz_install = (
+                            "1. Install: curl -fsSL https://ollama.com/install.sh | sh\n"
+                            "2. Run: ollama serve\n"
+                            "3. Come back here and click 🖥️ Local again"
+                        )
+
+                    with ui.card().classes("w-full q-pa-md bg-amber-1") as wiz_ollama_notice:
+                        ui.label("⚠️ Ollama is not running").classes("text-weight-bold text-body1 text-brown-9")
+                        ui.label(
+                            "Local models need Ollama installed and running on your machine. "
+                            "Install it, then come back to this wizard."
+                        ).classes("text-grey-8 text-sm q-mb-xs")
+                        ui.label(_wiz_install).classes("text-grey-8 text-xs").style("white-space: pre-line")
+                        ui.link("Download Ollama →", "https://ollama.com/download", new_tab=True).classes("text-sm text-weight-bold")
+                    wiz_ollama_notice.visible = not _wiz_ollama_up
+
+                    ui.label("🧠 Brain Model").classes("text-h6")
+                    ui.label(
+                        "The main reasoning model that powers conversations and tool use. "
+                        "14B+ recommended for best accuracy."
+                    ).classes("text-grey-6 text-sm")
+
+                    local_now = local_now or []
+                    setup_all_models = list_all_models()
+                    brain_default = state.current_model
+
+                    setup_brain_opts = {
+                        m: f"{'✅' if m in local_now else '⬇️'}  {m}"
+                        for m in setup_all_models
+                    }
+                    setup_brain_select = ui.select(
+                        label="Brain model",
+                        options=setup_brain_opts,
+                        value=brain_default,
+                    ).classes("w-full").props('use-input input-debounce=300')
+
+                    brain_status = ui.label("").classes("text-sm")
+                    brain_status.visible = False
+                    brain_done = {"value": brain_default in local_now}
+
+                    setup_brain_dl = ui.button(f"⬇️ Download {brain_default}").props("color=primary")
+                    setup_brain_dl.visible = brain_default not in local_now
+                    if brain_default in local_now:
+                        brain_status.text = f"✅ {brain_default} is ready"
                         brain_status.visible = True
+
+                    async def _setup_dl_brain():
+                        sel = setup_brain_select.value
+                        if is_model_local(sel):
+                            brain_status.text = f"✅ {sel} is already downloaded"
+                            brain_status.visible = True
+                            brain_done["value"] = True
+                            setup_brain_dl.visible = False
+                            _update_finish()
+                            return
+                        from models import _ollama_reachable
+                        if not _ollama_reachable():
+                            brain_status.text = "❌ Ollama is not running. Install and start Ollama first."
+                            brain_status.visible = True
+                            return
+                        setup_brain_dl.disable()
+                        brain_status.text = f"⏳ Downloading {sel}… this may take a few minutes"
+                        brain_status.visible = True
+                        n = ui.notification(f"Downloading {sel}…", type="ongoing", spinner=True, timeout=None)
+                        await run.io_bound(lambda: list(pull_model(sel)))
+                        n.dismiss()
+                        brain_status.text = f"✅ {sel} downloaded successfully!"
+                        setup_brain_dl.visible = False
+                        setup_brain_dl.enable()
+                        brain_done["value"] = True
                         set_model(sel)
                         state.current_model = sel
                         clear_agent_cache()
-                    else:
-                        brain_status.visible = False
-                    _update_finish()
+                        _update_finish()
 
-                setup_brain_select.on_value_change(_on_setup_brain_change)
+                    setup_brain_dl.on_click(_setup_dl_brain)
 
-                ui.separator()
+                    def _on_setup_brain_change(e):
+                        sel = e.value
+                        setup_brain_dl.text = f"⬇️ Download {sel}"
+                        already = is_model_local(sel)
+                        setup_brain_dl.visible = not already
+                        brain_done["value"] = already
+                        if already:
+                            brain_status.text = f"✅ {sel} is ready"
+                            brain_status.visible = True
+                            set_model(sel)
+                            state.current_model = sel
+                            clear_agent_cache()
+                        else:
+                            brain_status.visible = False
+                        _update_finish()
 
-                # ── Vision Model ─────────────────────────────────────────
-                ui.label("👁️ Vision Model").classes("text-h6")
-                ui.label(
-                    "Used for camera and screen capture analysis. "
-                    "Optional — you can skip this and download it later."
-                ).classes("text-grey-6 text-sm")
+                    setup_brain_select.on_value_change(_on_setup_brain_change)
 
-                vsvc = state.vision_service
-                setup_vision_opts = {
-                    m: f"{'✅' if m in local_now else '⬇️'}  {m}"
-                    for m in sorted(set(POPULAR_VISION_MODELS + ([vsvc.model] if vsvc.model not in POPULAR_VISION_MODELS else [])))
-                }
-                setup_vision_select = ui.select(
-                    label="Vision model",
-                    options=setup_vision_opts,
-                    value=vsvc.model,
-                ).classes("w-full")
+                    ui.separator()
 
-                vision_status = ui.label("").classes("text-sm")
-                vision_status.visible = False
+                    # ── Vision Model ─────────────────────────────────────────
+                    ui.label("👁️ Vision Model").classes("text-h6")
+                    ui.label(
+                        "Used for camera and screen capture analysis. "
+                        "Optional — you can skip this and download it later."
+                    ).classes("text-grey-6 text-sm")
 
-                setup_vision_dl = ui.button(f"⬇️ Download {vsvc.model}").props("color=primary outline")
-                setup_vision_dl.visible = vsvc.model not in local_now
-                if vsvc.model in local_now:
-                    vision_status.text = f"✅ {vsvc.model} is ready"
-                    vision_status.visible = True
+                    vsvc = state.vision_service
+                    setup_vision_opts = {
+                        m: f"{'✅' if m in local_now else '⬇️'}  {m}"
+                        for m in sorted(set(POPULAR_VISION_MODELS + ([vsvc.model] if vsvc.model not in POPULAR_VISION_MODELS else [])))
+                    }
+                    setup_vision_select = ui.select(
+                        label="Vision model",
+                        options=setup_vision_opts,
+                        value=vsvc.model,
+                    ).classes("w-full").props('use-input input-debounce=300')
 
-                async def _setup_dl_vision():
-                    sel = setup_vision_select.value
-                    if is_model_local(sel):
-                        vision_status.text = f"✅ {sel} is already downloaded"
+                    vision_status = ui.label("").classes("text-sm")
+                    vision_status.visible = False
+
+                    setup_vision_dl = ui.button(f"⬇️ Download {vsvc.model}").props("color=primary outline")
+                    setup_vision_dl.visible = vsvc.model not in local_now
+                    if vsvc.model in local_now:
+                        vision_status.text = f"✅ {vsvc.model} is ready"
                         vision_status.visible = True
+
+                    async def _setup_dl_vision():
+                        sel = setup_vision_select.value
+                        if is_model_local(sel):
+                            vision_status.text = f"✅ {sel} is already downloaded"
+                            vision_status.visible = True
+                            setup_vision_dl.visible = False
+                            return
+                        from models import _ollama_reachable
+                        if not _ollama_reachable():
+                            vision_status.text = "❌ Ollama is not running. Install and start Ollama first."
+                            vision_status.visible = True
+                            return
+                        setup_vision_dl.disable()
+                        vision_status.text = f"⏳ Downloading {sel}… this may take a few minutes"
+                        vision_status.visible = True
+                        n = ui.notification(f"Downloading {sel}…", type="ongoing", spinner=True, timeout=None)
+                        await run.io_bound(lambda: list(pull_model(sel)))
+                        n.dismiss()
+                        vision_status.text = f"✅ {sel} downloaded successfully!"
                         setup_vision_dl.visible = False
-                        return
-                    setup_vision_dl.disable()
-                    vision_status.text = f"⏳ Downloading {sel}… this may take a few minutes"
-                    vision_status.visible = True
-                    n = ui.notification(f"Downloading {sel}…", type="ongoing", spinner=True, timeout=None)
-                    await run.io_bound(lambda: list(pull_model(sel)))
-                    n.dismiss()
-                    vision_status.text = f"✅ {sel} downloaded successfully!"
-                    setup_vision_dl.visible = False
-                    setup_vision_dl.enable()
-                    vsvc.model = sel
-
-                setup_vision_dl.on_click(_setup_dl_vision)
-
-                def _on_setup_vision_change(e):
-                    sel = e.value
-                    setup_vision_dl.text = f"⬇️ Download {sel}"
-                    already = is_model_local(sel)
-                    setup_vision_dl.visible = not already
-                    if already:
-                        vision_status.text = f"✅ {sel} is ready"
-                        vision_status.visible = True
+                        setup_vision_dl.enable()
                         vsvc.model = sel
-                    else:
-                        vision_status.visible = False
 
-                setup_vision_select.on_value_change(_on_setup_vision_change)
+                    setup_vision_dl.on_click(_setup_dl_vision)
+
+                    def _on_setup_vision_change(e):
+                        sel = e.value
+                        setup_vision_dl.text = f"⬇️ Download {sel}"
+                        already = is_model_local(sel)
+                        setup_vision_dl.visible = not already
+                        if already:
+                            vision_status.text = f"✅ {sel} is ready"
+                            vision_status.visible = True
+                            vsvc.model = sel
+                        else:
+                            vision_status.visible = False
+
+                    setup_vision_select.on_value_change(_on_setup_vision_change)
 
                 ui.separator()
 
@@ -979,13 +1229,16 @@ async def index():
                     "After completing this wizard, head to Settings to get the most out of Thoth:"
                 ).classes("text-grey-6 text-sm")
 
+                _cloud_path = setup_path["mode"] == "cloud"
                 tips = [
-                    ("🔑", "API Keys", "Settings → Tools to add API keys for web search, weather, Wolfram Alpha, and more. DuckDuckGo search works without a key."),
-                    ("📧", "Gmail", "Settings → Tools → Gmail to connect your Google account for reading and sending email."),
-                    ("📅", "Calendar", "Settings → Tools → Calendar to connect Google Calendar for checking events and scheduling."),
-                    ("📄", "Documents", "Drop PDFs, text files, or URLs into the sidebar to give Thoth context about your work."),
-                    ("🎙️", "Voice", "Settings → Voice to enable hands-free voice input and spoken responses."),
-                    ("📡", "Channels", "Settings → Channels to connect Telegram or Email so Thoth can respond to messages when the app is closed."),
+                    *([
+                        ("⭐", "Star Models", "Head to Settings → Cloud to star your favorite models. Starred models appear in the quick-switch picker in the chat header."),
+                    ] if _cloud_path else []),
+                    ("📧", "Gmail & Calendar", "Settings → Tools → Gmail to connect your Google account. Once connected, I can read, draft and send emails, and manage calendar events."),
+                    ("📄", "Documents", "Settings → Documents to upload PDFs and text files as a persistent knowledge base. You can also attach files directly in chat with the 📎 button or drag-and-drop."),
+                    ("🧠", "Memory", "I build a knowledge graph from our conversations automatically. You can also tell me things explicitly — 'Remember that my standup is at 9 AM.'"),
+                    ("⚡", "Tasks", "Create scheduled automations — daily briefings, email digests, research summaries. Open the Tasks tab or just ask me to set one up."),
+                    ("📡", "Channels", "Settings → Channels to connect Telegram or Email so I can respond even when the app is closed."),
                 ]
                 for icon, title, desc in tips:
                     with ui.row().classes("items-start gap-2 q-py-xs"):
@@ -1000,16 +1253,30 @@ async def index():
                 finish_btn = ui.button("Get Started →").props("color=primary size=lg").classes("w-full")
 
                 def _update_finish():
-                    finish_btn.set_enabled(brain_done["value"])
+                    if setup_path["mode"] is None:
+                        finish_btn.set_enabled(False)
+                    elif setup_path["mode"] == "cloud":
+                        finish_btn.set_enabled(cloud_done["value"])
+                    else:
+                        finish_btn.set_enabled(brain_done["value"])
 
                 _update_finish()
 
                 async def _finish_setup():
+                    if setup_path["mode"] == "cloud":
+                        sel = cloud_model_select.value
+                        if sel:
+                            set_model(sel)
+                            state.current_model = sel
+                            clear_agent_cache()
+                        # Set cloud vision model if one was selected
+                        vsel = cloud_vision_select.value
+                        if vsel:
+                            vsvc = state.vision_service
+                            vsvc.model = vsel
                     _mark_setup_complete()
                     setup_dlg.close()
-                    # If brain model was downloaded, suppress the health-check notification
-                    if brain_done["value"]:
-                        _rebuild_main()
+                    _rebuild_main()
 
                 finish_btn.on_click(_finish_setup)
 
@@ -1171,10 +1438,413 @@ async def index():
     # STREAMING
     # ══════════════════════════════════════════════════════════════════════
 
+    async def _consume_generation(gen: GenerationState) -> None:
+        """Drain *gen.q* and update the UI.  Runs as an ``asyncio.Task``.
+
+        When *gen.detached* is True (user switched to another thread), all
+        UI writes are skipped but event accumulation continues so the
+        response is ready when the user switches back.
+        """
+        _stopped_shown = False
+        _drain_deadline = 0.0
+
+        try:
+          while True:
+            # ── Stop handling ────────────────────────────────────────────
+            if gen.stop_event.is_set() and not _stopped_shown:
+                _stopped_shown = True
+                gen.status = "stopped"
+                _drain_deadline = asyncio.get_event_loop().time() + 30
+                if not gen.detached:
+                    try:
+                        if gen.thinking_label:
+                            gen.thinking_label.delete()
+                            gen.thinking_label = None
+                        if gen.thinking_md:
+                            gen.thinking_md.delete()
+                            gen.thinking_md = None
+                        if gen.assistant_md:
+                            gen.assistant_md.set_visibility(True)
+                            gen.accumulated += "\n\n\u23f9\ufe0f *[Stopped]*"
+                            gen.assistant_md.set_content(gen.accumulated)
+                    except Exception:
+                        pass
+                if gen.tts_active:
+                    state.tts_service.stop()
+
+            if _stopped_shown and asyncio.get_event_loop().time() > _drain_deadline:
+                break
+
+            try:
+                event = gen.q.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.05)
+                continue
+
+            if event is None:
+                break
+
+            if _stopped_shown:
+                continue
+
+            event_type, payload = event
+            _break_loop = False
+
+            # ── First content transition ─────────────────────────────────
+            if not gen.first_content and event_type in ("token", "done"):
+                gen.first_content = True
+                if not gen.detached:
+                    try:
+                        if gen.thinking_label:
+                            gen.thinking_label.delete()
+                            gen.thinking_label = None
+                        if gen.thinking_text and not gen.thinking_collapsed:
+                            gen.thinking_collapsed = True
+                            if gen.thinking_md:
+                                gen.thinking_md.delete()
+                                gen.thinking_md = None
+                            if gen.tool_col:
+                                with gen.tool_col:
+                                    with ui.expansion(
+                                        "\U0001f4ad Thinking", icon="psychology"
+                                    ).classes("w-full"):
+                                        ui.code(
+                                            gen.thinking_text.strip()[:8_000]
+                                        ).classes("w-full text-xs")
+                        if gen.assistant_md:
+                            gen.assistant_md.set_visibility(True)
+                    except Exception:
+                        logger.error("Error rendering thinking collapse", exc_info=True)
+
+            if event_type == "error":
+                gen.status = "error"
+                gen.error = payload
+                if not gen.detached:
+                    try:
+                        if gen.thinking_label:
+                            gen.thinking_label.delete()
+                        if gen.assistant_md:
+                            gen.assistant_md.set_visibility(True)
+                            gen.assistant_md.set_content(f"\u26a0\ufe0f An error occurred: {payload}")
+                    except Exception:
+                        pass
+                try:
+                    repair_orphaned_tool_calls(gen.enabled_tools, gen.config)
+                except Exception:
+                    pass
+                _break_loop = True
+
+            elif event_type == "tool_call":
+                if not gen.detached and gen.tool_col:
+                    try:
+                        with gen.tool_col:
+                            _pending_exp = ui.expansion(
+                                f"\U0001f504 {payload}\u2026", icon="hourglass_empty"
+                            ).classes("w-full")
+                            _pending_exp._thoth_tool_name = payload
+                    except Exception:
+                        pass
+
+            elif event_type == "tool_done":
+                tool_name = payload["name"] if isinstance(payload, dict) else payload
+                tool_content = payload.get("content", "") if isinstance(payload, dict) else ""
+
+                # Chart detection
+                if tool_content and tool_content.startswith("__CHART__:"):
+                    marker_end = tool_content.find("\n\n", 10)
+                    if marker_end == -1:
+                        fig_json = tool_content[10:]
+                        display_text = "Chart created"
+                    else:
+                        fig_json = tool_content[10:marker_end]
+                        display_text = tool_content[marker_end + 2:]
+                    gen.chart_data.append(fig_json)
+                    if not gen.detached and gen.tool_col:
+                        try:
+                            import plotly.io as _pio
+                            fig = _pio.from_json(fig_json)
+                            with gen.tool_col:
+                                ui.plotly(fig).classes("w-full")
+                        except Exception:
+                            pass
+                    tool_content = display_text
+
+                # Update the pending expansion or create a new one
+                if not gen.detached and gen.tool_col:
+                    try:
+                        matched_exp = None
+                        for child in gen.tool_col:
+                            if hasattr(child, '_thoth_tool_name'):
+                                matched_exp = child
+                        if matched_exp:
+                            matched_exp._props["icon"] = "check_circle"
+                            matched_exp._text = f"\u2705 {tool_name}"
+                            matched_exp.update()
+                            if tool_content:
+                                display = tool_content[:5_000]
+                                if len(tool_content) > 5_000:
+                                    display += "\n\n\u2026 (truncated)"
+                                with matched_exp:
+                                    ui.code(display).classes("w-full text-xs")
+                            del matched_exp._thoth_tool_name
+                        else:
+                            with gen.tool_col:
+                                with ui.expansion(f"\u2705 {tool_name}", icon="check_circle").classes("w-full"):
+                                    if tool_content:
+                                        display = tool_content[:5_000]
+                                        if len(tool_content) > 5_000:
+                                            display += "\n\n\u2026 (truncated)"
+                                        ui.code(display).classes("w-full text-xs")
+                    except Exception:
+                        pass
+
+                gen.tool_results.append({"name": tool_name, "content": tool_content})
+
+                # Shell command -> render in terminal panel
+                raw_tool_name = payload.get("raw_name", "") if isinstance(payload, dict) else ""
+                if not gen.detached and raw_tool_name == "run_command" and p.terminal_container is not None:
+                    try:
+                        _lines = (tool_content or "").split("\n")
+                        _cmd_line = _lines[0][2:] if _lines and _lines[0].startswith("$ ") else ""
+                        _info_line = _lines[-1] if _lines else ""
+                        _e_code = 0
+                        _dur = 0.0
+                        _cwd = ""
+                        import re as _re_term
+                        _info_m = _re_term.search(
+                            r"Exit code:\s*(-?\d+)\s*\|\s*Duration:\s*([\d.]+)s\s*\|\s*cwd:\s*(.*)",
+                            _info_line,
+                        )
+                        if _info_m:
+                            _e_code = int(_info_m.group(1))
+                            _dur = float(_info_m.group(2))
+                            _cwd = _info_m.group(3).strip()
+                        _output_lines = _lines[1:-1] if len(_lines) > 2 else []
+                        _add_terminal_entry({
+                            "command": _cmd_line,
+                            "output": "\n".join(_output_lines),
+                            "exit_code": _e_code,
+                            "duration": _dur,
+                            "cwd": _cwd,
+                        })
+                        if not getattr(p, "terminal_visible", False):
+                            p.terminal_visible = True
+                            if p.terminal_panel is not None:
+                                p.terminal_panel.set_visibility(True)
+                            if hasattr(p, "terminal_chevron") and p.terminal_chevron:
+                                p.terminal_chevron.props("icon=expand_less")
+                        if p.terminal_scroll:
+                            p.terminal_scroll.scroll_to(percent=1.0)
+                    except Exception:
+                        pass
+
+                # Vision capture (always capture data, only render if attached)
+                if tool_name in ("\U0001f441\ufe0f Vision", "analyze_image"):
+                    vsvc = state.vision_service
+                    if vsvc and vsvc.last_capture:
+                        b64_img = _b64.b64encode(vsvc.last_capture).decode("ascii")
+                        gen.captured_images.append(b64_img)
+                        if not gen.detached and gen.tool_col:
+                            try:
+                                with gen.tool_col:
+                                    ui.image(f"data:image/jpeg;base64,{b64_img}").classes("w-80 rounded")
+                            except Exception:
+                                pass
+                        vsvc.last_capture = None
+
+                # Browser screenshot thumbnail
+                if not gen.detached and raw_tool_name.startswith("browser_"):
+                    try:
+                        from tools.browser_tool import get_session_manager as _get_bsm
+                        _bsm = _get_bsm()
+                        if _bsm.has_active_session():
+                            _bs = _bsm.get_session()
+                            _screenshot_bytes = _bs.take_screenshot()
+                            if _screenshot_bytes:
+                                _b64_ss = _b64.b64encode(_screenshot_bytes).decode("ascii")
+                                if gen.tool_col:
+                                    with gen.tool_col:
+                                        ui.image(f"data:image/png;base64,{_b64_ss}").classes(
+                                            "w-80 rounded"
+                                        ).style("border: 1px solid #333; margin-top: 4px;")
+                    except Exception:
+                        pass
+
+            elif event_type == "summarizing":
+                if not gen.detached and gen.wrapper:
+                    try:
+                        if gen.thinking_label:
+                            gen.thinking_label.delete()
+                            gen.thinking_label = None
+                        with gen.wrapper:
+                            gen.thinking_label = ui.html(
+                                '<span class="thoth-typing" style="font-size:0.9rem; opacity:0.6;">'
+                                '\U0001f4dd Summarizing conversation history<span class="dots">'
+                                '<span>.</span><span>.</span><span>.</span></span></span>',
+                                sanitize=False,
+                            )
+                    except Exception:
+                        pass
+
+            elif event_type == "thinking":
+                pass  # spinner already visible
+
+            elif event_type == "thinking_token":
+                gen.thinking_text += payload
+                if not gen.detached:
+                    try:
+                        if gen.thinking_label:
+                            gen.thinking_label.delete()
+                            gen.thinking_label = None
+                        if gen.thinking_md is None and gen.wrapper:
+                            with gen.wrapper:
+                                gen.thinking_md = ui.markdown(
+                                    "", extras=["code-friendly", "fenced-code-blocks"]
+                                ).classes("thoth-msg w-full").style(
+                                    "opacity: 0.55; font-size: 0.88rem; font-style: italic;"
+                                )
+                        if gen.thinking_md:
+                            gen.thinking_md.set_content(gen.thinking_text)
+                        if p.chat_scroll:
+                            p.chat_scroll.scroll_to(percent=1.0)
+                    except Exception:
+                        pass
+
+            elif event_type == "token":
+                gen.accumulated += payload
+                if not gen.detached and gen.assistant_md:
+                    try:
+                        gen.assistant_md.set_content(gen.accumulated)
+                        if p.chat_scroll:
+                            p.chat_scroll.scroll_to(percent=1.0)
+                    except Exception:
+                        pass
+
+                # Streaming TTS (only when attached)
+                if gen.tts_active:
+                    if "```" in payload:
+                        gen.tts_in_code = not gen.tts_in_code
+                    if not gen.tts_in_code:
+                        gen.tts_buffer += payload
+                        sentences = _SENTENCE_SPLIT.split(gen.tts_buffer)
+                        if len(sentences) > 1:
+                            for s in sentences[:-1]:
+                                if gen.tts_spoken >= _MAX_STREAM_SENTENCES:
+                                    break
+                                state.tts_service.speak_streaming(s)
+                                gen.tts_spoken += 1
+                                if gen.tts_spoken >= _MAX_STREAM_SENTENCES:
+                                    state.tts_service.flush_streaming(
+                                        "The full response is shown in the app."
+                                    )
+                                    gen.tts_active = False
+                            gen.tts_buffer = sentences[-1]
+
+            elif event_type == "interrupt":
+                gen.interrupt_data = payload
+                gen.status = "interrupted"
+                _break_loop = True
+
+            elif event_type == "done":
+                gen.accumulated = payload
+                if not gen.detached:
+                    try:
+                        if gen.thinking_label:
+                            gen.thinking_label.delete()
+                            gen.thinking_label = None
+                        if gen.thinking_text and not gen.thinking_collapsed:
+                            gen.thinking_collapsed = True
+                            if gen.thinking_md:
+                                gen.thinking_md.delete()
+                                gen.thinking_md = None
+                            if gen.tool_col:
+                                with gen.tool_col:
+                                    with ui.expansion(
+                                        "\U0001f4ad Thinking", icon="psychology"
+                                    ).classes("w-full"):
+                                        ui.code(
+                                            gen.thinking_text.strip()[:8_000]
+                                        ).classes("w-full text-xs")
+                        elif gen.thinking_md:
+                            gen.thinking_md.delete()
+                            gen.thinking_md = None
+                        if gen.assistant_md:
+                            gen.assistant_md.set_visibility(True)
+                            gen.assistant_md.set_content(gen.accumulated)
+                    except Exception:
+                        pass
+
+            if _break_loop:
+                break
+
+        except Exception:
+            logger.error("Error in generation consumer", exc_info=True)
+
+        # ── Finalise ─────────────────────────────────────────────────────
+        if gen.status == "streaming":
+            gen.status = "done"
+
+        try:
+            if not gen.detached:
+                if gen.tts_active:
+                    state.tts_service.flush_streaming(gen.tts_buffer)
+
+                if gen.accumulated and _YT_URL_PATTERN.search(gen.accumulated):
+                    if gen.assistant_md:
+                        gen.assistant_md.delete()
+                        gen.assistant_md = None
+                    if gen.wrapper:
+                        with gen.wrapper:
+                            _render_text_with_embeds(gen.accumulated)
+
+                try:
+                    ui.run_javascript(
+                        "document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));"
+                    )
+                except RuntimeError:
+                    pass
+        except Exception:
+            logger.error("Error in post-stream finalization", exc_info=True)
+
+        # Store assistant message
+        if gen.accumulated:
+            a_msg: dict = {"role": "assistant", "content": gen.accumulated}
+            if gen.tool_results:
+                a_msg["tool_results"] = gen.tool_results
+            if gen.chart_data:
+                a_msg["charts"] = gen.chart_data
+            if gen.captured_images:
+                a_msg["images"] = gen.captured_images
+            if state.thread_id == gen.thread_id:
+                state.messages.append(a_msg)
+
+        # Cleanup
+        _active_generations.pop(gen.thread_id, None)
+
+        # Update UI if this is still the active thread
+        if state.thread_id == gen.thread_id:
+            if p.stop_btn:
+                p.stop_btn.props('icon=stop')
+                p.stop_btn.disable()
+            if state.voice_enabled and not (state.tts_service and state.tts_service.enabled):
+                state.voice_service.unmute()
+            if p.chat_scroll:
+                p.chat_scroll.scroll_to(percent=1.0)
+            if gen.interrupt_data:
+                state.pending_interrupt = gen.interrupt_data
+                _show_interrupt(gen.interrupt_data)
+            _update_token_counter()
+
+        _rebuild_thread_list()  # remove spinning icon from sidebar
+
     async def _send_message(text: str, voice_mode: bool = False) -> None:
         """Send a message and stream the agent response."""
-        if not text.strip() or state.is_generating:
+        if not text.strip():
             return
+        # Per-thread guard -- only block if THIS thread is already generating
+        if state.thread_id and state.thread_id in _active_generations:
+            return
+
 
         # Ensure a thread exists
         if state.thread_id is None:
@@ -1188,10 +1858,7 @@ async def index():
             _rebuild_main()
             _rebuild_thread_list()
 
-        state.is_generating = True
-        state.stop_event = threading.Event()   # fresh event per generation
-        if p.stop_btn:
-            p.stop_btn.enable()
+        gen_thread_id = state.thread_id
 
         # ── Process attached files ───────────────────────────────────────
         file_context = ""
@@ -1224,23 +1891,53 @@ async def index():
         _add_chat_message(user_msg)
 
         # Auto-name thread
-        if state.thread_name and (state.thread_name.startswith("Thread ") or state.thread_name.startswith("💻 Thread ")):
-            state.thread_name = f"💻 {display_content[:50]}"
+        if state.thread_name and (state.thread_name.startswith("Thread ") or state.thread_name.startswith("\U0001f4bb Thread ")):
+            state.thread_name = f"\U0001f4bb {display_content[:50]}"
             _save_thread_meta(state.thread_id, state.thread_name)
             _rebuild_thread_list()
             if p.chat_header_label:
-                p.chat_header_label.set_text(f"💬 {state.thread_name}")
+                p.chat_header_label.set_text(f"\U0001f4ac {state.thread_name}")
         else:
             _save_thread_meta(state.thread_id, state.thread_name)
 
-        # ── Prepare assistant message placeholder ────────────────────────
-        thinking_label = None
-        assistant_md = None
-        tool_col = None
+        # ── Build config ─────────────────────────────────────────────────
+        _thread_mo = state.thread_model_override or ""
+        config = {
+            "configurable": {
+                "thread_id": gen_thread_id,
+                **({"model_override": _thread_mo} if _thread_mo else {}),
+            },
+            "recursion_limit": 25,
+        }
+        enabled_tools = [t.name for t in tool_registry.get_enabled_tools()]
 
+        if voice_mode:
+            agent_input = (
+                "[Voice input \u2014 the user is speaking to you via microphone "
+                "and your response will be read aloud. Keep responses concise "
+                "and conversational.]\n\n" + agent_input
+            )
+
+        # ── Create generation state ──────────────────────────────────────
+        stop_ev = threading.Event()
+        gen = GenerationState(
+            thread_id=gen_thread_id,
+            q=queue.Queue(),
+            stop_event=stop_ev,
+            config=config,
+            enabled_tools=enabled_tools,
+            voice_mode=voice_mode,
+            tts_active=voice_mode and state.tts_service.enabled,
+        )
+        _active_generations[gen_thread_id] = gen
+
+        if p.stop_btn:
+            p.stop_btn.enable()
+
+        # ── Prepare assistant message placeholder ────────────────────────
         with p.chat_container:
             with ui.element("div").classes("thoth-msg-row"):
-                ui.html('<div class="thoth-avatar thoth-avatar-bot">𓁟</div>', sanitize=False)
+                ui.html('<div class="thoth-avatar thoth-avatar-bot">\U00013041</div>', sanitize=False)
                 with ui.column().classes("thoth-msg-body gap-1") as _wrapper:
                     ui.html(
                         '<div class="thoth-msg-header">'
@@ -1249,428 +1946,44 @@ async def index():
                         '</div>',
                         sanitize=False,
                     )
-                    tool_col = ui.column().classes("w-full gap-1")
-                    thinking_label = ui.html(
+                    gen.tool_col = ui.column().classes("w-full gap-1")
+                    gen.thinking_label = ui.html(
                         '<span class="thoth-typing" style="font-size:0.9rem; opacity:0.6;">'
                         'Thoth is thinking<span class="dots">'
                         '<span>.</span><span>.</span><span>.</span></span></span>',
                         sanitize=False,
                     )
-                    assistant_md = ui.markdown("", extras=['code-friendly', 'fenced-code-blocks', 'tables']).classes("thoth-msg w-full")
-                    assistant_md.set_visibility(False)
+                    gen.assistant_md = ui.markdown("", extras=['code-friendly', 'fenced-code-blocks', 'tables']).classes("thoth-msg w-full")
+                    gen.assistant_md.set_visibility(False)
+                    gen.wrapper = _wrapper
 
         if p.chat_scroll:
             p.chat_scroll.scroll_to(percent=1.0)
 
-        # ── Build config ─────────────────────────────────────────────────
-        config = {
-            "configurable": {"thread_id": state.thread_id},
-            "recursion_limit": 25,
-        }
-        enabled_tools = [t.name for t in tool_registry.get_enabled_tools()]
-
-        if voice_mode:
-            agent_input = (
-                "[Voice input — the user is speaking to you via microphone "
-                "and your response will be read aloud. Keep responses concise "
-                "and conversational.]\n\n" + agent_input
-            )
-
-        # ── Stream in background thread via queue ────────────────────────
-        q: queue.Queue = queue.Queue()
-        stop_event = state.stop_event     # capture ref for this generation
-
+        # ── Start producer thread ────────────────────────────────────────
         def _sync_stream():
             try:
                 for ev in stream_agent(agent_input, enabled_tools, config,
-                                       stop_event=stop_event):
-                    if stop_event.is_set():
+                                       stop_event=stop_ev):
+                    if stop_ev.is_set():
                         break
-                    q.put(ev)
+                    gen.q.put(ev)
             except Exception as exc:
-                if not stop_event.is_set():
-                    q.put(("error", str(exc)))
+                if not stop_ev.is_set():
+                    gen.q.put(("error", str(exc)))
             finally:
-                if stop_event.is_set():
+                if stop_ev.is_set():
                     try:
                         repair_orphaned_tool_calls(enabled_tools, config)
                     except Exception:
                         pass
-                q.put(None)          # always signal consumer we're done
+                gen.q.put(None)
 
         threading.Thread(target=_sync_stream, daemon=True).start()
 
-        # ── Process events ───────────────────────────────────────────────
-        accumulated = ""
-        tool_results: list[dict] = []
-        chart_data: list[str] = []
-        captured_images: list[str] = []
-        interrupt_data = None
-        tts_buffer = ""
-        tts_in_code = False
-        tts_spoken = 0
-        tts_active = voice_mode and state.tts_service.enabled
-        first_content = False
-        thinking_text = ""       # accumulated thinking tokens
-        thinking_md = None        # live markdown element for streaming thinking
-        thinking_collapsed = False  # whether thinking has been collapsed already
-
-        _stopped_shown = False
-        _drain_deadline = 0.0
-
-        try:  # outer try — guarantees is_generating=False no matter what
-         while True:
-            if state.stop_event.is_set() and not _stopped_shown:
-                # Show visual feedback immediately
-                _stopped_shown = True
-                _drain_deadline = asyncio.get_event_loop().time() + 30
-                try:
-                    if thinking_label:
-                        thinking_label.delete()
-                        thinking_label = None
-                    if thinking_md:
-                        thinking_md.delete()
-                        thinking_md = None
-                    if assistant_md:
-                        assistant_md.set_visibility(True)
-                        accumulated += "\n\n\u23f9\ufe0f *[Stopped]*"
-                        assistant_md.set_content(accumulated)
-                except Exception:
-                    pass
-                if tts_active:
-                    state.tts_service.stop()
-                # Don't break — drain queue until producer sends None
-
-            # Timeout: if draining too long, give up
-            if _stopped_shown and asyncio.get_event_loop().time() > _drain_deadline:
-                break
-
-            try:
-                event = q.get_nowait()
-            except queue.Empty:
-                await asyncio.sleep(0.05)
-                continue
-
-            if event is None:
-                break
-
-            # After stop, keep draining but ignore events
-            if _stopped_shown:
-                continue
-
-            event_type, payload = event
-
-            _break_loop = False
-
-            # Remove thinking indicator on first real content
-            if not first_content and event_type in ("token", "done"):
-                first_content = True
-                if thinking_label:
-                    thinking_label.delete()
-                    thinking_label = None
-                # Collapse streamed thinking into an expandable section
-                if thinking_text and not thinking_collapsed:
-                    thinking_collapsed = True
-                    if thinking_md:
-                        thinking_md.delete()
-                        thinking_md = None
-                    try:
-                        if tool_col:
-                            with tool_col:
-                                with ui.expansion(
-                                    "💭 Thinking", icon="psychology"
-                                ).classes("w-full"):
-                                    ui.code(
-                                        thinking_text.strip()[:8_000]
-                                    ).classes("w-full text-xs")
-                    except Exception:
-                        logger.error("Error rendering thinking collapse", exc_info=True)
-                if assistant_md:
-                    assistant_md.set_visibility(True)
-
-            if event_type == "error":
-                if thinking_label:
-                    thinking_label.delete()
-                if assistant_md:
-                    assistant_md.set_visibility(True)
-                    assistant_md.set_content(f"⚠️ An error occurred: {payload}")
-                try:
-                    repair_orphaned_tool_calls(enabled_tools, config)
-                except Exception:
-                    pass
-                _break_loop = True
-
-            elif event_type == "tool_call":
-                if tool_col:
-                    with tool_col:
-                        _pending_exp = ui.expansion(
-                            f"🔄 {payload}…", icon="hourglass_empty"
-                        ).classes("w-full")
-                        _pending_exp._thoth_tool_name = payload  # stash for matching
-
-            elif event_type == "tool_done":
-                tool_name = payload["name"] if isinstance(payload, dict) else payload
-                tool_content = payload.get("content", "") if isinstance(payload, dict) else ""
-
-                # Chart detection
-                if tool_content and tool_content.startswith("__CHART__:"):
-                    marker_end = tool_content.find("\n\n", 10)
-                    if marker_end == -1:
-                        fig_json = tool_content[10:]
-                        display_text = "Chart created"
-                    else:
-                        fig_json = tool_content[10:marker_end]
-                        display_text = tool_content[marker_end + 2:]
-                    chart_data.append(fig_json)
-                    try:
-                        import plotly.io as _pio
-                        fig = _pio.from_json(fig_json)
-                        with tool_col:
-                            ui.plotly(fig).classes("w-full")
-                    except Exception:
-                        pass
-                    tool_content = display_text
-
-                # Update the pending expansion or create a new one
-                if tool_col:
-                    # Find matching pending expansion
-                    matched_exp = None
-                    for child in tool_col:
-                        if hasattr(child, '_thoth_tool_name'):
-                            matched_exp = child
-                    if matched_exp:
-                        matched_exp._props["icon"] = "check_circle"
-                        matched_exp._text = f"✅ {tool_name}"
-                        matched_exp.update()
-                        if tool_content:
-                            display = tool_content[:5_000]
-                            if len(tool_content) > 5_000:
-                                display += "\n\n… (truncated)"
-                            with matched_exp:
-                                ui.code(display).classes("w-full text-xs")
-                        del matched_exp._thoth_tool_name
-                    else:
-                        with tool_col:
-                            with ui.expansion(f"✅ {tool_name}", icon="check_circle").classes("w-full"):
-                                if tool_content:
-                                    display = tool_content[:5_000]
-                                    if len(tool_content) > 5_000:
-                                        display += "\n\n… (truncated)"
-                                    ui.code(display).classes("w-full text-xs")
-
-                tool_results.append({"name": tool_name, "content": tool_content})
-
-                # Shell command → render in terminal panel
-                raw_tool_name = payload.get("raw_name", "") if isinstance(payload, dict) else ""
-                if raw_tool_name == "run_command" and p.terminal_container is not None:
-                    # Parse the output to build a history-style entry
-                    _lines = (tool_content or "").split("\n")
-                    _cmd_line = _lines[0][2:] if _lines and _lines[0].startswith("$ ") else ""
-                    _info_line = _lines[-1] if _lines else ""
-                    _e_code = 0
-                    _dur = 0.0
-                    _cwd = ""
-                    import re as _re_term
-                    _info_m = _re_term.search(
-                        r"Exit code:\s*(-?\d+)\s*\|\s*Duration:\s*([\d.]+)s\s*\|\s*cwd:\s*(.*)",
-                        _info_line,
-                    )
-                    if _info_m:
-                        _e_code = int(_info_m.group(1))
-                        _dur = float(_info_m.group(2))
-                        _cwd = _info_m.group(3).strip()
-                    _output_lines = _lines[1:-1] if len(_lines) > 2 else []
-                    _add_terminal_entry({
-                        "command": _cmd_line,
-                        "output": "\n".join(_output_lines),
-                        "exit_code": _e_code,
-                        "duration": _dur,
-                        "cwd": _cwd,
-                    })
-                    # Auto-show terminal panel on first shell result
-                    if not getattr(p, "terminal_visible", False):
-                        p.terminal_visible = True
-                        if p.terminal_panel is not None:
-                            p.terminal_panel.set_visibility(True)
-                        if hasattr(p, "terminal_chevron") and p.terminal_chevron:
-                            p.terminal_chevron.props("icon=expand_less")
-                    if p.terminal_scroll:
-                        p.terminal_scroll.scroll_to(percent=1.0)
-
-                # Vision capture
-                if tool_name in ("👁️ Vision", "analyze_image"):
-                    vsvc = state.vision_service
-                    if vsvc and vsvc.last_capture:
-                        b64_img = _b64.b64encode(vsvc.last_capture).decode("ascii")
-                        captured_images.append(b64_img)
-                        with tool_col:
-                            ui.image(f"data:image/jpeg;base64,{b64_img}").classes("w-80 rounded")
-                        vsvc.last_capture = None
-
-                # Browser screenshot thumbnail
-                if raw_tool_name.startswith("browser_"):
-                    try:
-                        from tools.browser_tool import get_session_manager as _get_bsm
-                        _bsm = _get_bsm()
-                        if _bsm.has_active_session():
-                            _bs = _bsm.get_session()
-                            _screenshot_bytes = _bs.take_screenshot()
-                            if _screenshot_bytes:
-                                _b64_ss = _b64.b64encode(_screenshot_bytes).decode("ascii")
-                                with tool_col:
-                                    ui.image(f"data:image/png;base64,{_b64_ss}").classes(
-                                        "w-80 rounded"
-                                    ).style("border: 1px solid #333; margin-top: 4px;")
-                    except Exception:
-                        pass  # Screenshot is non-critical
-
-            elif event_type == "summarizing":
-                # Replace the thinking spinner with a summarization indicator
-                if thinking_label:
-                    thinking_label.delete()
-                    thinking_label = None
-                with _wrapper:
-                    thinking_label = ui.html(
-                        '<span class="thoth-typing" style="font-size:0.9rem; opacity:0.6;">'
-                        '📝 Summarizing conversation history<span class="dots">'
-                        '<span>.</span><span>.</span><span>.</span></span></span>',
-                        sanitize=False,
-                    )
-
-            elif event_type == "thinking":
-                pass  # spinner already visible
-
-            elif event_type == "thinking_token":
-                thinking_text += payload
-                # Replace spinner with live streaming thinking text
-                if thinking_label:
-                    thinking_label.delete()
-                    thinking_label = None
-                if thinking_md is None:
-                    with _wrapper:
-                        thinking_md = ui.markdown(
-                            "", extras=["code-friendly", "fenced-code-blocks"]
-                        ).classes("thoth-msg w-full").style(
-                            "opacity: 0.55; font-size: 0.88rem; font-style: italic;"
-                        )
-                thinking_md.set_content(thinking_text)
-                if p.chat_scroll:
-                    p.chat_scroll.scroll_to(percent=1.0)
-
-            elif event_type == "token":
-                accumulated += payload
-                if assistant_md:
-                    assistant_md.set_content(accumulated)
-                if p.chat_scroll:
-                    p.chat_scroll.scroll_to(percent=1.0)
-
-                # Streaming TTS
-                if tts_active:
-                    if "```" in payload:
-                        tts_in_code = not tts_in_code
-                    if not tts_in_code:
-                        tts_buffer += payload
-                        sentences = _SENTENCE_SPLIT.split(tts_buffer)
-                        if len(sentences) > 1:
-                            for s in sentences[:-1]:
-                                if tts_spoken >= _MAX_STREAM_SENTENCES:
-                                    break
-                                state.tts_service.speak_streaming(s)
-                                tts_spoken += 1
-                                if tts_spoken >= _MAX_STREAM_SENTENCES:
-                                    state.tts_service.flush_streaming(
-                                        "The full response is shown in the app."
-                                    )
-                                    tts_active = False
-                            tts_buffer = sentences[-1]
-
-            elif event_type == "interrupt":
-                interrupt_data = payload
-                _break_loop = True
-
-            elif event_type == "done":
-                accumulated = payload
-                if thinking_label:
-                    thinking_label.delete()
-                    thinking_label = None
-                # Collapse any leftover thinking (e.g. model only produced thinking)
-                if thinking_text and not thinking_collapsed:
-                    thinking_collapsed = True
-                    if thinking_md:
-                        thinking_md.delete()
-                        thinking_md = None
-                    try:
-                        if tool_col:
-                            with tool_col:
-                                with ui.expansion(
-                                    "💭 Thinking", icon="psychology"
-                                ).classes("w-full"):
-                                    ui.code(
-                                        thinking_text.strip()[:8_000]
-                                    ).classes("w-full text-xs")
-                    except Exception:
-                        logger.error("Error rendering thinking collapse (done)", exc_info=True)
-                elif thinking_md:
-                    thinking_md.delete()
-                    thinking_md = None
-                if assistant_md:
-                    assistant_md.set_visibility(True)
-                    assistant_md.set_content(accumulated)
-
-            if _break_loop:
-                break
-
-        # ── Finalise ─────────────────────────────────────────────────────
-         try:
-            if tts_active:
-                state.tts_service.flush_streaming(tts_buffer)
-
-            # Replace plain markdown with YouTube-aware rendering if needed
-            if accumulated and _YT_URL_PATTERN.search(accumulated):
-                if assistant_md:
-                    assistant_md.delete()
-                    assistant_md = None
-                with _wrapper:
-                    _render_text_with_embeds(accumulated)
-
-            # Highlight code blocks
-            try:
-                ui.run_javascript(
-                    "document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));"
-                )
-            except RuntimeError:
-                pass
-
-            # Store assistant message
-            a_msg: dict = {"role": "assistant", "content": accumulated}
-            if tool_results:
-                a_msg["tool_results"] = tool_results
-            if chart_data:
-                a_msg["charts"] = chart_data
-            if captured_images:
-                a_msg["images"] = captured_images
-            state.messages.append(a_msg)
-         except Exception:
-            logger.error("Error in post-stream finalization", exc_info=True)
-        finally:
-            state.is_generating = False
-            if p.stop_btn:
-                p.stop_btn.props('icon=stop')
-                p.stop_btn.disable()
-
-            # Resume mic
-            if state.voice_enabled and not (state.tts_service and state.tts_service.enabled):
-                state.voice_service.unmute()
-
-        if p.chat_scroll:
-            p.chat_scroll.scroll_to(percent=1.0)
-
-        # Handle interrupt
-        if interrupt_data:
-            state.pending_interrupt = interrupt_data
-            _show_interrupt(interrupt_data)
-
-        _update_token_counter()
+        # ── Fire consumer as independent async task ──────────────────────
+        asyncio.create_task(_consume_generation(gen))
+        _rebuild_thread_list()  # show spinning icon in sidebar
 
     # ── Resume after interrupt ───────────────────────────────────────────
 
@@ -1682,47 +1995,37 @@ async def index():
             interrupt_ids = [item.get("__interrupt_id") for item in pending
                             if isinstance(item, dict) and item.get("__interrupt_id")]
         state.pending_interrupt = None
-        state.is_generating = True
-        state.stop_event = threading.Event()   # fresh event per generation
-        if p.stop_btn:
-            p.stop_btn.enable()
 
+        gen_thread_id = state.thread_id
+
+        _thread_mo2 = state.thread_model_override or ""
         config = {
-            "configurable": {"thread_id": state.thread_id},
+            "configurable": {
+                "thread_id": gen_thread_id,
+                **({"model_override": _thread_mo2} if _thread_mo2 else {}),
+            },
             "recursion_limit": 25,
         }
         enabled_tools = [t.name for t in tool_registry.get_enabled_tools()]
 
-        q: queue.Queue = queue.Queue()
-        stop_event = state.stop_event     # capture ref for this generation
+        # ── Create generation state ──────────────────────────────────────
+        stop_ev = threading.Event()
+        gen = GenerationState(
+            thread_id=gen_thread_id,
+            q=queue.Queue(),
+            stop_event=stop_ev,
+            config=config,
+            enabled_tools=enabled_tools,
+        )
+        _active_generations[gen_thread_id] = gen
 
-        def _sync():
-            try:
-                for ev in resume_stream_agent(enabled_tools, config, approved,
-                                              interrupt_ids=interrupt_ids,
-                                              stop_event=stop_event):
-                    if stop_event.is_set():
-                        break
-                    q.put(ev)
-            except Exception as exc:
-                if not stop_event.is_set():
-                    q.put(("error", str(exc)))
-            finally:
-                if stop_event.is_set():
-                    try:
-                        repair_orphaned_tool_calls(enabled_tools, config)
-                    except Exception:
-                        pass
-                q.put(None)          # always signal consumer we're done
+        if p.stop_btn:
+            p.stop_btn.enable()
 
-        threading.Thread(target=_sync, daemon=True).start()
-
-        # Create placeholder
-        assistant_md = None
-        tool_col = None
+        # ── Prepare assistant message placeholder ────────────────────────
         with p.chat_container:
             with ui.element("div").classes("thoth-msg-row"):
-                ui.html('<div class="thoth-avatar thoth-avatar-bot">𓁟</div>', sanitize=False)
+                ui.html('<div class="thoth-avatar thoth-avatar-bot">\U00013041</div>', sanitize=False)
                 with ui.column().classes("thoth-msg-body gap-1") as _wrapper:
                     ui.html(
                         '<div class="thoth-msg-header">'
@@ -1731,144 +2034,45 @@ async def index():
                         '</div>',
                         sanitize=False,
                     )
-                    tool_col = ui.column().classes("w-full gap-1")
-                    assistant_md = ui.markdown("", extras=['code-friendly', 'fenced-code-blocks', 'tables']).classes("thoth-msg w-full")
-
-        accumulated = ""
-        tool_results: list[dict] = []
-        chart_data: list[str] = []
-
-        _stopped_shown = False
-        _drain_deadline = 0.0
-
-        try:  # outer try — guarantees is_generating=False
-         while True:
-            if state.stop_event.is_set() and not _stopped_shown:
-                _stopped_shown = True
-                _drain_deadline = asyncio.get_event_loop().time() + 30
-                if assistant_md:
-                    accumulated += "\n\n\u23f9\ufe0f *[Stopped]*"
-                    assistant_md.set_content(accumulated)
-
-            if _stopped_shown and asyncio.get_event_loop().time() > _drain_deadline:
-                break
-
-            try:
-                event = q.get_nowait()
-            except queue.Empty:
-                await asyncio.sleep(0.05)
-                continue
-            if event is None:
-                break
-
-            if _stopped_shown:
-                continue
-
-            et, pl = event
-            if et == "token":
-                accumulated += pl
-                if assistant_md:
-                    assistant_md.set_content(accumulated)
-            elif et == "tool_call" and tool_col:
-                with tool_col:
-                    _pexp = ui.expansion(f"🔄 {pl}…", icon="hourglass_empty").classes("w-full")
-                    _pexp._thoth_tool_name = pl
-            elif et == "tool_done" and tool_col:
-                tn = pl["name"] if isinstance(pl, dict) else pl
-                tc = pl.get("content", "") if isinstance(pl, dict) else ""
-                matched = None
-                for child in tool_col:
-                    if hasattr(child, '_thoth_tool_name'):
-                        matched = child
-                if matched:
-                    matched._props["icon"] = "check_circle"
-                    matched._text = f"✅ {tn}"
-                    matched.update()
-                    if tc:
-                        display = tc[:5_000] + ("\n\n… (truncated)" if len(tc) > 5_000 else "")
-                        with matched:
-                            ui.code(display).classes("w-full text-xs")
-                    del matched._thoth_tool_name
-                else:
-                    with tool_col:
-                        with ui.expansion(f"✅ {tn}", icon="check_circle").classes("w-full"):
-                            if tc:
-                                display = tc[:5_000] + ("\n\n… (truncated)" if len(tc) > 5_000 else "")
-                                ui.code(display).classes("w-full text-xs")
-                tool_results.append({"name": tn, "content": tc})
-
-                # Shell command → render in terminal panel
-                _raw = pl.get("raw_name", "") if isinstance(pl, dict) else ""
-                if _raw == "run_command" and p.terminal_container is not None:
-                    _lines = (tc or "").split("\n")
-                    _cmd_line = _lines[0][2:] if _lines and _lines[0].startswith("$ ") else ""
-                    _info_line = _lines[-1] if _lines else ""
-                    _e_code = 0
-                    _dur = 0.0
-                    _cwd = ""
-                    import re as _re_term
-                    _info_m = _re_term.search(
-                        r"Exit code:\s*(-?\d+)\s*\|\s*Duration:\s*([\d.]+)s\s*\|\s*cwd:\s*(.*)",
-                        _info_line,
+                    gen.tool_col = ui.column().classes("w-full gap-1")
+                    gen.thinking_label = ui.html(
+                        '<span class="thoth-typing" style="font-size:0.9rem; opacity:0.6;">'
+                        'Thoth is thinking<span class="dots">'
+                        '<span>.</span><span>.</span><span>.</span></span></span>',
+                        sanitize=False,
                     )
-                    if _info_m:
-                        _e_code = int(_info_m.group(1))
-                        _dur = float(_info_m.group(2))
-                        _cwd = _info_m.group(3).strip()
-                    _output_lines = _lines[1:-1] if len(_lines) > 2 else []
-                    _add_terminal_entry({
-                        "command": _cmd_line,
-                        "output": "\n".join(_output_lines),
-                        "exit_code": _e_code,
-                        "duration": _dur,
-                        "cwd": _cwd,
-                    })
-                    if not getattr(p, "terminal_visible", False):
-                        p.terminal_visible = True
-                        if p.terminal_panel is not None:
-                            p.terminal_panel.set_visibility(True)
-                        if hasattr(p, "terminal_chevron") and p.terminal_chevron:
-                            p.terminal_chevron.props("icon=expand_less")
-                    if p.terminal_scroll:
-                        p.terminal_scroll.scroll_to(percent=1.0)
+                    gen.assistant_md = ui.markdown("", extras=['code-friendly', 'fenced-code-blocks', 'tables']).classes("thoth-msg w-full")
+                    gen.assistant_md.set_visibility(False)
+                    gen.wrapper = _wrapper
 
-            elif et == "done":
-                accumulated = pl
-                if assistant_md:
-                    assistant_md.set_content(accumulated)
-            elif et == "interrupt":
-                state.pending_interrupt = pl
-                _show_interrupt(pl)
-                break
-            elif et == "error":
-                if assistant_md:
-                    assistant_md.set_content(f"⚠️ {pl}")
-                break
-
-         # Replace plain markdown with YouTube-aware rendering if needed
-         try:
-            if accumulated and _YT_URL_PATTERN.search(accumulated):
-                if assistant_md:
-                    assistant_md.delete()
-                    assistant_md = None
-                with _wrapper:
-                    _render_text_with_embeds(accumulated)
-
-            a_msg: dict = {"role": "assistant", "content": accumulated}
-            if tool_results:
-                a_msg["tool_results"] = tool_results
-            if chart_data:
-                a_msg["charts"] = chart_data
-            state.messages.append(a_msg)
-         except Exception:
-            logger.error("Error in resume finalization", exc_info=True)
-        finally:
-            state.is_generating = False
-            if p.stop_btn:
-                p.stop_btn.props('icon=stop')
-                p.stop_btn.disable()
         if p.chat_scroll:
             p.chat_scroll.scroll_to(percent=1.0)
+
+        # ── Start producer thread ────────────────────────────────────────
+        def _sync_resume():
+            try:
+                for ev in resume_stream_agent(enabled_tools, config, approved,
+                                              interrupt_ids=interrupt_ids,
+                                              stop_event=stop_ev):
+                    if stop_ev.is_set():
+                        break
+                    gen.q.put(ev)
+            except Exception as exc:
+                if not stop_ev.is_set():
+                    gen.q.put(("error", str(exc)))
+            finally:
+                if stop_ev.is_set():
+                    try:
+                        repair_orphaned_tool_calls(enabled_tools, config)
+                    except Exception:
+                        pass
+                gen.q.put(None)
+
+        threading.Thread(target=_sync_resume, daemon=True).start()
+
+        # ── Fire consumer as independent async task ──────────────────────
+        asyncio.create_task(_consume_generation(gen))
+        _rebuild_thread_list()  # show spinning icon in sidebar
 
     # ══════════════════════════════════════════════════════════════════════
     # INTERRUPT DIALOG
@@ -2134,11 +2338,16 @@ async def index():
                     # Model override dropdown
                     _local = list_local_models()
                     _compat = [m for m in _local if is_tool_compatible(m)]
+                    # Include starred cloud models (same filter as chat picker)
+                    if is_cloud_available():
+                        _compat.extend(list_starred_cloud_models())
                     _default_label = f"Default ({get_current_model()})"
-                    _model_options = [_default_label] + sorted(_compat)
+                    _model_opts_map = {_default_label: _default_label}
+                    for _m in sorted(_compat):
+                        _model_opts_map[_m] = f"{get_provider_emoji(_m)} {_m}"
                     _model_val = _model_ov if _model_ov in _compat else _default_label
                     model_sel = ui.select(
-                        _model_options, value=_model_val, label="Model",
+                        _model_opts_map, value=_model_val, label="Model",
                     ).classes("w-full").tooltip(
                         "Choose which LLM runs this task. "
                         "Only tool-compatible models are listed."
@@ -2476,7 +2685,7 @@ async def index():
 
     p.settings_dlg = ui.dialog().props("maximized transition-show=fade transition-hide=fade")
 
-    def _open_settings() -> None:
+    def _open_settings(initial_tab: str = "Models") -> None:
         p.settings_dlg.clear()
         with p.settings_dlg:
             with ui.card().classes("w-full h-full no-shadow").style(
@@ -2494,6 +2703,7 @@ async def index():
                 ui.separator()
 
                 # ── Left tabs + right content ────────────────────────────
+                _tab_map = {}  # name -> tab element (for initial_tab lookup)
                 with ui.splitter(value=18).classes("w-full flex-grow").props(
                     "disable"
                 ).style("height: calc(100vh - 100px);") as splitter:
@@ -2502,6 +2712,7 @@ async def index():
                             "w-full h-full"
                         ) as tabs:
                             tab_models = ui.tab("Models", icon="smart_toy")
+                            tab_cloud = ui.tab("Cloud", icon="cloud")
                             tab_mem = ui.tab("Memory", icon="psychology")
                             tab_voice = ui.tab("Voice", icon="mic")
                             tab_fs = ui.tab("System", icon="terminal")
@@ -2512,15 +2723,26 @@ async def index():
                             tab_cal = ui.tab("Calendar", icon="event")
                             tab_channels = ui.tab("Channels", icon="forum")
                             tab_utils = ui.tab("Utilities", icon="build")
+                            _tab_map = {
+                                "Models": tab_models, "Cloud": tab_cloud,
+                                "Memory": tab_mem, "Voice": tab_voice,
+                                "System": tab_fs, "Tracker": tab_tracker,
+                                "Documents": tab_docs, "Search": tab_tools,
+                                "Gmail": tab_gmail, "Calendar": tab_cal,
+                                "Channels": tab_channels, "Utilities": tab_utils,
+                            }
 
+                    _initial = _tab_map.get(initial_tab, tab_models)
                     with splitter.after:
-                        with ui.tab_panels(tabs, value=tab_models).classes(
+                        with ui.tab_panels(tabs, value=_initial).classes(
                             "w-full h-full"
                         ) as panels:
                             with ui.tab_panel(tab_docs).classes("px-6 py-4"):
                                 _build_documents_tab()
                             with ui.tab_panel(tab_models).classes("px-6 py-4"):
                                 _build_models_tab()
+                            with ui.tab_panel(tab_cloud).classes("px-6 py-4"):
+                                _build_cloud_tab()
                             with ui.tab_panel(tab_tools).classes("px-6 py-4"):
                                 _build_tools_tab()
                             with ui.tab_panel(tab_fs).classes("px-6 py-4"):
@@ -2595,14 +2817,24 @@ async def index():
         ui.button("🗑️ Clear all documents", on_click=_clear_docs).props("flat color=negative")
 
     def _build_models_tab() -> None:
+        from models import _ollama_reachable
+        _ollama_up = _ollama_reachable()
+        # Fetch trending models (cached after first call, ~10s timeout)
+        fetch_trending_ollama_models()
+        trending = get_trending_models()
+
         ui.label("🤖 Models").classes("text-h6")
         ui.label(
             "Thoth uses two models: a Brain model for reasoning, tool use, "
             "and conversation, and a Vision model for camera-based image "
-            "analysis. Both are served locally through Ollama. "
-            "Models marked ✅ are already downloaded; ⬇️ models need to be "
-            "downloaded first using the Download button."
+            "analysis. Local models are served through Ollama; cloud models "
+            "use your configured API keys."
         ).classes("text-grey-6 text-sm")
+
+        # Legend
+        ui.label("✅ Downloaded  ⬇️ Available  🆕 Trending  🟢 OpenAI  🌐 OpenRouter").classes("text-xs text-grey-5 q-mt-xs")
+        ui.label("🔑 API keys can be managed in the Cloud tab.").classes("text-xs text-grey-5")
+
         ui.separator()
         ui.label("🧠 Brain Model").classes("text-h6")
         ui.label(
@@ -2611,16 +2843,31 @@ async def index():
             "Minimum: 8B — smaller models may struggle with complex tasks."
         ).classes("text-grey-6 text-sm")
 
-        all_models = list_all_models()
         local = list_local_models()
+        cloud = list_cloud_models()
         current = state.current_model
+
+        # Build model list: if Ollama is running, show local + popular + trending + cloud
+        # If Ollama is NOT running, show only cloud models (+ current if it's local)
+        if _ollama_up:
+            all_models = sorted(set(list_all_models() + cloud))
+        else:
+            all_models = sorted(set(cloud + ([current] if not is_cloud_model(current) else [])))
+
         if current not in all_models:
             all_models = sorted(set(all_models + [current]))
 
-        def _model_label(m):
-            dl = '✅' if m in local else '⬇️'
+        def _model_label(m, local_override=None):
+            loc = local_override if local_override is not None else local
+            if is_cloud_model(m):
+                return f"{get_provider_emoji(m)}  {m}"
+            if m in loc:
+                warn = '' if is_tool_compatible(m) else '  ⚠️ may not support tools'
+                return f"✅  {m}{warn}"
+            if m in trending:
+                return f"🆕  {m}"
             warn = '' if is_tool_compatible(m) else '  ⚠️ may not support tools'
-            return f"{dl}  {m}{warn}"
+            return f"⬇️  {m}{warn}"
 
         model_opts = {m: _model_label(m) for m in all_models}
 
@@ -2628,17 +2875,56 @@ async def index():
             label="Select model",
             options=model_opts,
             value=current,
-        ).classes("w-full")
+        ).classes("w-full").props('use-input input-debounce=300')
 
         # Download button — visible when selected model is not yet downloaded
+        # Hidden for cloud models (no Ollama download needed)
         brain_dl_btn = ui.button(f"⬇️ Download {current}").props("color=primary outline")
-        brain_dl_btn.visible = current not in local
+        brain_dl_btn.visible = _ollama_up and not is_cloud_model(current) and current not in local
+
+        # Ollama setup guidance — shown when Ollama is not running
+        import sys as _sys
+        if _sys.platform == "win32":
+            _ollama_install_steps = (
+                "1. Download Ollama from ollama.com/download\n"
+                "2. Run the installer\n"
+                "3. Ollama starts automatically — re-open Settings → Models"
+            )
+        elif _sys.platform == "darwin":
+            _ollama_install_steps = (
+                "1. Download Ollama from ollama.com/download (or: brew install ollama)\n"
+                "2. Run: ollama serve\n"
+                "3. Re-open Settings → Models"
+            )
+        else:
+            _ollama_install_steps = (
+                "1. Install: curl -fsSL https://ollama.com/install.sh | sh\n"
+                "2. Run: ollama serve\n"
+                "3. Re-open Settings → Models"
+            )
+        with ui.card().classes("w-full q-pa-md bg-amber-1") as ollama_guide:
+            ui.label("🖥️ Want to use local models?").classes("text-weight-bold text-body1 text-brown-9")
+            ui.label(
+                "Local models run on your GPU with full privacy — no data leaves your machine. "
+                "You need Ollama installed and running."
+            ).classes("text-grey-8 text-sm q-mb-xs")
+            ui.label(_ollama_install_steps).classes("text-grey-8 text-xs").style("white-space: pre-line")
+            ui.link("Download Ollama →", "https://ollama.com/download", new_tab=True).classes("text-sm text-weight-bold")
+        ollama_guide.visible = not _ollama_up
 
         async def _download_brain(e=None):
             sel = model_select.value
+            if is_cloud_model(sel):
+                ui.notify(f"{get_provider_emoji(sel)} {sel} is a cloud model — no download needed.", type="info")
+                brain_dl_btn.visible = False
+                return
             if is_model_local(sel):
                 ui.notify(f"✅ {sel} is already downloaded.", type="info")
                 brain_dl_btn.visible = False
+                return
+            from models import _ollama_reachable
+            if not _ollama_reachable():
+                ui.notify("❌ Ollama is not running. Install and start Ollama to download local models.", type="negative", close_button=True)
                 return
             brain_dl_btn.disable()
             n = ui.notification(f"Downloading {sel}…", type="ongoing", spinner=True, timeout=None)
@@ -2647,9 +2933,10 @@ async def index():
             ui.notify(f"✅ {sel} ready!", type="positive")
             brain_dl_btn.visible = False
             brain_dl_btn.enable()
+            ollama_guide.visible = False
             # Refresh dropdown labels
             refreshed_local = list_local_models()
-            model_select.options = {m: f"{'✅' if m in refreshed_local else '⬇️'}  {m}" + ('' if is_tool_compatible(m) else '  ⚠️ may not support tools') for m in all_models}
+            model_select.options = {m: _model_label(m, refreshed_local) for m in all_models}
             model_select.update()
             # Apply the newly downloaded model
             set_model(sel)
@@ -2663,9 +2950,17 @@ async def index():
             if sel == state.current_model:
                 return
             prev = state.current_model
-            # Update download button
+            # Update download button — hide for cloud models
             brain_dl_btn.text = f"⬇️ Download {sel}"
-            brain_dl_btn.visible = not is_model_local(sel)
+            brain_dl_btn.visible = _ollama_up and not is_cloud_model(sel) and not is_model_local(sel)
+            # Cloud models: apply immediately (no download needed)
+            if is_cloud_model(sel):
+                set_model(sel)
+                state.current_model = sel
+                clear_agent_cache()
+                if _ctx_note_updater[0]:
+                    _ctx_note_updater[0]()
+                return
             # If the model isn't downloaded yet, don't switch — wait for the Download button
             if not is_model_local(sel):
                 return
@@ -2684,18 +2979,19 @@ async def index():
             set_model(sel)
             state.current_model = sel
             clear_agent_cache()
-            # Notify if new model caps the selected context size
-            model_max = await run.io_bound(lambda: get_model_max_context(sel))
-            user_val = get_user_context_size()
-            if model_max is not None and user_val > model_max:
-                max_lbl = CONTEXT_SIZE_LABELS.get(model_max, f"{model_max:,}")
-                usr_lbl = CONTEXT_SIZE_LABELS.get(user_val, f"{user_val:,}")
-                ui.notify(
-                    f"Context capped: {sel} max is {max_lbl} (you selected {usr_lbl}). "
-                    f"Trimming will use {max_lbl}.",
-                    type="warning", close_button=True, timeout=8000,
-                )
-            # Refresh context cap note since model max may differ
+            # Notify if new local model caps the selected context size
+            if not is_cloud_model(sel):
+                model_max = await run.io_bound(lambda: get_model_max_context(sel))
+                user_val = get_user_context_size()
+                if model_max is not None and user_val > model_max:
+                    max_lbl = CONTEXT_SIZE_LABELS.get(model_max, f"{model_max:,}")
+                    usr_lbl = CONTEXT_SIZE_LABELS.get(user_val, f"{user_val:,}")
+                    ui.notify(
+                        f"Context capped: {sel} max is {max_lbl} (you selected {usr_lbl}). "
+                        f"Trimming will use {max_lbl}.",
+                        type="warning", close_button=True, timeout=8000,
+                    )
+            # Refresh context section (show/hide local dropdown vs cloud info)
             if _ctx_note_updater[0]:
                 _ctx_note_updater[0]()
 
@@ -2704,22 +3000,59 @@ async def index():
 
         ui.separator()
 
-        # Context window
+        # Context window — only applies to local models (VRAM control)
+        # Cloud models auto-use their full native context
+        _is_cloud_ctx = is_cloud_model(state.current_model)
+
         ctx_opts = {v: CONTEXT_SIZE_LABELS.get(v, str(v)) for v in CONTEXT_SIZE_OPTIONS}
+
+        ctx_cloud_info = ui.label(
+            "☁️ Cloud models automatically use their full native context window. "
+            "No setting needed — trimming and summarisation adapt automatically."
+        ).classes("text-xs text-grey-6")
+        ctx_cloud_info.visible = _is_cloud_ctx
+
+        # Show effective cloud context
+        _cloud_max = get_model_max_context() if _is_cloud_ctx else None
+        _cloud_max_lbl = (
+            f"{_cloud_max // 1_000}K" if _cloud_max and _cloud_max < 1_000_000
+            else f"{_cloud_max // 1_000_000}M" if _cloud_max else "?"
+        )
+        ctx_cloud_size = ui.label(
+            f"Effective context: {_cloud_max_lbl} tokens"
+        ).classes("text-xs text-cyan")
+        ctx_cloud_size.visible = _is_cloud_ctx
 
         ctx_note = ui.label("").classes("text-xs text-warning")
         ctx_note.visible = False
 
         def _update_ctx_note():
-            """Show a note if the effective context is capped by the model."""
-            model_max = get_model_max_context()
-            user_val = get_user_context_size()
-            if model_max is not None and user_val > model_max:
-                max_label = CONTEXT_SIZE_LABELS.get(model_max, f"{model_max:,}")
-                ctx_note.text = f"ℹ️ Model max is {max_label} — trimming will use {max_label}"
-                ctx_note.visible = True
-            else:
+            """Update context section based on current model type."""
+            _cloud = is_cloud_model(state.current_model)
+            ctx_cloud_info.visible = _cloud
+            ctx_select.visible = not _cloud
+            # Update cloud size label
+            if _cloud:
+                _cmax = get_model_max_context()
+                if _cmax:
+                    _clbl = (
+                        f"{_cmax // 1_000}K" if _cmax < 1_000_000
+                        else f"{_cmax // 1_000_000}M"
+                    )
+                    ctx_cloud_size.text = f"Effective context: {_clbl} tokens"
+                ctx_cloud_size.visible = True
                 ctx_note.visible = False
+            else:
+                ctx_cloud_size.visible = False
+                # Show cap note for local models
+                model_max = get_model_max_context()
+                user_val = get_user_context_size()
+                if model_max is not None and user_val > model_max:
+                    max_label = CONTEXT_SIZE_LABELS.get(model_max, f"{model_max:,}")
+                    ctx_note.text = f"ℹ️ Model max is {max_label} — trimming will use {max_label}"
+                    ctx_note.visible = True
+                else:
+                    ctx_note.visible = False
 
         def _on_ctx_change(e):
             set_context_size(e.value)
@@ -2737,12 +3070,17 @@ async def index():
                     type="warning", close_button=True, timeout=8000,
                 )
 
-        ui.select(
-            label="Context window size",
+        ctx_select = ui.select(
+            label="Local context window",
             options=ctx_opts,
             value=state.context_size,
             on_change=_on_ctx_change,
-        ).classes("w-full").tooltip("How many tokens the model can process at once. If this exceeds the model's native max, trimming will use the model's actual limit. Default: 32K.")
+        ).classes("w-full").tooltip(
+            "Controls how many tokens the local model can process. "
+            "Higher values use more VRAM. Recommended: 32K for 8GB GPU, "
+            "64K for 16GB, 128K+ for 24GB+. Default: 32K."
+        )
+        ctx_select.visible = not _is_cloud_ctx
 
         _update_ctx_note()
         _ctx_note_updater[0] = _update_ctx_note
@@ -2752,24 +3090,55 @@ async def index():
         ui.label(
             "The model used for camera and screen capture analysis — reading text, "
             "identifying objects, capturing screenshots, and answering visual questions. "
-            "Runs as a separate lightweight model alongside the brain."
+            "Local models run alongside the brain via Ollama. Cloud models use the API."
         ).classes("text-grey-6 text-sm")
 
         vsvc = state.vision_service
-        all_vision = sorted(set(POPULAR_VISION_MODELS + ([vsvc.model] if vsvc.model not in POPULAR_VISION_MODELS else [])))
-        vision_opts = {m: f"{'✅' if m in local else '⬇️'}  {m}" for m in all_vision}
+        cloud_vision = list_cloud_vision_models()
 
-        vision_select = ui.select(options=vision_opts, value=vsvc.model).classes("w-full")
+        # If Ollama is running, show local + popular + cloud vision models
+        # If Ollama NOT running, show only cloud vision + current if local
+        if _ollama_up:
+            all_vision = sorted(set(
+                POPULAR_VISION_MODELS
+                + cloud_vision
+                + ([vsvc.model] if vsvc.model not in POPULAR_VISION_MODELS and vsvc.model not in cloud_vision else [])
+            ))
+        else:
+            extras = [vsvc.model] if not is_cloud_model(vsvc.model) else []
+            all_vision = sorted(set(cloud_vision + extras))
 
-        # Download button for vision model
+        def _vision_label(m, local_override=None):
+            loc = local_override if local_override is not None else local
+            if is_cloud_model(m):
+                return f"{get_provider_emoji(m)}  {m}"
+            if m in loc:
+                return f"✅  {m}"
+            if m in trending:
+                return f"🆕  {m}"
+            return f"⬇️  {m}"
+
+        vision_opts = {m: _vision_label(m) for m in all_vision}
+
+        vision_select = ui.select(options=vision_opts, value=vsvc.model).classes("w-full").props('use-input input-debounce=300')
+
+        # Download button for vision model — hidden for cloud models
         vision_dl_btn = ui.button(f"⬇️ Download {vsvc.model}").props("color=primary outline")
-        vision_dl_btn.visible = vsvc.model not in local
+        vision_dl_btn.visible = _ollama_up and not is_cloud_model(vsvc.model) and vsvc.model not in local
 
         async def _download_vision(e=None):
             sel = vision_select.value
+            if is_cloud_model(sel):
+                ui.notify(f"{get_provider_emoji(sel)} {sel} is a cloud model — no download needed.", type="info")
+                vision_dl_btn.visible = False
+                return
             if is_model_local(sel):
                 ui.notify(f"✅ {sel} is already downloaded.", type="info")
                 vision_dl_btn.visible = False
+                return
+            from models import _ollama_reachable
+            if not _ollama_reachable():
+                ui.notify("❌ Ollama is not running. Install and start Ollama to download local models.", type="negative", close_button=True)
                 return
             vision_dl_btn.disable()
             n = ui.notification(f"Downloading {sel}…", type="ongoing", spinner=True, timeout=None)
@@ -2779,7 +3148,7 @@ async def index():
             vision_dl_btn.visible = False
             vision_dl_btn.enable()
             refreshed_local = list_local_models()
-            vision_select.options = {m: f"{'✅' if m in refreshed_local else '⬇️'}  {m}" for m in all_vision}
+            vision_select.options = {m: _vision_label(m, refreshed_local) for m in all_vision}
             vision_select.update()
             # Apply the newly downloaded model
             vsvc.model = sel
@@ -2789,9 +3158,15 @@ async def index():
 
         async def _on_vision_change(e):
             sel = e.value
+            is_cloud = is_cloud_model(sel)
             vision_dl_btn.text = f"⬇️ Download {sel}"
-            vision_dl_btn.visible = not is_model_local(sel)
+            vision_dl_btn.visible = _ollama_up and not is_cloud and not is_model_local(sel)
             if sel != vsvc.model:
+                # Cloud models: apply immediately (no download needed)
+                if is_cloud:
+                    vsvc.model = sel
+                    clear_agent_cache()
+                    return
                 # If the model isn't downloaded yet, don't switch — wait for the Download button
                 if not is_model_local(sel):
                     return
@@ -2812,6 +3187,186 @@ async def index():
         ui.switch("Enable vision", value=vsvc.enabled,
                   on_change=lambda e: setattr(vsvc, "enabled", e.value)
         ).tooltip("Allow the agent to capture images from your webcam.")
+
+    # ── Cloud settings tab ─────────────────────────────────────────────
+
+    def _build_cloud_tab() -> None:
+        ui.label("☁️ Cloud Models").classes("text-h6")
+        ui.label(
+            "Connect to cloud LLMs via OpenAI (direct) or OpenRouter (100+ models). "
+            "Your local Ollama models remain available — cloud is optional."
+        ).classes("text-grey-6 text-sm")
+
+        # ── Shared helpers (defined early, used later) ───────────────
+        _model_list_container = None  # created below, after section headers
+
+        _search_term = {"value": ""}  # mutable holder for search filter
+
+        def _refresh_model_list():
+            """Rebuild the model listing."""
+            _model_list_container.clear()
+            _starred_now = set(get_cloud_config().get("starred_models", []))
+            all_models = list_cloud_models()
+            if not all_models:
+                with _model_list_container:
+                    ui.label("No cloud models loaded. Enter a key and click Refresh.").classes(
+                        "text-grey-6 text-sm"
+                    )
+                return
+            # Apply search filter
+            q = _search_term["value"].strip().lower()
+            if q:
+                all_models = [m for m in all_models if q in m.lower()]
+            with _model_list_container:
+                if q and not all_models:
+                    ui.label(f'No models matching "{q}"').classes("text-grey-6 text-sm")
+                    return
+                # Group by provider
+                from models import _cloud_model_cache
+                for prov_label, prov_key in [("OpenAI", "openai"), ("OpenRouter", "openrouter")]:
+                    prov_models = [(m, _cloud_model_cache[m]) for m in all_models
+                                   if _cloud_model_cache[m]["provider"] == prov_key]
+                    if not prov_models:
+                        continue
+                    ui.label(f"{prov_label} ({len(prov_models)} models)").style(
+                        "font-weight: 600; margin-top: 8px;"
+                    )
+                    for mid, info in prov_models:
+                        with ui.row().classes("items-center gap-1 q-py-xs"):
+                            is_starred = mid in _starred_now
+                            star_icon = ui.button(
+                                icon="star" if is_starred else "star_border",
+                                on_click=lambda _, m=mid: _toggle_star(m),
+                            ).props("flat dense round size=sm").style(
+                                f"color: {'gold' if is_starred else 'grey'};"
+                            )
+                            _emoji = get_provider_emoji(mid)
+                            ui.label(_emoji).style("font-size: 1rem;")
+                            ui.label(mid).style("font-weight: 500; font-size: 0.85rem;")
+                            ctx_k = info["ctx"] // 1000 if info["ctx"] >= 1000 else info["ctx"]
+                            ctx_label = f"{ctx_k}K" if info["ctx"] < 1_000_000 else f"{info['ctx'] // 1_000_000}M"
+                            ui.label(f"({ctx_label} ctx)").classes("text-grey-6 text-xs")
+                            if mid == get_current_model():
+                                ui.badge("DEFAULT", color="cyan").props("dense")
+                            else:
+                                ui.button(
+                                    "Set default", icon="check",
+                                    on_click=lambda _, m=mid: _set_default_model(m),
+                                ).props("flat dense size=xs")
+
+        def _toggle_star(model_id):
+            starred_now = set(get_cloud_config().get("starred_models", []))
+            if model_id in starred_now:
+                unstar_cloud_model(model_id)
+            else:
+                star_cloud_model(model_id)
+            _refresh_model_list()
+
+        def _set_default_model(model_id):
+            set_model(model_id)
+            state.current_model = model_id
+            clear_agent_cache()
+            ui.notify(f"Default model set to {model_id}", type="positive")
+            _refresh_model_list()
+
+        async def _do_refresh():
+            n = ui.notification("Fetching models…", type="ongoing", spinner=True, timeout=None)
+            count = await run.io_bound(refresh_cloud_models)
+            n.dismiss()
+            ui.notify(f"Found {count} cloud models", type="positive")
+            _refresh_model_list()
+
+        # ── 1. API Keys ─────────────────────────────────────────────
+        ui.separator()
+        with ui.expansion("🔑 OpenAI Direct", icon="key", value=bool(get_key("OPENAI_API_KEY"))).classes("w-full"):
+            ui.label(
+                "Direct access to OpenAI models (GPT-5, GPT-4.1, o3, etc.) — fastest latency, no markup."
+            ).classes("text-grey-6 text-sm")
+            _oai_key = get_key("OPENAI_API_KEY")
+            oai_input = ui.input(
+                "OpenAI API Key", value=_oai_key,
+                password=True, password_toggle_button=True,
+            ).classes("w-full")
+
+            async def _save_oai():
+                val = oai_input.value.strip()
+                set_key("OPENAI_API_KEY", val)
+                ui.notify("OpenAI key saved ✅", type="positive")
+                if val:
+                    await run.io_bound(refresh_cloud_models)
+                    _refresh_model_list()
+            ui.button("Save Key", icon="save", on_click=_save_oai).props("flat dense")
+
+        with ui.expansion("🌐 OpenRouter", icon="language", value=bool(get_key("OPENROUTER_API_KEY"))).classes("w-full"):
+            ui.label(
+                "One key for Claude, Gemini, Llama, DeepSeek, Mistral, and 100+ more models."
+            ).classes("text-grey-6 text-sm")
+            _or_key = get_key("OPENROUTER_API_KEY")
+            or_input = ui.input(
+                "OpenRouter API Key", value=_or_key,
+                password=True, password_toggle_button=True,
+            ).classes("w-full")
+
+            async def _save_or():
+                val = or_input.value.strip()
+                if val:
+                    valid = await run.io_bound(validate_openrouter_key, val)
+                    if not valid:
+                        ui.notify("❌ Invalid OpenRouter API key", type="negative")
+                        return
+                set_key("OPENROUTER_API_KEY", val)
+                ui.notify("OpenRouter key saved ✅", type="positive")
+                if val:
+                    await run.io_bound(refresh_cloud_models)
+                    _refresh_model_list()
+            ui.button("Save Key", icon="save", on_click=_save_or).props("flat dense")
+
+        # ── 2. Setup Guide ───────────────────────────────────────────
+        ui.separator()
+        with ui.expansion("📖 Setup Guide", icon="help_outline").classes("w-full"):
+            ui.markdown(
+                "### OpenAI Direct\n\n"
+                "1. Go to [platform.openai.com](https://platform.openai.com) → API Keys\n"
+                "2. Create a new key and paste it above\n\n"
+                "### OpenRouter\n\n"
+                "1. Go to [openrouter.ai](https://openrouter.ai) and create an account\n"
+                "2. Navigate to **Keys** → **Create Key** and paste it above\n\n"
+                "### Usage\n\n"
+                "- ⭐ **Star** models to add them to the chat header model picker\n"
+                "- Click **Set default** to use a cloud model as your app-wide default\n"
+                "- Use `/model <id>` in Telegram to switch models per-chat\n"
+                "- Cloud models appear with provider-specific icons in the sidebar\n"
+                "- All API keys are stored locally and never shared"
+            )
+
+        # ── 3. Available Models ──────────────────────────────────────
+        ui.separator()
+        with ui.row().classes("items-center gap-2"):
+            ui.label("Available Models").style("font-weight: 600;")
+            ui.button(icon="refresh", on_click=_do_refresh).props("flat round dense").tooltip(
+                "Refresh model list from cloud providers"
+            )
+        ui.label(
+            "⭐ Star models to show them in the thread model picker. "
+            "Click \"Set default\" to make a model your app-wide default."
+        ).classes("text-grey-6 text-sm")
+
+        # ── 4. Search + Model List ────────────────────────────────────
+        def _on_search(e):
+            _search_term["value"] = e.value or ""
+            _refresh_model_list()
+
+        ui.input(
+            placeholder="Search models…",
+            on_change=_on_search,
+        ).classes("w-full").props("outlined dense clearable").style("max-width: 400px;")
+
+        _model_list_container = ui.column().classes("w-full")
+
+        async def _initial_fetch():
+            await run.io_bound(refresh_cloud_models)
+            _refresh_model_list()
+        ui.timer(0.5, _initial_fetch, once=True)
 
     def _build_tools_tab() -> None:
         # ── Retrieval Compression selector ────────────────────────────
@@ -3887,6 +4442,7 @@ async def index():
                 state.thread_id = tid
                 state.thread_name = name
                 state.messages = []
+                state.thread_model_override = ""
                 set_active_thread(tid, previous_id=prev)
                 _rebuild_main()
                 _rebuild_thread_list()
@@ -3940,21 +4496,39 @@ async def index():
                 return
 
             visible = threads[:_SIDEBAR_MAX_THREADS]
-            for tid, name, created, updated in visible:
+            for tid, name, created, updated, *_rest in visible:
+                _thread_model_ov = _rest[0] if _rest else ""
                 name = name or ""
                 is_active = tid == state.thread_id
                 is_running = tid in running_tids
+                is_generating_tid = tid in _active_generations
+                is_cloud_thread = is_cloud_model(_thread_model_ov or get_current_model())
 
-                def _select(t=tid, n=name):
+                def _select(t=tid, n=name, mo=_thread_model_ov):
                     prev = state.thread_id
+                    # Detach any running generation on the thread we're leaving
+                    prev_gen = _active_generations.get(prev) if prev else None
+                    if prev_gen and prev_gen.status == "streaming":
+                        prev_gen.detached = True
+                        # Stop TTS — can't hear two threads at once
+                        if prev_gen.tts_active:
+                            state.tts_service.stop()
+                            prev_gen.tts_active = False
                     state.thread_id = t
                     state.thread_name = n
+                    state.thread_model_override = mo or ""
                     state.messages = load_thread_messages(t)
                     set_active_thread(t, previous_id=prev)
                     _rebuild_main()
                     _rebuild_thread_list()
 
                 def _delete(t=tid):
+                    # Stop any active generation on this thread first
+                    _del_gen = _active_generations.get(t)
+                    if _del_gen:
+                        _del_gen.stop_event.set()
+                    # Stop any running task on this thread
+                    stop_task(t)
                     _delete_thread(t)
                     clear_summary_cache(t)
                     # Clean up shell session + history
@@ -3981,8 +4555,12 @@ async def index():
                     "clickable" + (" active" if is_active else "")
                 ).style("min-height: 40px; padding: 4px 8px;"):
                     with ui.item_section().props("avatar").style("min-width: 28px;"):
-                        if is_running:
+                        if is_generating_tid:
+                            _thr_icon = "autorenew"
+                        elif is_running:
                             _thr_icon = "hourglass_top"
+                        elif is_cloud_thread:
+                            _thr_icon = "cloud"
                         elif name.startswith("✈️"):
                             _thr_icon = "send"  # paper plane
                         elif name.startswith("📧"):
@@ -3991,9 +4569,11 @@ async def index():
                             _thr_icon = "electric_bolt"
                         else:
                             _thr_icon = "computer"  # web app
-                        ui.icon(_thr_icon, size="xs").classes(
+                        _icon_el = ui.icon(_thr_icon, size="xs").classes(
                             "text-primary" if is_active else "text-grey-6"
                         )
+                        if is_generating_tid:
+                            _icon_el.classes(add="thoth-spin")
                     with ui.item_section():
                         ui.item_label(name).classes("ellipsis").style(
                             "font-size: 0.85rem;" + ("font-weight: 600;" if is_active else "")
@@ -4004,7 +4584,7 @@ async def index():
                             )
                     with ui.item_section().props("side"):
                         ui.button(
-                            icon="delete_outline", on_click=lambda e, t=tid: (_delete(t), e.sender.parent_slot.parent.update())
+                            icon="delete_outline", on_click=lambda e, t=tid: _delete(t)
                         ).props("flat dense round size=xs color=grey-6").on(
                             "click", js_handler="(e) => e.stopPropagation()"
                         )
@@ -4014,16 +4594,31 @@ async def index():
                     with ui.dialog() as dlg, ui.card().classes("w-96"):
                         ui.label("All Conversations").classes("text-h6")
                         with ui.list().props("bordered separator").classes("w-full"):
-                            for tid, name, created, updated in threads:
-                                def _sel(t=tid, n=name):
+                            for tid, name, created, updated, *_rest2 in threads:
+                                _mo2 = _rest2[0] if _rest2 else ""
+                                def _sel(t=tid, n=name, mo=_mo2):
+                                    prev = state.thread_id
+                                    prev_gen = _active_generations.get(prev) if prev else None
+                                    if prev_gen and prev_gen.status == "streaming":
+                                        prev_gen.detached = True
+                                        if prev_gen.tts_active:
+                                            state.tts_service.stop()
+                                            prev_gen.tts_active = False
                                     state.thread_id = t
                                     state.thread_name = n
+                                    state.thread_model_override = mo or ""
                                     state.messages = load_thread_messages(t)
                                     dlg.close()
                                     _rebuild_main()
                                     _rebuild_thread_list()
 
                                 def _del(t=tid):
+                                    # Stop any active generation on this thread first
+                                    _del_gen = _active_generations.get(t)
+                                    if _del_gen:
+                                        _del_gen.stop_event.set()
+                                    # Stop any running task on this thread
+                                    stop_task(t)
                                     _delete_thread(t)
                                     clear_summary_cache(t)
                                     # Clean up shell session + history
@@ -4061,6 +4656,7 @@ async def index():
                         with ui.row().classes("w-full gap-2"):
                             def _delete_all():
                                 for t, *_ in threads:
+                                    stop_task(t)
                                     _delete_thread(t)
                                 clear_summary_cache()  # clear all summaries
                                 # Clean up all shell sessions + history
@@ -4145,6 +4741,15 @@ async def index():
                                     ui.linear_progress(
                                         value=step / total, show_value=False
                                     ).classes("w-24").props("color=amber")
+                                def _stop_from_activity(tid=_tid):
+                                    stop_task(tid)
+                                    ui.notify("⏹️ Stop signal sent.", type="warning")
+                                    container.clear()
+                                    with container:
+                                        _build_activity_content(container)
+                                ui.button(icon="stop", on_click=_stop_from_activity).props(
+                                    "round color=red size=xs"
+                                ).tooltip("Stop task")
                 else:
                     ui.label("No tasks currently running.").classes(
                         "text-grey-6 text-sm q-ml-sm"
@@ -4189,6 +4794,8 @@ async def index():
                             s_icon, s_color = "warning", "warning"
                         elif status == "failed":
                             s_icon, s_color = "error", "negative"
+                        elif status == "stopped":
+                            s_icon, s_color = "stop_circle", "orange"
                         else:
                             s_icon, s_color = "pending", "grey-6"
                         with ui.column().classes("w-full gap-0 q-py-xs"):
@@ -4635,7 +5242,8 @@ async def index():
                                     _mark_onboarding_seen()
                                     _rebuild_main()
                                 ui.button(icon="close", on_click=_dismiss_help).props("flat dense round size=sm")
-                            ui.markdown(_WELCOME_MESSAGE, extras=['code-friendly', 'fenced-code-blocks', 'tables'])
+                            _cloud_ob = is_cloud_model(get_current_model())
+                            ui.markdown(_welcome_message(cloud=_cloud_ob), extras=['code-friendly', 'fenced-code-blocks', 'tables'])
                             ui.separator()
                             ui.label("💡 Try asking me something:").classes("font-bold")
                             with ui.row().classes("w-full flex-wrap gap-2"):
@@ -4745,6 +5353,12 @@ async def index():
                                                 f"{datetime.now().strftime('%b %d, %I:%M %p')}"
                                             )
                                             _save_thread_meta(tid, t_name)
+                                            # Set model override on the thread immediately
+                                            # so the sidebar/banner show the correct model
+                                            # before the background thread even starts.
+                                            if t.get("model_override"):
+                                                from threads import _set_thread_model_override
+                                                _set_thread_model_override(tid, t["model_override"])
                                             bg_tools = [
                                                 tl.name
                                                 for tl in tool_registry.get_enabled_tools()
@@ -4759,14 +5373,30 @@ async def index():
                                                 type="positive",
                                             )
                                             _rebuild_thread_list()
+                                            ui.timer(0.3, _refresh_home_tiles, once=True)
 
-                                        run_btn = ui.button(
-                                            icon="play_arrow", on_click=_run_tk,
-                                        ).props("round color=green size=sm").tooltip(
-                                            "Run now"
-                                        )
-                                        if _is_disabled:
-                                            run_btn.disable()
+                                        _running_tid = get_running_task_thread(tk["id"])
+                                        if _running_tid:
+                                            def _stop_tk(tid=_running_tid, t=tk):
+                                                stop_task(tid)
+                                                ui.notify(
+                                                    f"⏹️ Stopping {t['name']}…",
+                                                    type="warning",
+                                                )
+                                                _refresh_home_tiles()
+                                            ui.button(
+                                                icon="stop", on_click=_stop_tk,
+                                            ).props("round color=red size=sm").tooltip(
+                                                "Stop running task"
+                                            )
+                                        else:
+                                            run_btn = ui.button(
+                                                icon="play_arrow", on_click=_run_tk,
+                                            ).props("round color=green size=sm").tooltip(
+                                                "Run now"
+                                            )
+                                            if _is_disabled:
+                                                run_btn.disable()
                     else:
                         ui.label("No tasks yet — click + New Task to get started.").classes(
                             "text-grey-6 text-sm q-mt-sm"
@@ -4814,19 +5444,199 @@ async def index():
                     f"Running — Step {bg['step']+1}/{bg['total']}</span></h3>",
                     sanitize=False,
                 )
+                def _stop_task_from_header(tid=state.thread_id):
+                    stop_task(tid)
+                    ui.notify("⏹️ Stop signal sent — task will stop after current step.",
+                              type="warning")
+                    _rebuild_main()
+                ui.button(icon="stop", on_click=_stop_task_from_header).props(
+                    "round color=red size=sm"
+                ).tooltip("Stop task")
             else:
                 p.chat_header_label = ui.label(f"💬 {state.thread_name}").classes("text-h5 flex-grow")
+
+                # Model picker — shows current model, lets user switch per-thread
+                _cur_mo = state.thread_model_override or ""
+                _model_display = _cur_mo if _cur_mo else get_current_model()
+                _is_cloud_hdr = is_cloud_model(_model_display)
+
+                # Build options: default + starred cloud models + local models
+                _cur_default = get_current_model()
+                _prefix = get_provider_emoji(_cur_default)
+                _default_opt = f"{_prefix} {_cur_default} (default)"
+                _picker_opts = [_default_opt]
+                for cid in list_starred_cloud_models():
+                    if cid != _cur_default:
+                        _picker_opts.append(f"{get_provider_emoji(cid)} {cid}")
+                for lid in list_local_models():
+                    if lid != _cur_default:
+                        _picker_opts.append(f"🖥️ {lid}")
+
+                # "More models…" entry to open Cloud settings
+                _MORE_MODELS_SENTINEL = "⚙️ More models…"
+                _picker_opts.append(_MORE_MODELS_SENTINEL)
+
+                # Current value
+                if _cur_mo and is_cloud_model(_cur_mo):
+                    _picker_val = f"{get_provider_emoji(_cur_mo)} {_cur_mo}"
+                elif _cur_mo and not is_cloud_model(_cur_mo) and _cur_mo != _cur_default:
+                    _picker_val = f"🖥️ {_cur_mo}"
+                else:
+                    _picker_val = _default_opt
+
+                async def _on_model_pick(e):
+                    from threads import _set_thread_model_override
+                    val = e.value
+                    if val == _MORE_MODELS_SENTINEL:
+                        # Revert picker to previous value, then open Cloud tab
+                        e.sender.set_value(_picker_val)
+                        _open_settings("Cloud")
+                        return
+                    if val.endswith(" (default)"):
+                        # Reset to global default
+                        state.thread_model_override = ""
+                        _set_thread_model_override(state.thread_id, "")
+                        _switched_label = "default"
+                    elif " " in val:
+                        # "emoji model_id" — split on first space (emoji-length-safe)
+                        model_id = val.split(" ", 1)[1]
+                        state.thread_model_override = model_id
+                        _set_thread_model_override(state.thread_id, model_id)
+                        _switched_label = model_id
+                    else:
+                        state.thread_model_override = ""
+                        _set_thread_model_override(state.thread_id, "")
+                        _switched_label = "default"
+                    clear_agent_cache()
+                    # Toast notification
+                    _eff = state.thread_model_override or get_current_model()
+                    if _switched_label == "default":
+                        ui.notify(f"Switched to default model ({_eff})", type="info")
+                    else:
+                        ui.notify(f"Switched to {_switched_label}", type="info")
+                    # Context cap check
+                    _mmax = await run.io_bound(lambda: get_model_max_context(_eff))
+                    _uval = get_user_context_size()
+                    if _mmax is not None and _uval > _mmax:
+                        _ml = CONTEXT_SIZE_LABELS.get(_mmax, f"{_mmax:,}")
+                        _ul = CONTEXT_SIZE_LABELS.get(_uval, f"{_uval:,}")
+                        ui.notify(
+                            f"Context capped: {_eff} max is {_ml} (you selected {_ul}). "
+                            f"Trimming will use {_ml}.",
+                            type="warning", close_button=True, timeout=8000,
+                        )
+                    _rebuild_main()
+
+                ui.select(
+                    options=_picker_opts,
+                    value=_picker_val,
+                    on_change=_on_model_pick,
+                ).props('dense borderless use-input input-debounce=300').classes("text-sm").style(
+                    "min-width: 200px; max-width: 320px;"
+                ).tooltip("Select model for this thread")
             if state.messages:
                 ui.button(icon="download", on_click=_open_export).props("flat round").tooltip("Export")
 
-        # Scrollable message area
-        p.chat_scroll = ui.scroll_area().classes("w-full flex-grow")
+        # Cloud model warning banner — show for any cloud model (override or default)
+        _active_model = state.thread_model_override or get_current_model()
+        _is_active_cloud = is_cloud_model(_active_model)
+        if _is_active_cloud:
+            _prov = get_cloud_provider(_active_model) or "cloud"
+            _prov_label = "OpenAI" if _prov == "openai" else "OpenRouter" if _prov == "openrouter" else "cloud"
+            with ui.row().classes("w-full items-center gap-2 q-px-sm q-py-xs").style(
+                "background: rgba(255, 152, 0, 0.08); border-radius: 8px; border: 1px solid rgba(255, 152, 0, 0.25);"
+            ):
+                ui.icon("cloud", color="orange").style("font-size: 1.1rem;")
+                ui.label(
+                    f"Using {_active_model} via {_prov_label} — data is sent to the cloud"
+                ).classes("text-orange text-sm")
+        else:
+            with ui.row().classes("w-full items-center gap-2 q-px-sm q-py-xs").style(
+                "background: rgba(76, 175, 80, 0.08); border-radius: 8px; border: 1px solid rgba(76, 175, 80, 0.25);"
+            ):
+                ui.icon("lock", color="green").style("font-size: 1.1rem;")
+                ui.label(
+                    f"Using {_active_model} via Ollama — complete privacy"
+                ).classes("text-green text-sm")
+
+        # Scrollable message area — subtle tint based on model type
+        _scroll_bg = (
+            "background: rgba(255, 152, 0, 0.03);"
+            if _is_active_cloud
+            else "background: rgba(76, 175, 80, 0.03);"
+        )
+        p.chat_scroll = ui.scroll_area().classes("w-full flex-grow").style(_scroll_bg)
         with p.chat_scroll:
             p.chat_container = ui.column().classes("w-full gap-2")
 
         # Render existing messages
         for msg in state.messages:
             _add_chat_message(msg)
+
+        # ── Reattach to a running generation (user switched back) ────────
+        _reattach_gen = _active_generations.get(state.thread_id)
+        if _reattach_gen and _reattach_gen.detached and _reattach_gen.status == "streaming":
+            with p.chat_container:
+                with ui.element("div").classes("thoth-msg-row"):
+                    ui.html('<div class="thoth-avatar thoth-avatar-bot">\U00013041</div>', sanitize=False)
+                    with ui.column().classes("thoth-msg-body gap-1") as _ra_wrapper:
+                        ui.html(
+                            '<div class="thoth-msg-header">'
+                            '<span class="thoth-msg-name">Thoth</span>'
+                            f'<span class="thoth-msg-stamp">{datetime.now().strftime("%H:%M")}</span>'
+                            '</div>',
+                            sanitize=False,
+                        )
+                        _reattach_gen.tool_col = ui.column().classes("w-full gap-1")
+                        # Render completed tool results that accumulated while detached
+                        for _tr in _reattach_gen.tool_results:
+                            with _reattach_gen.tool_col:
+                                with ui.expansion(f"\u2705 {_tr['name']}", icon="check_circle").classes("w-full"):
+                                    if _tr.get('content'):
+                                        _disp = _tr['content'][:5_000]
+                                        if len(_tr['content']) > 5_000:
+                                            _disp += "\n\n\u2026 (truncated)"
+                                        ui.code(_disp).classes("w-full text-xs")
+                        # Render charts that arrived while detached
+                        for _cj in _reattach_gen.chart_data:
+                            try:
+                                import plotly.io as _pio
+                                _fig = _pio.from_json(_cj)
+                                with _reattach_gen.tool_col:
+                                    ui.plotly(_fig).classes("w-full")
+                            except Exception:
+                                pass
+                        # Render captured images
+                        for _img in _reattach_gen.captured_images:
+                            try:
+                                with _reattach_gen.tool_col:
+                                    ui.image(f"data:image/jpeg;base64,{_img}").classes("w-80 rounded")
+                            except Exception:
+                                pass
+                        # Show accumulated text so far
+                        _reattach_gen.assistant_md = ui.markdown(
+                            _reattach_gen.accumulated,
+                            extras=['code-friendly', 'fenced-code-blocks', 'tables'],
+                        ).classes("thoth-msg w-full")
+                        _reattach_gen.wrapper = _ra_wrapper
+                        _reattach_gen.thinking_label = None
+                        _reattach_gen.thinking_md = None
+            _reattach_gen.detached = False
+            if p.stop_btn:
+                p.stop_btn.enable()
+        elif _reattach_gen and _reattach_gen.status in ("done", "error", "stopped", "interrupted"):
+            # Generation finished while we were away — cleanup
+            if _reattach_gen.accumulated:
+                a_msg: dict = {"role": "assistant", "content": _reattach_gen.accumulated}
+                if _reattach_gen.tool_results:
+                    a_msg["tool_results"] = _reattach_gen.tool_results
+                if _reattach_gen.chart_data:
+                    a_msg["charts"] = _reattach_gen.chart_data
+                if _reattach_gen.captured_images:
+                    a_msg["images"] = _reattach_gen.captured_images
+                state.messages.append(a_msg)
+                _add_chat_message(a_msg)
+            _active_generations.pop(state.thread_id, None)
 
         # Onboarding (triggered by 👋 button)
         if state.show_onboarding:
@@ -4840,7 +5650,8 @@ async def index():
                             '</div>',
                             sanitize=False,
                         )
-                        ui.markdown(_WELCOME_MESSAGE, extras=['code-friendly', 'fenced-code-blocks', 'tables'])
+                        _cloud_ob2 = is_cloud_model(_active_model)
+                        ui.markdown(_welcome_message(cloud=_cloud_ob2), extras=['code-friendly', 'fenced-code-blocks', 'tables'])
                         with ui.row().classes("flex-wrap gap-2"):
                             for prompt in _EXAMPLE_PROMPTS:
                                 def _try_inline(pr=prompt):
@@ -5023,21 +5834,23 @@ async def index():
             ui.button(icon="send", on_click=_on_send).props("color=primary round")
 
             def _on_stop():
-                state.stop_event.set()             # signal producer + consumer
+                # Per-thread stop: find the active generation for this thread
+                gen = _active_generations.get(state.thread_id)
+                if gen:
+                    gen.stop_event.set()
                 tts = state.tts_service
                 if tts and tts.enabled:
                     tts.stop()
                     if state.voice_service and state.voice_service.is_running:
                         state.voice_service.unmute()
-                # Don't set is_generating=False here — consumer does it
-                # after producer confirms cleanup is done (sends None)
                 if p.stop_btn:
                     p.stop_btn.props('icon=hourglass_top')
 
             p.stop_btn = ui.button(icon="stop", on_click=_on_stop).props(
                 "round"
             ).tooltip("Stop generation")
-            if not state.is_generating:
+            _has_active_gen = state.thread_id in _active_generations
+            if not _has_active_gen:
                 p.stop_btn.disable()
 
         # ── Voice bar ────────────────────────────────────────────────────
@@ -5102,12 +5915,19 @@ async def index():
 
     def _update_token_counter() -> None:
         config = {"configurable": {"thread_id": state.thread_id}} if state.thread_id else None
-        used, max_tokens = get_token_usage(config)
+        _mo = state.thread_model_override or None  # pass override so context cap is correct
+        used, max_tokens = get_token_usage(config, model_override=_mo)
         pct = min(used / max_tokens, 1.0) if max_tokens else 0.0
-        used_label = f"{used / 1_000:.1f}K" if max_tokens >= 1_000 else str(used)
-        max_label = f"{max_tokens / 1_000:.0f}K" if max_tokens >= 1_000 else str(max_tokens)
+
+        def _fmt(val):
+            if val >= 1_000_000:
+                return f"{val / 1_000_000:.1f}M"
+            if val >= 1_000:
+                return f"{val / 1_000:.1f}K"
+            return str(val)
+
         if p.token_label:
-            p.token_label.text = f"Context: {used_label} / {max_label} ({pct:.0%})"
+            p.token_label.text = f"Context: {_fmt(used)} / {_fmt(max_tokens)} ({pct:.0%})"
         if p.token_bar:
             p.token_bar.value = pct
 
@@ -5164,6 +5984,18 @@ async def on_startup():
 
     _set("🔑 Applying API keys…")
     await asyncio.to_thread(apply_keys)
+
+    # Fetch context catalog (keyless) for accurate context sizes even without keys
+    from models import fetch_context_catalog
+    _set("📊 Fetching context catalog…")
+    await asyncio.to_thread(fetch_context_catalog)
+
+    # Populate cloud model cache so is_cloud_model() works for health checks
+    if is_cloud_available():
+        _set("☁️ Refreshing cloud models…")
+        await asyncio.to_thread(refresh_cloud_models)
+        # Sync state in case refresh_cloud_models fell back (e.g. API key removed)
+        state.current_model = get_current_model()
 
     _set("🧠 Extracting memories…")
     def _extract():

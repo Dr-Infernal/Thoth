@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/tests-passing-brightgreen?style=flat" alt="Tests">
 </p>
 
-Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It runs entirely on your machine, combining a powerful ReAct agent with 23 integrated tools (61 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory with a personal knowledge graph, scheduled tasks, habit tracking, and more — plus Telegram and Email messaging channels, all powered by a locally-running LLM via [Ollama](https://ollama.com/). No data leaves your machine unless you explicitly use an online tool.
+Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 23 integrated tools (61 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory with a personal knowledge graph, scheduled tasks, habit tracking, and more — plus Telegram and Email messaging channels. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT-4o, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
 
 > Governments are investing billions to keep AI infrastructure within their borders. Thoth applies the same principle to the individual — your compute, your data, your choice of model, **accountable to no one but you.**
 
@@ -23,16 +23,16 @@ https://github.com/user-attachments/assets/7967e18d-a417-4ca5-b2d7-0fca45975ed7
 
 | | ChatGPT / Claude / Gemini | Thoth |
 |---|---|---|
-| **Your data** | Sent to cloud servers, used for training | Stays on your machine — always |
-| **Conversations** | Owned by the provider, can be deleted or leaked | Stored locally in SQLite, fully yours |
-| **Cost** | $20+/month per subscription | Free forever — runs on your own hardware |
+| **Your data** | Stored on provider servers, subject to their privacy policies | Stays on your machine — always. With opt-in cloud models, only the current conversation is sent to the LLM provider; memories, files, and history never leave |
+| **Conversations** | Owned by the provider — can be deleted, leaked, or used for training | Stored locally in SQLite, fully yours, exportable anytime |
+| **Cost** | $20+/month per subscription | Free with local models. Cloud models use pay-per-token APIs — typically pennies per conversation with smart context trimming |
 | **Memory** | Limited, opaque, provider-controlled | Personal knowledge graph — entities, relationships, visual explorer, fully yours |
-| **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, shell, browser, webcam |
-| **Customisation** | Pick a model, write a system prompt | Swap models freely, build scheduled tasks with cron, daily/weekly, interval, and delay triggers |
+| **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, shell, browser, webcam — 23 tools, 61 sub-operations |
+| **Customisation** | Pick a model, write a system prompt | Swap models per conversation or per task, build scheduled tasks with cron/daily/weekly/interval triggers, mix local and cloud models freely |
 | **Voice** | Cloud-processed speech | Local Whisper STT + Kokoro TTS — never leaves your mic |
-| **Availability** | Requires internet, subject to outages & rate limits | Works offline (core features), no throttling |
+| **Availability** | Requires internet, subject to outages & rate limits | Local models work offline; cloud models available when connected |
 
-> **Bottom line:** Cloud AI assistants rent you access to someone else’s system. Thoth gives you **personal AI sovereignty** — your own models, your own data, zero dependency on any provider.
+> **Bottom line:** Cloud AI assistants rent you access to someone else’s system. Thoth gives you **personal AI sovereignty** — run local models for full privacy, add cloud when you need it, and keep your data on your machine either way.
 
 ### Why not just use another open-source assistant?
 
@@ -42,27 +42,28 @@ Most open-source AI assistants are **developer tools disguised as products** —
 
 ### How is Thoth different from OpenClaw?
 
-[OpenClaw](https://github.com/openclaw/openclaw) is a fantastic open-source project — but it solves a different problem. OpenClaw is a **messaging infrastructure platform**: it routes cloud LLM calls (OpenAI, Anthropic, Google) to 25+ chat surfaces like WhatsApp, Slack, and Discord. The LLM runs in the cloud; the gateway runs on your machine.
+[OpenClaw](https://github.com/openclaw/openclaw) is a solid open-source project, but it targets a different audience and solves a different problem. OpenClaw is a **developer-oriented messaging infrastructure platform**: it routes LLM calls to 25+ chat surfaces like WhatsApp, Slack, and Discord. It supports both cloud and local models, but getting it running requires Node.js, Docker, YAML config files, and considerable developer expertise.
 
-Thoth is a **local-compute desktop assistant**: the LLM, voice pipeline, and memory all run on your hardware. Nothing leaves your machine unless you explicitly opt into an online tool.
+Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI, everything configurable from the settings panel — no terminal, no config files, no Docker. Whether you use local or cloud models, all your data stays on your machine — only the LLM inference can optionally go to the cloud.
 
-> **Pick Thoth** if you want everything — model, voice, memory, data — running on your own machine with zero cloud dependency and zero recurring cost.
-> **Pick OpenClaw** if you want a cloud-powered assistant that meets you on every chat platform you already use.
+> **Pick Thoth** if you want a private, full-featured AI assistant with a polished desktop experience — local-first with optional cloud models, a personal knowledge graph, health tracking, and zero setup friction.
+> **Pick OpenClaw** if you're a developer who wants to build a cloud-powered assistant that connects to every chat platform you already use.
 
 | | OpenClaw | Thoth |
 |---|---|---|
-| **LLM execution** | Cloud APIs (OpenAI, Anthropic, etc.) | Local via Ollama — your GPU, your data |
-| **Privacy model** | Gateway is local; LLM calls hit cloud servers | Everything local — LLM, voice, memory, conversations |
-| **Ongoing cost** | Free software, but requires paid API keys | Free software **and** free to run — no subscriptions |
-| **Offline capability** | Requires internet for every LLM call | Core features work fully offline |
-| **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Kokoro TTS — fully offline, 10 voices |
+| **Target audience** | Developers comfortable with Node.js, Docker, and YAML | Everyone — one-click installer, native GUI, zero config files |
+| **LLM execution** | Cloud or local (requires manual Docker/config setup) | Local via Ollama (default) or opt-in cloud (OpenAI, OpenRouter) — switchable from the GUI |
+| **Data privacy** | Depends on your configuration | All data stays local — conversations, memories, files, history. Only LLM calls touch the cloud when using cloud models |
+| **Setup** | Node.js + Docker + YAML + channel config + API keys | One-click installer (Windows/macOS); cloud setup needs just an API key |
+| **Ongoing cost** | Free software, but typically requires paid API keys | Free with local models; cloud models billed per-token (pennies per conversation with smart trimming) |
+| **Offline capability** | Requires configuration for local LLMs | Local models work fully offline out of the box |
 | **Long-term memory** | Session compaction + pruning | Personal knowledge graph — entities, relations, visual explorer, semantic search, auto-extraction |
-| **Tools** | Browser automation, Canvas, Skills platform | 22 tools / 56 sub-ops — Gmail, Calendar, filesystem, shell, browser, vision, habit tracker, charts, Wolfram, and more |
-| **Health & Habit Tracking** | ❌ None | Conversational tracker for meds, symptoms, exercise, periods — with streak, adherence, and trend analysis |
+| **Health & Habit Tracking** | ❌ None | Conversational tracker for meds, symptoms, exercise, periods — streaks, adherence, and trend analysis |
+| **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Kokoro TTS — fully offline, 10 voices |
+| **Tools** | Browser automation, Canvas, Skills platform | 23 tools / 61 sub-ops — Gmail, Calendar, filesystem, shell, browser, vision, habit tracker, charts, Wolfram, and more |
+| **Desktop experience** | macOS menu bar app, WebChat | Native desktop window with system tray, splash screen, dark mode UI |
+| **Tasks** | Cron jobs + webhooks | Named tasks with 7 schedule types, stop/cancel, channel delivery, per-task model override, and template variables |
 | **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows & macOS |
-| **Desktop experience** | macOS menu bar app, WebChat | Native desktop window, system tray, splash screen |
-| **Tasks** | Cron jobs + webhooks | Named tasks with 7 schedule types, channel delivery, per-task model override, and template variables |
-| **Setup** | Node.js + cloud API keys + channel config | Python + Ollama (GUI Installer), zero accounts needed |
 
 ### Why the name "Thoth"?
 
@@ -81,6 +82,8 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Centralized prompts** — all LLM prompts (system prompt, extraction prompt, summarization prompt) managed in a single `prompts.py` module for easy tuning
 - **Live token counter** — progress bar in the sidebar shows real-time context window usage based on trimmed (model-visible) history
 - **Graceful stop & error recovery** — stop button cleanly halts generation with drain timeout; agent tool loops are caught automatically with a user-friendly error message; orphaned tool calls are repaired
+- **Task cancellation** — running background tasks can be stopped from the chat header, activity panel, or task card; cancellation is checked between every LangGraph node for clean shutdown
+- **Displaced tool-call auto-repair** — if context trimming displaces tool-call/response pairs, the agent automatically detects and repairs the ordering before the next LLM call; orphaned tool calls trigger an automatic retry
 - **Date/time awareness** — current date and time is injected into every LLM call so the model always knows "today"
 - **Destructive action confirmation** — dangerous operations (file deletion, sending emails, deleting calendar events, deleting memories, deleting tasks) require explicit user approval via an interrupt mechanism
 - **Task-scoped background permissions** — background tasks use a tiered system: safe operations always run, low-risk operations (move file, move calendar, send email) are allowed with optional runtime guards, and irreversible operations (delete file, delete memory) are always blocked; shell commands and email recipients can be allowlisted per-task via the task editor UI
@@ -144,6 +147,7 @@ Thoth doesn't just store isolated facts — it builds a **personal knowledge gra
 - **Configurable vision model** — choose from popular vision models (gemma3, llava, etc.)
 - **Camera selection** — pick which camera to use if you have multiple
 - **Inline image display** — captured images are shown inline in the chat
+- **Cloud vision models** — cloud models with vision capability (GPT-4o, Claude 3.5 Sonnet, etc.) are auto-detected and work seamlessly alongside local vision models
 
 ### ⚡ Tasks & Scheduling
 - **Unified task engine** — create named, multi-step tasks that run sequentially in a fresh thread, powered by APScheduler
@@ -157,9 +161,10 @@ Thoth doesn't just store isolated facts — it builds a **personal knowledge gra
 - **Pre-built templates** — ships with 5 starter tasks (Daily Briefing, Research Summary, Email Digest, Weekly Review, Quick Reminder)
 - **Home screen dashboard** — manage tasks from the home screen with a tabbed layout: ⚡ Tasks (tiles with edit/run/delete) and 📋 Activity (monitoring panel with upcoming runs, recent history, channel status)
 - **Persistent run history** — task execution history survives task deletion; displayed in the Activity tab with ✅/❌/⏳ status icons
+- **Task stop / cancel** — stop a running task from the chat header, activity panel, or task card; stopped tasks skip delivery and auto-delete, and are recorded in run history
 
 ### 📬 Messaging Channels
-- **Telegram bot** — connect a Telegram bot via Bot API token; messages are processed by the full ReAct agent with all tools available; each chat gets its own conversation thread; supports interrupt-based approval for destructive actions (reply APPROVE/DENY); corrupt thread recovery with user-friendly messages; HTML-formatted responses
+- **Telegram bot** — connect a Telegram bot via Bot API token; messages are processed by the full ReAct agent with all tools available; each chat gets its own conversation thread; supports interrupt-based approval for destructive actions (reply APPROVE/DENY); `/model` command to list and switch models (local or cloud); corrupt thread recovery with user-friendly messages; HTML-formatted responses
 - **Telegram tool** — the agent can proactively send messages, photos, and documents to any Telegram chat via `send_telegram_message`, `send_telegram_photo`, and `send_telegram_document`
 - **Email channel** — polls Gmail for unread emails with `[Thoth]` in the subject line (from your own address only); each Gmail thread gets its own agent conversation thread; replies inline; interrupt-based approval via email reply; corrupt thread recovery
 - **Gmail attachments** — `send_gmail_message` and `create_gmail_draft` support file attachments; files are MIME-encoded automatically; workspace-relative paths are resolved
@@ -178,7 +183,7 @@ Thoth doesn't just store isolated facts — it builds a **personal knowledge gra
 ### 🖥️ Desktop App
 - **Native window** — runs in a native OS window via pywebview instead of a browser, a real desktop application
 - **Splash screen** — two-tier startup splash: tkinter GUI (dark background, gold Thoth logo, animated loading indicator) with automatic console fallback for environments where tkinter isn't available; self-closes when the server is ready
-- **First-launch setup wizard** — on first install, a guided wizard walks you through selecting and downloading brain + vision models before the app starts
+- **First-launch setup wizard** — on first install, a guided wizard offers two paths: **Local** (select and download Ollama models) or **Cloud** (enter an API key and pick a cloud model); vision model selection included for local setups
 - **System tray** — `launcher.py` runs a pystray system tray icon showing app status (green = running, grey = stopped) with Open / Quit menu
 - **Auto-restart** — if the native window is closed, re-opening from the tray relaunches it instantly
 
@@ -188,21 +193,32 @@ Thoth doesn't just store isolated facts — it builds a **personal knowledge gra
 - **Auto-naming** — threads are automatically named after the first question
 - **Thread switching** — resume any previous conversation seamlessly
 - **Thread deletion** — remove individual conversations or delete all at once with confirmation
+- **Per-thread model switching** — pick a different model (local or cloud) for each conversation from the chat header dropdown; overrides persist across app restarts; cloud threads show a banner indicating the active provider
 - **Conversation export** — export any thread as Markdown (.md), plain text (.txt), or PDF (.pdf)
 - **File attachments** — attach images (analyzed via vision model), PDFs (text extracted), CSV, Excel, JSON, and text files directly in chat; structured data files return schema + stats + preview via pandas
 - **Inline charts** — interactive Plotly charts rendered inline when the agent visualises data (zoom, hover, pan)
 - **Inline YouTube embeds** — YouTube links in responses are rendered as playable embedded videos
 - **Syntax-highlighted code blocks** — fenced code blocks render with language-aware highlighting and a built-in copy button
 - **Onboarding guide** — first-run welcome message with tool overview and clickable example prompts; `👋` button in sidebar to re-show anytime
-- **Startup health check** — verifies Ollama connectivity and model availability on launch
+- **Startup health check** — verifies model availability on launch; skips Ollama check when using a cloud brain model
 
-### 🤖 Brain Model
-- **Dynamic model switching** — choose any Ollama-supported model from the Settings panel
-- **39 curated tool-capable models** — Qwen, Llama, Mistral, Nemotron, and more — only models that support tool calling are included
-- **Tool-support validation** — downloaded models not in the curated list are flagged with a ⚠️ warning; selecting one triggers a live tool-call check and auto-reverts if the model can't use tools
-- **Download buttons** — models not yet downloaded show an explicit Download button with live progress.
-- **Configurable context window** — 4K to 256K tokens via selector; if you choose a value that exceeds the model's native maximum, trimming and the token counter automatically use the model's actual limit and a toast notification explains the cap
-- **Local indicators** — models marked ✅ (downloaded) or ⬇️ (needs download)
+### 🤖 Brain Model & Cloud Models
+
+The brain model is Thoth's default LLM — the model used for conversations, memory extraction, and any thread or task without a specific override. It can be a local Ollama model or an opt-in cloud model.
+
+Thoth is built and tested for local models first. Every feature supports local models, and that will always be the priority. You'll be surprised what a 14B+ local model can do — tool calling, multi-step reasoning, memory extraction, and long conversations all work well. As local models improve and hardware requirements drop, the goal is to reduce any dependency on cloud models over time. Start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
+
+Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT-4o, o3, Claude Opus) for specific tasks, or want to try different models without downloading gigabytes. Thoth supports opt-in cloud models through **OpenAI** (direct API) and **OpenRouter** (100+ models from all major providers) for these cases — configured entirely from the Settings panel, no config files or terminal commands.
+
+- **Dynamic model switching** — change the brain model from Settings; choose from 39 curated local models or any connected cloud model
+- **Per-thread & per-task model override** — pick a different model for each conversation or each scheduled task; local and cloud models can be mixed freely across threads
+- **Starred models** — star your favorite cloud models in Settings → Cloud; starred models appear in the chat header model picker alongside local models for quick access
+- **Cost-efficient context management** — smart context trimming compresses older conversation turns, reducing token usage and API costs for cloud models; oversized tool outputs are proportionally shrunk to fit within context limits
+- **39 curated local models** — Qwen, Llama, Mistral, Nemotron, and more — only models that support tool calling are included
+- **Tool-support validation** — downloaded local models not in the curated list are flagged with a ⚠️ warning; selecting one triggers a live tool-call check and auto-reverts if the model can't use tools
+- **Download buttons** — local models not yet downloaded show a Download button with live progress
+- **Configurable context window** — 4K to 256K tokens via selector; if you choose a value that exceeds the model's native maximum, trimming and the token counter automatically use the model's actual limit
+- **Local & cloud indicators** — local models show ✅ (downloaded) or ⬇️ (needs download); cloud models show ☁️
 
 ### 🔔 Notifications
 - **Desktop notifications** — task completions and timer expirations trigger a desktop notification with timestamp
@@ -273,9 +289,9 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 │                    NiceGUI Frontend (app_nicegui.py)                 │
 │  ┌────────────┐  ┌──────────────────────┐  ┌───────────────────┐   │
 │  │  Sidebar   │  │   Chat Interface     │  │   Settings Dialog │   │
-│  │  Threads   │  │   Streaming Tokens   │  │   11 Tabs         │   │
+│  │  Threads   │  │   Streaming Tokens   │  │   12 Tabs         │   │
 │  │  Controls  │  │   Tool Status        │  │   Tool Config     │   │
-│  │  Memory Tab│  │   Memory Graph View  │  │                   │   │
+│  │  Memory Tab│  │   Memory Graph View  │  │   Cloud Settings  │   │
 │  └────────────┘  └──────────────────────┘  └───────────────────┘   │
 └──────────────────────────┬───────────────────────────────────────────┘
                            │
@@ -287,16 +303,17 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 │   System prompt with TOOL USE, MEMORY, and CITATION guidelines      │
 │   Interrupt mechanism for destructive action confirmation            │
 │   Graph-enhanced auto-recall (semantic + 1-hop expansion)           │
+│   Per-thread model override (local or cloud)                        │
 │                                                                      │
 │   61 LangChain sub-tools from 23 registered tool modules            │
 └───────┬──────────┬──────────┬──────────┬──────────┬─────────────────┘
         │          │          │          │          │
         ▼          ▼          ▼          ▼          ▼
   ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐
-  │  Ollama  │ │Knowledge│ │ SQLite │ │ FAISS  │ │External│
-  │  LLMs    │ │ Graph  │ │Threads │ │ Vector │ │  APIs  │
-  │(local)   │ │(SQLite+│ │(local) │ │ Store  │ │(opt-in)│
-  │          │ │NetworkX)│ │        │ │        │ │        │
+  │   LLMs   │ │Knowledge│ │ SQLite │ │ FAISS  │ │External│
+  │  Ollama  │ │ Graph  │ │Threads │ │ Vector │ │  APIs  │
+  │ + Cloud  │ │(SQLite+│ │(local) │ │ Store  │ │(opt-in)│
+  │ (opt-in) │ │NetworkX)│ │        │ │        │ │        │
   └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘
 ```
 
@@ -304,22 +321,22 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 
 | File | Purpose |
 |------|---------|
-| **`app_nicegui.py`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (11 tabs), tabbed home screen (Tasks + Activity + Memory graph), Task Edit dialog, file attachment handling, streaming event loop with error recovery, export, voice bar, first-launch setup wizard, inline terminal panel, interactive knowledge graph visualization (vis-network), centralized logging configuration |
-| **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator, interrupt handling for destructive actions, live token usage reporting, graph-enhanced auto-recall with memory IDs and relation context, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off) |
+| **`app_nicegui.py`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (12 tabs including Cloud), tabbed home screen (Tasks + Activity + Memory graph), Task Edit dialog, file attachment handling, streaming event loop with error recovery, export, voice bar, first-launch setup wizard (Local/Cloud paths), per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network), centralized logging configuration |
+| **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator, interrupt handling for destructive actions, live token usage reporting, graph-enhanced auto-recall with memory IDs and relation context, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off), task cancellation via stop_event, displaced tool-call auto-repair |
 | **`threads.py`** | SQLite-backed thread metadata and `SqliteSaver` checkpointer for persisting LangGraph conversation state |
 | **`memory.py`** | Backward-compatible memory wrapper — delegates all operations to `knowledge_graph.py`, mapping legacy column names (`category`/`content` to `entity_type`/`description`); provides `save_memory`, `find_by_subject`, `update_memory`, `delete_memory`, `semantic_search`, and `count_memories` with unchanged signatures |
 | **`knowledge_graph.py`** | Personal knowledge graph engine — SQLite entity + relation tables (WAL mode), NetworkX DiGraph for traversal, FAISS vector index for semantic search; entity CRUD with alias resolution, relation CRUD with cascade delete, `graph_enhanced_recall()` for semantic + graph expansion, `graph_to_vis_json()` for visualization; deterministic dedup via normalized subject matching |
-| **`models.py`** | Ollama model management — listing, downloading, switching models, context size configuration with automatic model-max capping |
+| **`models.py`** | Ollama + cloud model management — local model listing/downloading/switching, cloud provider support (OpenAI, OpenRouter), starred models, context-size catalog with heuristics, model override routing, cloud vision detection |
 | **`documents.py`** | Document ingestion — PDF/DOCX/TXT loading, chunking, FAISS embedding and storage |
 | **`voice.py`** | Local STT pipeline — toggle-based 4-state machine (stopped/listening/transcribing/muted) with faster-whisper CPU-only int8 transcription |
 | **`tts.py`** | Kokoro TTS integration — cross-platform neural TTS, model auto-downloaded on first use (~169 MB), 10 built-in voices, streaming sentence-by-sentence playback |
-| **`vision.py`** | Camera/screen capture via OpenCV/MSS, image analysis via Ollama vision models |
+| **`vision.py`** | Camera/screen capture via OpenCV/MSS, image analysis via local or cloud vision models |
 | **`data_reader.py`** | Shared pandas-based reader for CSV, TSV, Excel, JSON, JSONL — returns schema + stats + preview rows |
 | **`launcher.py`** | Desktop launcher — system tray (pystray), native window management (pywebview), two-tier splash screen (tkinter with console fallback), manages NiceGUI server lifecycle; structured logging to `~/.thoth/thoth_app.log` |
-| **`api_keys.py`** | API key management — load/save/apply from `~/.thoth/api_keys.json` |
+| **`api_keys.py`** | API key management — tool keys from `~/.thoth/api_keys.json`, cloud LLM provider keys and starred models from `~/.thoth/cloud_config.json` |
 | **`prompts.py`** | Centralized LLM prompts — system prompt (with BUILDING CONNECTIONS, EXPLORING CONNECTIONS, and BACKGROUND TASK PERMISSIONS sections), extraction prompt (triple-based with User entity convention and relation taxonomy), summarization prompt; memory guidelines with dedup and update instructions |
 | **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts entities and relations as structured triples, two-pass dedup (entities with alias merging, then relations with subject-to-ID resolution), User entity pre-population, excludes active threads, runs on startup + every 6 hours |
-| **`tasks.py`** | Task engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, sequential prompt execution, background runner with threading, channel delivery (Telegram/Email), per-task model override, run history persistence, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
+| **`tasks.py`** | Task engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, sequential prompt execution, background runner with threading, channel delivery (Telegram/Email), per-task model override, run history persistence, task stop/cancel, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
 | **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue; coordinates task completion chimes and timer alerts |
 | **`channels/`** | Messaging channel adapters — Telegram bot (long polling, interrupt approval, corrupt thread recovery, HTML formatting) and Email channel (Gmail polling, interrupt approval, corrupt thread recovery, sender-only filter), with shared config store |
 | **`tools/`** | 23 self-registering tool modules + base class + registry |
@@ -336,6 +353,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── memory_vectors/         # FAISS vector index for semantic memory search
 ├── memory_extraction_state.json  # Tracks last extraction run timestamp
 ├── api_keys.json           # API keys (Tavily, Wolfram, etc.)
+├── cloud_config.json         # Cloud LLM provider keys and starred models
 ├── app_config.json         # Onboarding / first-run state
 ├── tools_config.json       # Tool enable/disable state & config
 ├── model_settings.json     # Selected model & context size
@@ -365,26 +383,33 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 
 ## 💻 System Requirements
 
-### Minimum
+### For Local Models (Ollama)
+
+| | Minimum | Recommended |
+|--|---------|-------------|
+| **OS** | Windows 10/11 (64-bit) or macOS 12+ (Apple Silicon & Intel) | Same |
+| **Python** | 3.11+ | 3.11+ |
+| **RAM** | 8 GB (for 8B models) | 16–32 GB (for 14B–30B models) |
+| **GPU** | Not required — Ollama runs on CPU | NVIDIA 8+ GB VRAM (CUDA) or Apple Silicon — dramatically faster |
+| **Disk** | ~5 GB (app + one small model like `qwen3:8b`) | 20+ GB for multiple or larger models |
+| **Internet** | Required for install and model download; optional at runtime | Same |
+
+> **Note:** The default local model (`qwen3:14b`, ~9 GB) runs well on CPU with 16 GB RAM, but a GPU makes responses significantly faster. Smaller models like `qwen3:8b` (~5 GB) work on 8 GB RAM machines. You'll be surprised what a 14B+ local model can do.
+
+### For Cloud Models Only (No Local GPU Needed)
+
+If you don't plan to run local models, Thoth's requirements drop significantly:
 
 | Requirement | Details |
 |-------------|---------|
 | **OS** | Windows 10/11 (64-bit) or macOS 12+ (Apple Silicon & Intel) |
 | **Python** | 3.11+ |
-| **RAM** | 8 GB |
-| **Disk** | ~5 GB (app + packages + one small model like `qwen3:8b`) |
-| **GPU** | Not required — Ollama can run on CPU only |
-| **Internet** | Required for installation and model download; optional at runtime |
+| **RAM** | 4 GB |
+| **Disk** | ~1 GB (app + packages, no model downloads) |
+| **GPU** | Not needed |
+| **Internet** | Required (LLM inference happens on the provider's servers) |
 
-### Recommended
-
-| Requirement | Details |
-|-------------|---------|
-| **RAM** | 16–32 GB for 14B–30B parameter models |
-| **GPU** | NVIDIA GPU with 8+ GB VRAM (CUDA) — dramatically faster inference |
-| **Disk** | 20+ GB if running multiple or larger models (e.g. `qwen3:30b` is ~18 GB) |
-
-> **Note:** The default model (`qwen3:14b`, ~9 GB) runs acceptably on CPU with 16 GB RAM, but a GPU makes responses significantly faster. Smaller models like `qwen3:8b` (~5 GB) work well on 8 GB RAM machines.
+> You still need an API key from [OpenAI](https://platform.openai.com/) or [OpenRouter](https://openrouter.ai/). Cloud models are billed per-token by the provider — typically pennies per conversation.
 
 ---
 
@@ -392,13 +417,13 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 
 ### Windows
 
-1. Download **[ThothSetup_3.6.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.7.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.6.0-macOS.zip](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.7.0-macOS.zip](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Unzip the file — this creates a `Thoth` folder
 3. Open the `Thoth` folder and double-click **`Start Thoth.command`**
    - If macOS blocks it: right-click → **Open** → click **Open** in the dialog
@@ -408,13 +433,15 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 
 > **Works on Apple Silicon (M1/M2/M3/M4) and Intel Macs** (macOS 12+). No terminal, no manual setup — just double-click and go.
 
+> **Using cloud models only?** The installer still sets up Ollama by default, but you can skip model downloads. On first launch, choose the **Cloud** setup path, enter your API key, and start chatting — no GPU required.
+
 ---
 
 ## 📦 Installation (From Source)
 
-> **Prefer a manual install?** Five commands from source:
+> **Prefer a manual install?** A few commands from source:
 
-1. **Install [Ollama](https://ollama.com/)** — download and install the Ollama runtime
+1. **Install [Ollama](https://ollama.com/)** *(required for local models — skip if using cloud models only)*
 
 2. **Clone the repository**
    ```bash
@@ -436,7 +463,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
    pip install -r requirements.txt
    ```
 
-5. **Start Ollama** (if not already running)
+5. **Start Ollama** *(if using local models)*
    ```bash
    ollama serve
    ```
@@ -452,26 +479,39 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
    python app_nicegui.py
    ```
 
-> **First launch:** A setup wizard will guide you through selecting and downloading brain and vision models. The default brain model (`qwen3:14b`, ~9 GB) is recommended.
+> **First launch:** A setup wizard lets you choose between **Local** (Ollama) and **Cloud** (API key) setup paths. For local, the default brain model (`qwen3:14b`, ~9 GB) is recommended. For cloud, enter your OpenAI or OpenRouter API key and pick a default model.
 
 ---
 
 ## 🔑 API Key Setup (Optional)
 
-Most tools work without any API keys. For enhanced functionality:
+Most tools work without any API keys. For cloud models and enhanced functionality:
+
+### Cloud LLM Providers
 
 | Service | Key | Purpose | How to Get |
-|---------|-----|---------|-----------|
+|---------|-----|---------|------------|
+| **OpenAI** | `OPENAI_API_KEY` | GPT-4o, o3, GPT-4.1, and other OpenAI models | [platform.openai.com](https://platform.openai.com/) |
+| **OpenRouter** | `OPENROUTER_API_KEY` | 100+ models from all major providers (Claude, Gemini, Llama, etc.) | [openrouter.ai](https://openrouter.ai/) |
+
+Configure cloud keys in **⚙️ Settings → ☁️ Cloud** tab. Keys are stored locally in `~/.thoth/cloud_config.json` — never sent to Thoth’s servers (there are none).
+
+### Tool API Keys
+
+| Service | Key | Purpose | How to Get |
+|---------|-----|---------|------------|
 | **Tavily** | `TAVILY_API_KEY` | Web search (1,000 free searches/month) | [app.tavily.com](https://app.tavily.com/) |
 | **Wolfram Alpha** | `WOLFRAM_ALPHA_APPID` | Advanced computation & scientific data | [developer.wolframalpha.com](https://developer.wolframalpha.com/) |
 
-Configure keys in **⚙️ Settings → 🔍 Search** tab. Keys are saved locally to `~/.thoth/api_keys.json`.
+Configure tool keys in **⚙️ Settings → 🔍 Search** tab. Keys are saved locally to `~/.thoth/api_keys.json`.
 
 For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credentials.json` — setup instructions are provided in the respective Settings tabs.
 
 ---
 
 ## 🚀 Quick Start
+
+### Local Models (Default)
 
 1. **Launch Thoth** and wait for the default model to download (first time only)
 2. **Click "＋ New conversation"** in the sidebar
@@ -489,15 +529,36 @@ For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credent
    - *"What did I ask about taxes last week?"* → uses Conversation Search
 4. **Open ⚙️ Settings** to configure models, enable/disable tools, and set up integrations
 
+### Cloud Models (No GPU? Start Here)
+
+1. **Launch Thoth** → on the setup wizard, choose **☁️ Cloud**
+2. **Enter your API key** (OpenAI or OpenRouter) → Thoth validates and fetches available models
+3. **Pick a default model** (e.g. GPT-4o) and start chatting — no downloads, no GPU needed
+4. Switch models per conversation anytime from the chat header dropdown
+
 ---
 
 ## 🔒 Privacy & Security — Personal AI Sovereignty
 
-- **All LLM inference runs locally** via Ollama — no data sent to cloud AI providers
+### With Local Models (Default)
+
+- **All LLM inference runs on your machine** via Ollama — nothing sent to any cloud provider
 - **Documents, memories, and conversations are stored locally** in `~/.thoth/`
-- **API keys are stored locally** and only transmitted to their respective services
 - **External network calls** are only made when you use online tools (web search, Wikipedia, Arxiv, Gmail, Calendar, Weather) — and each can be individually disabled
 - **No telemetry, no tracking, no cloud dependencies** for core functionality
+
+### With Opt-In Cloud Models
+
+- **Only the current conversation is sent to the LLM provider** (OpenAI or OpenRouter) — your memories, knowledge graph, documents, files, and other conversations never leave your machine
+- **Your API key connects directly to the provider** over HTTPS — Thoth has no servers, no accounts, and no middleman between you and the API
+- **All data is still stored locally** — conversations, memories, files, and history remain in `~/.thoth/` regardless of which model you use
+- **No telemetry from Thoth** in either mode — local or cloud
+
+### Always
+
+- **API keys are stored locally** in `~/.thoth/` and only transmitted to their respective services
+- **No Thoth account required** — there is no sign-up, no login, no server to phone home to
+- **Tools can be individually disabled** from Settings to control exactly what the agent can access
 
 ---
 

@@ -20,7 +20,7 @@ fi
 
 source "$VENV_DIR/bin/activate"
 
-# Start Ollama if not running
+# Start Ollama if installed and not running (optional for cloud-only setups)
 OLLAMA_PORT=11434
 ollama_running() { (echo >/dev/tcp/127.0.0.1/$OLLAMA_PORT) 2>/dev/null; }
 

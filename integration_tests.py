@@ -1304,10 +1304,12 @@ def section_11_edge_cases():
         rel2 = kg.add_relation(ra["id"], rb["id"], "test_rel", source="test")
         rels = kg.get_relations(ra["id"])
         test_rels = [r for r in rels if r["relation_type"] == "test_rel"]
-        if len(test_rels) <= 1:
-            record("PASS", "edge: duplicate relation is idempotent (1 stored)")
-        else:
+        if len(test_rels) <= 1 and rel2 is None:
+            record("PASS", "edge: duplicate relation is idempotent (1 stored, returns None)")
+        elif len(test_rels) > 1:
             record("FAIL", f"edge: duplicate relation created {len(test_rels)} records")
+        else:
+            record("FAIL", f"edge: duplicate relation returned {rel2} instead of None")
     except Exception as e:
         record("FAIL", "edge: duplicate relation", str(e))
 

@@ -1,6 +1,6 @@
 import threading
 
-from models import get_llm, get_llm_for, get_context_size, get_current_model, is_model_local, get_model_max_context
+from models import get_llm, get_llm_for, get_context_size, get_current_model, is_model_local, is_cloud_model, get_model_max_context
 from api_keys import apply_keys
 from prompts import AGENT_SYSTEM_PROMPT, SUMMARIZE_PROMPT
 from langchain_classic.retrievers import ContextualCompressionRetriever
@@ -12,6 +12,11 @@ from threads import pick_or_create_thread, checkpointer
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class TaskStoppedError(Exception):
+    """Raised when a running task is cancelled via its stop_event."""
+
 
 apply_keys()
 
@@ -45,7 +50,7 @@ def _get_compressor():
 
     # mode == "deep" — original LLMChainExtractor behaviour
     _ov = _model_override_var.get() or ""
-    if _ov and _ov != get_current_model() and is_model_local(_ov):
+    if _ov and _ov != get_current_model() and (is_model_local(_ov) or is_cloud_model(_ov)):
         _compressor = LLMChainExtractor.from_llm(get_llm_for(_ov))
     else:
         _compressor = LLMChainExtractor.from_llm(get_llm())
@@ -194,6 +199,49 @@ def _pre_model_trim(state: dict) -> dict:
         allow_partial=False,
     )
 
+    # ── Repair tool_call / ToolMessage ordering broken by trimming ────
+    # OpenAI requires that an AIMessage with tool_calls is IMMEDIATELY
+    # followed by ToolMessages for each tool_call_id (no intervening
+    # human/ai messages).  trim_messages or checkpoint corruption can
+    # break this.  Fix: for each AIMessage with tool_calls, check that
+    # the immediately-following messages (while type=="tool") cover all
+    # needed IDs.  If not, inject stubs right after the AIMessage and
+    # remove any displaced ToolMessages found later.
+    _stubs_needed: dict[int, list[dict]] = {}   # msg_index → [tool_call dicts]
+    _stubbed_ids: set[str] = set()
+
+    for i, m in enumerate(trimmed):
+        tc_list = getattr(m, "tool_calls", [])
+        if not tc_list:
+            continue
+        needed = {tc["id"]: tc for tc in tc_list if tc.get("id")}
+        # Check immediately following tool messages
+        j = i + 1
+        while j < len(trimmed) and trimmed[j].type == "tool":
+            needed.pop(getattr(trimmed[j], "tool_call_id", None), None)
+            j += 1
+        if needed:
+            _stubs_needed[i] = list(needed.values())
+            _stubbed_ids.update(needed.keys())
+
+    if _stubs_needed:
+        logger.debug("_pre_model_trim: fixing %d displaced tool_call(s)",
+                      len(_stubbed_ids))
+        _patched: list = []
+        for i, m in enumerate(trimmed):
+            # Skip displaced ToolMessages that we're replacing with stubs
+            if m.type == "tool" and getattr(m, "tool_call_id", None) in _stubbed_ids:
+                continue
+            _patched.append(m)
+            if i in _stubs_needed:
+                for tc in _stubs_needed[i]:
+                    _patched.append(ToolMessage(
+                        content="[Result not available — earlier context was trimmed]",
+                        name=tc.get("name", "unknown"),
+                        tool_call_id=tc["id"],
+                    ))
+        trimmed = _patched
+
     # Inject current date & time right after the system message so the
     # model always has an up-to-date reference.  This runs on every LLM
     # call, so even after days of uptime the date stays correct.
@@ -217,7 +265,9 @@ def _pre_model_trim(state: dict) -> dict:
     # memories from the FAISS index, then expand 1 hop in the knowledge
     # graph to include connected entities.  This ensures the model always
     # has rich personal context without needing to call search_memory.
-    try:
+    #
+    if True:  # Always recall — memories enrich every conversation
+      try:
         last_human_text = None
         last_human_idx = None
         for i in range(len(trimmed) - 1, -1, -1):
@@ -263,7 +313,7 @@ def _pre_model_trim(state: dict) -> dict:
                         )
                     )
                     trimmed.insert(last_human_idx, recall_msg)
-    except Exception as exc:
+      except Exception as exc:
         logger.debug("Auto-recall failed (non-fatal): %s", exc)
 
     return {"llm_input_messages": trimmed}
@@ -449,7 +499,7 @@ def _do_summarize(agent, config: dict, model_override: str | None = None) -> Non
         conversation_text = "\n".join(parts)
 
         # Call the LLM to produce a summary — use override model if set
-        if model_override and model_override != get_current_model() and is_model_local(model_override):
+        if model_override and model_override != get_current_model() and (is_model_local(model_override) or is_cloud_model(model_override)):
             llm = get_llm_for(model_override)
         else:
             llm = get_llm()
@@ -578,14 +628,17 @@ def clear_agent_cache():
     _TOOL_DISPLAY_NAMES.clear()
 
 
-def get_token_usage(config: dict | None = None) -> tuple[int, int]:
+def get_token_usage(config: dict | None = None, model_override: str | None = None) -> tuple[int, int]:
     """Return ``(used_tokens, max_tokens)`` for the current thread.
 
     Runs the same ``trim_messages`` logic as ``_pre_model_trim`` so the
     counter reflects what the LLM *actually* sees, not the full history.
     Returns ``(0, max_tokens)`` when there is no active thread.
+
+    If *model_override* is given, uses that model's context cap instead
+    of the global default.
     """
-    max_tokens = get_context_size()
+    max_tokens = get_context_size(model_override)
     if config is None:
         return 0, max_tokens
     try:
@@ -643,11 +696,11 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
 
     # Resolve the model to use
     if model_override and model_override != get_current_model():
-        if is_model_local(model_override):
+        if is_model_local(model_override) or is_cloud_model(model_override):
             llm = get_llm_for(model_override)
             model_label = model_override
         else:
-            logger.warning("Model override '%s' not available locally — falling back to default '%s'",
+            logger.warning("Model override '%s' not available — falling back to default '%s'",
                            model_override, get_current_model())
             llm = get_llm()
             model_label = get_current_model()
@@ -745,8 +798,15 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     return _agent_cache[cache_key]
 
 
-def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict) -> str:
-    """Invoke the ReAct agent and return the final answer text."""
+def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict,
+                 *, stop_event: threading.Event | None = None) -> str:
+    """Invoke the ReAct agent and return the final answer text.
+
+    If *stop_event* is provided and becomes set, the function raises
+    ``TaskStoppedError`` after the current node completes.  This gives
+    ~5-20 cancellation points per agent step (LLM call, each tool call)
+    without requiring full token-level streaming.
+    """
     _model_ov = (config.get("configurable") or {}).get("model_override")
     agent = get_agent_graph(enabled_tool_names, model_override=_model_ov)
 
@@ -757,9 +817,51 @@ def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict) -
     _model_override_var.set(_model_ov or "")
 
     # Summarize if context is above threshold
+    if stop_event and stop_event.is_set():
+        raise TaskStoppedError("Task stopped before execution")
     if _should_summarize(agent, config, user_input):
         _do_summarize(agent, config, model_override=_model_ov)
+    if stop_event and stop_event.is_set():
+        raise TaskStoppedError("Task stopped after summarization")
 
+    # Use node-level streaming so we can check stop_event between nodes
+    if stop_event is not None:
+        try:
+            for _event in agent.stream(
+                {"messages": [("human", user_input)]},
+                config=config,
+                stream_mode="updates",
+            ):
+                if stop_event.is_set():
+                    raise TaskStoppedError("Task stopped during execution")
+        except TaskStoppedError:
+            raise
+        except Exception as exc:
+            exc_str = str(exc)
+            if "tool_call" in exc_str and ("do not have a corresponding" in exc_str
+                                            or "did not have response" in exc_str
+                                            or "must be followed by tool" in exc_str):
+                logger.warning("invoke_agent: orphaned tool calls — repairing")
+                repair_orphaned_tool_calls(config=config, agent_graph=agent)
+                for _event in agent.stream(
+                    {"messages": [("human", user_input)]},
+                    config=config,
+                    stream_mode="updates",
+                ):
+                    if stop_event.is_set():
+                        raise TaskStoppedError("Task stopped during retry")
+            else:
+                raise
+
+        # Read final state from checkpoint
+        state = agent.get_state(config)
+        if state and state.values:
+            for msg in reversed(state.values.get("messages", [])):
+                if hasattr(msg, "type") and msg.type == "ai" and msg.content:
+                    return msg.content
+        return "I wasn't able to generate a response."
+
+    # Original path (no stop_event) — simple invoke
     result = agent.invoke(
         {"messages": [("human", user_input)]},
         config=config,
@@ -827,7 +929,9 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
                              stop_event=stop_event)
 
 
-def repair_orphaned_tool_calls(enabled_tool_names: list[str] | None = None, config: dict | None = None) -> None:
+def repair_orphaned_tool_calls(enabled_tool_names: list[str] | None = None,
+                               config: dict | None = None,
+                               *, agent_graph=None) -> None:
     """Patch the checkpoint so every AIMessage tool_call has a ToolMessage.
 
     Called after stop-generation to prevent
@@ -836,7 +940,7 @@ def repair_orphaned_tool_calls(enabled_tool_names: list[str] | None = None, conf
     if config is None:
         return
     try:
-        agent = get_agent_graph(enabled_tool_names)
+        agent = agent_graph or get_agent_graph(enabled_tool_names)
         state = agent.get_state(config)
         if not state or not state.values:
             return
@@ -859,13 +963,19 @@ def repair_orphaned_tool_calls(enabled_tool_names: list[str] | None = None, conf
                     ))
 
         if patches:
+            logger.warning("Repairing %d orphaned tool_call(s): %s",
+                           len(patches),
+                           [p.tool_call_id for p in patches])
             agent.update_state(config, {"messages": patches})
-        # Always add a visible stop marker so the conversation reloads correctly
-        agent.update_state(config, {"messages": [
-            AIMessage(content="\u23f9\ufe0f *[Stopped]*")
-        ]})
+            # Add a visible stop marker so the conversation reloads correctly
+            agent.update_state(config, {"messages": [
+                AIMessage(content="\u23f9\ufe0f *[Stopped]*")
+            ]})
+            logger.warning("repair_orphaned_tool_calls: checkpoint patched successfully")
+        else:
+            logger.debug("repair_orphaned_tool_calls: no orphaned tool_calls in %d messages", len(msgs))
     except Exception:
-        logger.debug("repair_orphaned_tool_calls failed", exc_info=True)
+        logger.warning("repair_orphaned_tool_calls failed", exc_info=True)
 
 
 def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: bool,
@@ -900,12 +1010,29 @@ def _stream_graph(agent, input_data, config: dict,
             stream_mode=["messages", "updates"],
         )
     except Exception as exc:
-        if "does not support tools" in str(exc) or "status code: 400" in str(exc):
+        exc_str = str(exc)
+        # Auto-repair orphaned tool calls and retry once
+        if "tool_call" in exc_str and ("do not have a corresponding" in exc_str
+                                        or "did not have response" in exc_str
+                                        or "must be followed by tool" in exc_str):
+            logger.warning("Orphaned tool calls detected — repairing checkpoint")
+            try:
+                repair_orphaned_tool_calls(config=config, agent_graph=agent)
+                stream_iter = agent.stream(
+                    input_data,
+                    config=config,
+                    stream_mode=["messages", "updates"],
+                )
+            except Exception as retry_exc:
+                yield ("error", str(retry_exc))
+                return
+        elif "does not support tools" in exc_str or "status code: 400" in exc_str:
             yield ("error", f"{get_current_model()} does not support tool calling. "
                    "Please switch to a compatible model in Settings → Models.")
+            return
         else:
-            yield ("error", str(exc))
-        return
+            yield ("error", exc_str)
+            return
 
     try:
       for event in stream_iter:
@@ -1014,11 +1141,62 @@ def _stream_graph(agent, input_data, config: dict,
                 full_answer.append(content)
                 yield ("token", content)
     except Exception as exc:
-        if "does not support tools" in str(exc) or "status code: 400" in str(exc):
+        exc_str = str(exc)
+        # Auto-repair orphaned tool calls and retry once
+        if "tool_call" in exc_str and ("do not have a corresponding" in exc_str
+                                        or "did not have response" in exc_str
+                                        or "must be followed by tool" in exc_str):
+            logger.warning("Orphaned tool calls during iteration — repairing checkpoint")
+            try:
+                repair_orphaned_tool_calls(config=config, agent_graph=agent)
+                retry_iter = agent.stream(
+                    input_data, config=config,
+                    stream_mode=["messages", "updates"],
+                )
+                for event in retry_iter:
+                    if stop_event and stop_event.is_set():
+                        break
+                    mode, data = event
+                    if mode == "updates":
+                        if not isinstance(data, dict):
+                            continue
+                        for node, ndata in data.items():
+                            if not isinstance(ndata, dict):
+                                continue
+                            for m in ndata.get("messages", []):
+                                tc_list = getattr(m, "tool_calls", [])
+                                if tc_list:
+                                    for tc in tc_list:
+                                        yield ("tool_call", _resolve_tool_display_name(tc["name"]))
+                                if m.type == "tool":
+                                    yield ("tool_done", {
+                                        "name": _resolve_tool_display_name(m.name),
+                                        "raw_name": m.name,
+                                        "content": getattr(m, "content", ""),
+                                    })
+                    elif mode == "messages":
+                        msg, meta = data
+                        if type(msg).__name__ != "AIMessageChunk":
+                            continue
+                        if meta.get("langgraph_node") != "agent":
+                            continue
+                        if getattr(msg, "tool_calls", []) or getattr(msg, "tool_call_chunks", []):
+                            continue
+                        content = msg.content
+                        if content:
+                            content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL)
+                            content = _re.sub(r"</?think>", "", content)
+                            if content:
+                                full_answer.append(content)
+                                yield ("token", content)
+            except Exception as retry_exc:
+                yield ("error", str(retry_exc))
+                return
+        elif "does not support tools" in exc_str or "status code: 400" in exc_str:
             yield ("error", f"{get_current_model()} does not support tool calling. "
                    "Please switch to a compatible model in Settings → Models.")
         else:
-            yield ("error", str(exc))
+            yield ("error", exc_str)
         return
 
     # Check if the graph paused due to an interrupt (destructive tool gate)

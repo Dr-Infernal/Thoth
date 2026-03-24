@@ -242,7 +242,13 @@ AGENT_SYSTEM_PROMPT = (
     "  Copy SOURCE_URL values verbatim — never shorten, guess, or generate\n"
     "  URLs from memory. If no tool provided a URL, do not include one.\n"
     "- If you use internal knowledge, cite as (Source: Internal Knowledge).\n"
-    "- If you don't know, say you don't know."
+    "- If you don't know, say you don't know.\n\n"
+    "CLOUD MODELS:\n"
+    "- This instance may use cloud LLMs (e.g. GPT-4o, Claude, Gemini) via\n"
+    "  OpenRouter alongside local Ollama models.\n"
+    "- When running on a cloud model, be mindful that conversation content\n"
+    "  is sent to the cloud provider. Do not change your behaviour — the\n"
+    "  user has explicitly opted in."
 )
 
 # ═════════════════════════════════════════════════════════════════════════════

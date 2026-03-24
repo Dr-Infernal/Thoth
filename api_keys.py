@@ -23,6 +23,47 @@ TELEGRAM_KEY_DEFINITIONS = {
     "Telegram User ID": "TELEGRAM_USER_ID",
 }
 
+# OpenRouter credentials – managed in the Cloud settings tab.
+OPENROUTER_KEY_DEFINITIONS = {
+    "OpenRouter API Key": "OPENROUTER_API_KEY",
+}
+
+# OpenAI direct API credentials – managed in the Cloud settings tab.
+OPENAI_KEY_DEFINITIONS = {
+    "OpenAI API Key": "OPENAI_API_KEY",
+}
+
+# ── Cloud provider configuration ────────────────────────────────────────────
+_CLOUD_CONFIG_PATH = DATA_DIR / "cloud_config.json"
+
+_DEFAULT_CLOUD_CONFIG: dict[str, object] = {
+    "starred_models": [],
+}
+
+
+def get_cloud_config() -> dict:
+    """Return cloud privacy settings (fills in defaults for missing keys)."""
+    cfg = dict(_DEFAULT_CLOUD_CONFIG)
+    if _CLOUD_CONFIG_PATH.exists():
+        try:
+            with open(_CLOUD_CONFIG_PATH, "r") as f:
+                stored = json.load(f)
+            cfg.update(stored)
+        except (json.JSONDecodeError, OSError):
+            logger.warning("Failed to load cloud config from %s", _CLOUD_CONFIG_PATH, exc_info=True)
+    return cfg
+
+
+def set_cloud_config(key: str, value: object) -> None:
+    """Update a single cloud config key and persist."""
+    cfg = get_cloud_config()
+    cfg[key] = value
+    try:
+        with open(_CLOUD_CONFIG_PATH, "w") as f:
+            json.dump(cfg, f, indent=2)
+    except OSError:
+        logger.warning("Failed to save cloud config to %s", _CLOUD_CONFIG_PATH, exc_info=True)
+
 
 def _load_keys() -> dict[str, str]:
     """Load saved keys from disk. Returns {env_var: value}."""

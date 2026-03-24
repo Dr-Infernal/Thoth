@@ -1,7 +1,8 @@
 ; =============================================================================
-; Thoth v3.6.0 – Inno Setup Script
+; Thoth v3.7.0 – Inno Setup Script
 ; Installer: bundles embedded Python + app source code.
-; Downloads Ollama and Python packages (incl. Kokoro TTS) at install time.
+; Downloads Python packages at install time.  Ollama is optional — Thoth
+; can run entirely on cloud models (OpenAI / OpenRouter) without it.
 ; =============================================================================
 ;
 ; Prerequisites (placed in installer\build\ by build_installer.ps1):
@@ -11,7 +12,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "3.6.0"
+#define MyAppVersion   "3.7.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -118,7 +119,7 @@ Name: "{group}\Uninstall {#MyAppName}";           Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}";               Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\app\thoth.ico"; Tasks: desktopicon
 
 [Run]
-; ── Install Python packages + download & install Ollama ──────────────────────
+; ── Install Python packages (Ollama downloaded only if user wants local models)
 Filename: "{app}\install_deps.bat";  Parameters: """{app}"""; \
     StatusMsg: "Setting up Thoth (downloading dependencies — this may take several minutes)..."; \
     Flags: waituntilterminated

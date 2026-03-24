@@ -285,7 +285,7 @@ def _get_or_create_thread(gmail_thread_id: str, subject: str) -> dict:
     thread_id = f"email_{gmail_thread_id}"
 
     existing = _list_threads()
-    for tid, name, _, _ in existing:
+    for tid, name, _, _, *_rest_em in existing:
         if tid == thread_id:
             _save_thread_meta(tid, name)
             return {"configurable": {"thread_id": tid}}

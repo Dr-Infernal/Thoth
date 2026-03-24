@@ -34,7 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
 VENV_DIR="$PROJECT_DIR/.venv"
 THOTH_HOME="$HOME/.thoth"
-THOTH_VERSION="3.4.0"
+THOTH_VERSION="3.7.0"
 OLLAMA_PORT=11434
 
 # ── Is this a first-time install? ───────────────────────────────────────────
@@ -44,7 +44,7 @@ if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/activate" ]; then
     # =====================================================================
     source "$VENV_DIR/bin/activate"
 
-    # Start Ollama if not running
+    # Start Ollama if installed and not running (optional for cloud-only setups)
     ollama_running() { (echo >/dev/tcp/127.0.0.1/$OLLAMA_PORT) 2>/dev/null; }
 
     if ! ollama_running; then
@@ -286,9 +286,9 @@ cat > "$CONTENTS/Info.plist" << 'PLIST'
     <key>CFBundleIdentifier</key>
     <string>com.thoth.assistant</string>
     <key>CFBundleVersion</key>
-    <string>3.4.0</string>
+    <string>3.7.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>3.4.0</string>
+    <string>3.7.0</string>
     <key>CFBundleExecutable</key>
     <string>thoth</string>
     <key>CFBundleIconFile</key>
@@ -330,7 +330,7 @@ fi
 # Activate venv
 source "$VENV_DIR/bin/activate"
 
-# Start Ollama if not running
+# Start Ollama if installed and not running (optional for cloud-only setups)
 OLLAMA_PORT=11434
 ollama_running() { (echo >/dev/tcp/127.0.0.1/$OLLAMA_PORT) 2>/dev/null; }
 
@@ -383,11 +383,11 @@ echo -e "${GREEN} ✓  Thoth installation complete!${NC}"
 echo -e "${BOLD}============================================${NC}"
 echo ""
 echo "  Launching Thoth for the first time..."
-echo "  (The default AI model will download on first chat — ~4 GB)"
+echo "  (If using local models, the default AI model will download on first chat — ~4 GB)"
 echo ""
 sleep 2
 
-# Start Ollama
+# Start Ollama if installed (optional for cloud-only setups)
 ollama_running() { (echo >/dev/tcp/127.0.0.1/$OLLAMA_PORT) 2>/dev/null; }
 if ! ollama_running; then
     OLLAMA_BIN=""

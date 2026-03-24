@@ -24,7 +24,11 @@ from typing import Optional
 
 import cv2
 import mss
-import ollama
+
+try:
+    import ollama as _ollama_mod
+except ImportError:
+    _ollama_mod = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -249,19 +253,41 @@ class VisionService:
 
         with self._lock:
             try:
-                response = ollama.chat(
-                    model=self._model,
-                    messages=[{
-                        "role": "user",
-                        "content": question,
-                        "images": [b64],
-                    }],
-                    keep_alive="5m",   # keep loaded for quick follow-ups
-                )
-                return response["message"]["content"]
+                from models import is_cloud_model
+                if is_cloud_model(self._model):
+                    return self._analyze_cloud(b64, question)
+                return self._analyze_local(b64, question)
             except Exception as exc:
                 logger.error("Vision model error: %s", exc)
                 return f"Vision analysis failed: {exc}"
+
+    def _analyze_cloud(self, b64: str, question: str) -> str:
+        """Send image to a cloud vision model via ChatOpenAI."""
+        from models import get_llm_for
+        from langchain_core.messages import HumanMessage
+
+        msg = HumanMessage(content=[
+            {"type": "text", "text": question},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        ])
+        llm = get_llm_for(self._model)
+        response = llm.invoke([msg])
+        return response.content
+
+    def _analyze_local(self, b64: str, question: str) -> str:
+        """Send image to a local Ollama vision model."""
+        if _ollama_mod is None:
+            return "Ollama is not installed. Install it or switch to a cloud vision model."
+        response = _ollama_mod.chat(
+            model=self._model,
+            messages=[{
+                "role": "user",
+                "content": question,
+                "images": [b64],
+            }],
+            keep_alive="5m",
+        )
+        return response["message"]["content"]
 
     def capture_and_analyze(self, question: str, source: str = "camera") -> str:
         """Capture from the given source and analyze in one call.

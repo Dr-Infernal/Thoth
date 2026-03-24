@@ -27,3 +27,6 @@ _*.py
 # Old Streamlit app (replaced by NiceGUI in v3.0.0)
 app.py
 .streamlit/
+
+# Test files
+CLOUD_MODE_TEST_PLAN.md

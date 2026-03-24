@@ -1,13 +1,13 @@
 @echo off
 :: ============================================================================
-:: Thoth v3.6.0 – Post-install dependency setup
+:: Thoth v3.7.0 – Post-install dependency setup
 :: Called by Inno Setup after file extraction.
 ::
 :: This script:
 ::   1. Patches embedded Python to enable pip/site-packages
 ::   2. Installs pip via get-pip.py
 ::   3. Installs setuptools + wheel
-::   4. Downloads and installs Ollama (silent)
+::   4. (Optional) Downloads and installs Ollama
 ::   5. Installs Python packages from requirements.txt
 :: ============================================================================
 title Thoth - Setting up dependencies...
@@ -21,16 +21,15 @@ set "LOG=%INSTALL_DIR%\install_log.txt"
 set "PYTHONNOUSERSITE=1"
 
 echo ==========================================
-echo  Thoth v3.6.0 - Installing dependencies
+echo  Thoth v3.7.0 - Installing dependencies
 echo  This may take 5-25 minutes depending
-echo  on your system and internet connection
-echo  and whether Ollama needs to be installed.
+echo  on your system and internet connection.
 echo  Please do not close this window.
 echo ==========================================
 echo.
 
 echo ========================================= >> "%LOG%" 2>&1
-echo  Thoth v3.6.0 - Install log              >> "%LOG%" 2>&1
+echo  Thoth v3.7.0 - Install log              >> "%LOG%" 2>&1
 echo  Install dir: %INSTALL_DIR%               >> "%LOG%" 2>&1
 echo  Date: %DATE% %TIME%                      >> "%LOG%" 2>&1
 echo ========================================= >> "%LOG%" 2>&1
@@ -90,8 +89,11 @@ if %ERRORLEVEL% NEQ 0 (
     echo WARNING: Build tools failed, continuing anyway...
 )
 
-:: ── 4. Download and install Ollama ──────────────────────────────────────────
-echo [4/5] Downloading and installing Ollama...
+:: ── 4. Optionally download and install Ollama ──────────────────────────────
+:: Ollama is only needed for local language models.  Thoth can run entirely
+:: with cloud models (OpenAI / OpenRouter) so Ollama is optional.
+echo.
+echo [4/5] Ollama (local AI models)
 
 :: Check if Ollama is already installed
 where ollama >NUL 2>&1
@@ -100,6 +102,20 @@ if %ERRORLEVEL% EQU 0 (
     echo Ollama already installed, skipping download. >> "%LOG%" 2>&1
     goto :skip_ollama
 )
+
+echo.
+echo  Ollama lets you run AI models locally on your PC (free, private).
+echo  If you only want to use cloud models (OpenAI / OpenRouter),
+echo  you can skip this step.
+echo.
+set /p INSTALL_OLLAMA="  Install Ollama now? [Y/n] "
+if /I "%INSTALL_OLLAMA%"=="n" (
+    echo       Skipping Ollama installation.
+    echo User chose to skip Ollama installation. >> "%LOG%" 2>&1
+    goto :skip_ollama
+)
+
+echo       Downloading Ollama...
 
 set "OLLAMA_EXE=%TEMP%\OllamaSetup.exe"
 echo Downloading Ollama installer... >> "%LOG%" 2>&1
