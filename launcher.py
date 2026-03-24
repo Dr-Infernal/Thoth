@@ -319,8 +319,8 @@ def _show_splash(port: int = _PORT, timeout: float = 60.0) -> subprocess.Popen |
         if proc.poll() is None:
             return proc  # tkinter splash is running
         log_fh.close()
-        err = splash_log.read_text(encoding="utf-8", errors="replace").strip()
-        logger.info("Tkinter splash unavailable (%s), falling back to console", err or "exited")
+        # Tkinter often unavailable on macOS — silently fall back
+        logger.debug("Tkinter splash exited, using console fallback")
 
         # --- Attempt 2: console fallback ---
         flags = 0

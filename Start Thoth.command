@@ -383,7 +383,7 @@ echo -e "${GREEN} ✓  Thoth installation complete!${NC}"
 echo -e "${BOLD}============================================${NC}"
 echo ""
 echo "  Launching Thoth for the first time..."
-echo "  (If using local models, the default AI model will download on first chat — ~4 GB)"
+echo "  The setup wizard will help you choose between local and cloud models."
 echo ""
 sleep 2
 
