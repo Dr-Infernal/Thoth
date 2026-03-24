@@ -13,6 +13,8 @@
 
 Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 23 integrated tools (61 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory with a personal knowledge graph, scheduled tasks, habit tracking, and more — plus Telegram and Email messaging channels. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT-4o, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
 
+> **Local models are already amazing.** You'll be surprised what a 14B+ local model can do. If you start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
+
 > Governments are investing billions to keep AI infrastructure within their borders. Thoth applies the same principle to the individual — your compute, your data, your choice of model, **accountable to no one but you.**
 
 > **🖥️ One-click install on Windows & macOS** — download, run, done. No terminal, no Docker, no config files. [Get it here.](https://github.com/siddsachar/Thoth/releases)
@@ -108,6 +110,24 @@ Thoth doesn't just store isolated facts — it builds a **personal knowledge gra
 - **Local SQLite + NetworkX + FAISS storage** — entities and relations stored in `~/.thoth/memory.db`, mirrored in a NetworkX graph for fast traversal, with FAISS vector index in `~/.thoth/memory_vectors/`; never sent to the cloud
 - **Settings UI** — browse, search, and bulk-delete memories from the Memory tab in Settings; graph statistics (entity count, relations, connected components) displayed in the Knowledge Graph settings section
 
+### 🤖 Brain Model & Cloud Models
+
+The brain model is Thoth's default LLM — the model used for conversations, memory extraction, and any thread or task without a specific override. It can be a local Ollama model or an opt-in cloud model.
+
+Thoth is built and tested for local models first. Every feature supports local models, and that will always be the priority. Local models are already amazing — tool calling, multi-step reasoning, memory extraction, and long conversations all work well with a 14B+ model. As local models improve and hardware requirements drop, the goal is to reduce any dependency on cloud models over time.
+
+Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT-4o, o3, Claude Opus) for specific tasks, or want to try different models without downloading gigabytes. Thoth supports opt-in cloud models through **OpenAI** (direct API) and **OpenRouter** (100+ models from all major providers) for these cases — configured entirely from the Settings panel, no config files or terminal commands.
+
+- **Dynamic model switching** — change the brain model from Settings; choose from 39 curated local models or any connected cloud model
+- **Per-thread & per-task model override** — pick a different model for each conversation or each scheduled task; local and cloud models can be mixed freely across threads
+- **Starred models** — star your favorite cloud models in Settings → Cloud; starred models appear in the chat header model picker alongside local models for quick access
+- **Cost-efficient context management** — smart context trimming compresses older conversation turns, reducing token usage and API costs for cloud models; oversized tool outputs are proportionally shrunk to fit within context limits
+- **39 curated local models** — Qwen, Llama, Mistral, Nemotron, and more — only models that support tool calling are included
+- **Tool-support validation** — downloaded local models not in the curated list are flagged with a ⚠️ warning; selecting one triggers a live tool-call check and auto-reverts if the model can't use tools
+- **Download buttons** — local models not yet downloaded show a Download button with live progress
+- **Configurable context window** — 4K to 256K tokens via selector; if you choose a value that exceeds the model's native maximum, trimming and the token counter automatically use the model's actual limit
+- **Local & cloud indicators** — local models show ✅ (downloaded) or ⬇️ (needs download); cloud models show ☁️
+
 ### 🎤 Voice Input & 🔊 Text-to-Speech
 - **Toggle-based voice** — simple manual toggle to start/stop listening, no wake word needed
 - **4-state pipeline** — stopped → listening → transcribing → muted, with clean state transitions
@@ -201,24 +221,6 @@ Thoth doesn't just store isolated facts — it builds a **personal knowledge gra
 - **Syntax-highlighted code blocks** — fenced code blocks render with language-aware highlighting and a built-in copy button
 - **Onboarding guide** — first-run welcome message with tool overview and clickable example prompts; `👋` button in sidebar to re-show anytime
 - **Startup health check** — verifies model availability on launch; skips Ollama check when using a cloud brain model
-
-### 🤖 Brain Model & Cloud Models
-
-The brain model is Thoth's default LLM — the model used for conversations, memory extraction, and any thread or task without a specific override. It can be a local Ollama model or an opt-in cloud model.
-
-Thoth is built and tested for local models first. Every feature supports local models, and that will always be the priority. You'll be surprised what a 14B+ local model can do — tool calling, multi-step reasoning, memory extraction, and long conversations all work well. As local models improve and hardware requirements drop, the goal is to reduce any dependency on cloud models over time. Start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
-
-Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT-4o, o3, Claude Opus) for specific tasks, or want to try different models without downloading gigabytes. Thoth supports opt-in cloud models through **OpenAI** (direct API) and **OpenRouter** (100+ models from all major providers) for these cases — configured entirely from the Settings panel, no config files or terminal commands.
-
-- **Dynamic model switching** — change the brain model from Settings; choose from 39 curated local models or any connected cloud model
-- **Per-thread & per-task model override** — pick a different model for each conversation or each scheduled task; local and cloud models can be mixed freely across threads
-- **Starred models** — star your favorite cloud models in Settings → Cloud; starred models appear in the chat header model picker alongside local models for quick access
-- **Cost-efficient context management** — smart context trimming compresses older conversation turns, reducing token usage and API costs for cloud models; oversized tool outputs are proportionally shrunk to fit within context limits
-- **39 curated local models** — Qwen, Llama, Mistral, Nemotron, and more — only models that support tool calling are included
-- **Tool-support validation** — downloaded local models not in the curated list are flagged with a ⚠️ warning; selecting one triggers a live tool-call check and auto-reverts if the model can't use tools
-- **Download buttons** — local models not yet downloaded show a Download button with live progress
-- **Configurable context window** — 4K to 256K tokens via selector; if you choose a value that exceeds the model's native maximum, trimming and the token counter automatically use the model's actual limit
-- **Local & cloud indicators** — local models show ✅ (downloaded) or ⬇️ (needs download); cloud models show ☁️
 
 ### 🔔 Notifications
 - **Desktop notifications** — task completions and timer expirations trigger a desktop notification with timestamp
