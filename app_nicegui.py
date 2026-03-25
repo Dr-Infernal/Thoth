@@ -3936,7 +3936,8 @@ async def index():
 
             async def _delete_all_tracker_data():
                 confirm = await ui.run_javascript(
-                    "confirm('Delete ALL tracker data? This cannot be undone.')"
+                    "confirm('Delete ALL tracker data? This cannot be undone.')",
+                    timeout=30,
                 )
                 if confirm:
                     try:
