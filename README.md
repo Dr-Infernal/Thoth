@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/tests-passing-brightgreen?style=flat" alt="Tests">
 </p>
 
-Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 23 integrated tools (61 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory with a personal knowledge graph, scheduled tasks, habit tracking, and more — plus Telegram and Email messaging channels. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT-4o, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
+Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 23 integrated tools (61 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory with a personal knowledge graph, scheduled tasks, habit tracking, and more — plus Telegram and Email messaging channels. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
 
 > **Local models are already amazing.** You'll be surprised what a 14B+ local model can do. If you start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
 
@@ -19,53 +19,12 @@ Thoth is a **local-first AI assistant built for personal AI sovereignty** — yo
 
 > **🖥️ One-click install on Windows & macOS** — download, run, done. No terminal, no Docker, no config files. [Get it here.](https://github.com/siddsachar/Thoth/releases)
 
-https://github.com/user-attachments/assets/7967e18d-a417-4ca5-b2d7-0fca45975ed7
-
-### Why not just use ChatGPT?
-
-| | ChatGPT / Claude / Gemini | Thoth |
-|---|---|---|
-| **Your data** | Stored on provider servers, subject to their privacy policies | Stays on your machine — always. With opt-in cloud models, only the current conversation is sent to the LLM provider; memories, files, and history never leave |
-| **Conversations** | Owned by the provider — can be deleted, leaked, or used for training | Stored locally in SQLite, fully yours, exportable anytime |
-| **Cost** | $20+/month per subscription | Free with local models. Cloud models use pay-per-token APIs — typically pennies per conversation with smart context trimming |
-| **Memory** | Limited, opaque, provider-controlled | Personal knowledge graph — entities, relationships, visual explorer, fully yours |
-| **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, shell, browser, webcam — 23 tools, 61 sub-operations |
-| **Customisation** | Pick a model, write a system prompt | Swap models per conversation or per task, build scheduled tasks with cron/daily/weekly/interval triggers, mix local and cloud models freely |
-| **Voice** | Cloud-processed speech | Local Whisper STT + Kokoro TTS — never leaves your mic |
-| **Availability** | Requires internet, subject to outages & rate limits | Local models work offline; cloud models available when connected |
-
-> **Bottom line:** Cloud AI assistants rent you access to someone else’s system. Thoth gives you **personal AI sovereignty** — run local models for full privacy, add cloud when you need it, and keep your data on your machine either way.
-
-### Why not just use another open-source assistant?
-
-Most open-source AI assistants are **developer tools disguised as products** — CLI-first, config-file-driven, Linux-only, and held together with Docker, YAML, and `.env` files. Getting them running means cloning repos, editing configs, wiring up databases, and debugging dependency conflicts before you can ask a single question.
-
-**Thoth is different.** One-click installer, native desktop GUI, works out of the box on Windows and macOS, zero accounts required. Install it, launch it, start talking. No terminal expertise needed, no Docker, no YAML — just a private AI assistant that works.
-
-### How is Thoth different from OpenClaw?
-
-[OpenClaw](https://github.com/openclaw/openclaw) is a solid open-source project, but it targets a different audience and solves a different problem. OpenClaw is a **developer-oriented messaging infrastructure platform**: it routes LLM calls to 25+ chat surfaces like WhatsApp, Slack, and Discord. It supports both cloud and local models, but getting it running requires Node.js, Docker, YAML config files, and considerable developer expertise.
-
-Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI, everything configurable from the settings panel — no terminal, no config files, no Docker. Whether you use local or cloud models, all your data stays on your machine — only the LLM inference can optionally go to the cloud.
-
-> **Pick Thoth** if you want a private, full-featured AI assistant with a polished desktop experience — local-first with optional cloud models, a personal knowledge graph, health tracking, and zero setup friction.
-> **Pick OpenClaw** if you're a developer who wants to build a cloud-powered assistant that connects to every chat platform you already use.
-
-| | OpenClaw | Thoth |
-|---|---|---|
-| **Target audience** | Developers comfortable with Node.js, Docker, and YAML | Everyone — one-click installer, native GUI, zero config files |
-| **LLM execution** | Cloud or local (requires manual Docker/config setup) | Local via Ollama (default) or opt-in cloud (OpenAI, OpenRouter) — switchable from the GUI |
-| **Data privacy** | Depends on your configuration | All data stays local — conversations, memories, files, history. Only LLM calls touch the cloud when using cloud models |
-| **Setup** | Node.js + Docker + YAML + channel config + API keys | One-click installer (Windows/macOS); cloud setup needs just an API key |
-| **Ongoing cost** | Free software, but typically requires paid API keys | Free with local models; cloud models billed per-token (pennies per conversation with smart trimming) |
-| **Offline capability** | Requires configuration for local LLMs | Local models work fully offline out of the box |
-| **Long-term memory** | Session compaction + pruning | Personal knowledge graph — entities, relations, visual explorer, semantic search, auto-extraction |
-| **Health & Habit Tracking** | ❌ None | Conversational tracker for meds, symptoms, exercise, periods — streaks, adherence, and trend analysis |
-| **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Kokoro TTS — fully offline, 10 voices |
-| **Tools** | Browser automation, Canvas, Skills platform | 23 tools / 61 sub-ops — Gmail, Calendar, filesystem, shell, browser, vision, habit tracker, charts, Wolfram, and more |
-| **Desktop experience** | macOS menu bar app, WebChat | Native desktop window with system tray, splash screen, dark mode UI |
-| **Tasks** | Cron jobs + webhooks | Named tasks with 7 schedule types, stop/cancel, channel delivery, per-task model override, and template variables |
-| **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows & macOS |
+<p align="center">
+  <a href="https://youtu.be/xYJC2IVKH7Y"><img src="https://img.youtube.com/vi/xYJC2IVKH7Y/mqdefault.jpg" width="240" alt="Demo 1 — Power User"></a>&nbsp;
+  <a href="https://youtu.be/zEma6vXKWH4"><img src="https://img.youtube.com/vi/zEma6vXKWH4/mqdefault.jpg" width="240" alt="Demo 2 — Small Business"></a>&nbsp;
+  <a href="https://youtu.be/3vg1po9IQVg"><img src="https://img.youtube.com/vi/3vg1po9IQVg/mqdefault.jpg" width="240" alt="Demo 3 — Researcher"></a>&nbsp;
+  <a href="https://youtu.be/dMoSay7uyoc"><img src="https://img.youtube.com/vi/dMoSay7uyoc/mqdefault.jpg" width="240" alt="Demo 4 — Developer"></a>
+</p>
 
 ### Why the name "Thoth"?
 
@@ -116,7 +75,7 @@ The brain model is Thoth's default LLM — the model used for conversations, mem
 
 Thoth is built and tested for local models first. Every feature supports local models, and that will always be the priority. Local models are already amazing — tool calling, multi-step reasoning, memory extraction, and long conversations all work well with a 14B+ model. As local models improve and hardware requirements drop, the goal is to reduce any dependency on cloud models over time.
 
-Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT-4o, o3, Claude Opus) for specific tasks, or want to try different models without downloading gigabytes. Thoth supports opt-in cloud models through **OpenAI** (direct API) and **OpenRouter** (100+ models from all major providers) for these cases — configured entirely from the Settings panel, no config files or terminal commands.
+Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT, Claude, Gemini) for specific tasks, or want to try different models without downloading gigabytes. Thoth supports opt-in cloud models through **OpenAI** (direct API) and **OpenRouter** (100+ models from all major providers) for these cases — configured entirely from the Settings panel, no config files or terminal commands.
 
 - **Dynamic model switching** — change the brain model from Settings; choose from 39 curated local models or any connected cloud model
 - **Per-thread & per-task model override** — pick a different model for each conversation or each scheduled task; local and cloud models can be mixed freely across threads
@@ -167,7 +126,7 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 - **Configurable vision model** — choose from popular vision models (gemma3, llava, etc.)
 - **Camera selection** — pick which camera to use if you have multiple
 - **Inline image display** — captured images are shown inline in the chat
-- **Cloud vision models** — cloud models with vision capability (GPT-4o, Claude 3.5 Sonnet, etc.) are auto-detected and work seamlessly alongside local vision models
+- **Cloud vision models** — cloud models with vision capability (GPT, Claude, etc.) are auto-detected and work seamlessly alongside local vision models
 
 ### ⚡ Tasks & Scheduling
 - **Unified task engine** — create named, multi-step tasks that run sequentially in a fresh thread, powered by APScheduler
@@ -318,6 +277,53 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
   │ (opt-in) │ │NetworkX)│ │        │ │        │ │        │
   └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘
 ```
+
+### Why not just use ChatGPT?
+
+| | ChatGPT / Claude / Gemini | Thoth |
+|---|---|---|
+| **Your data** | Stored on provider servers, subject to their privacy policies | Stays on your machine — always. With opt-in cloud models, only the current conversation is sent to the LLM provider; memories, files, and history never leave |
+| **Conversations** | Owned by the provider — can be deleted, leaked, or used for training | Stored locally in SQLite, fully yours, exportable anytime |
+| **Cost** | $20+/month per subscription | Free with local models. Cloud models use pay-per-token APIs — typically pennies per conversation with smart context trimming |
+| **Memory** | Limited, opaque, provider-controlled | Personal knowledge graph — entities, relationships, visual explorer, fully yours |
+| **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, shell, browser, webcam — 23 tools, 61 sub-operations |
+| **Customisation** | Pick a model, write a system prompt | Swap models per conversation or per task, build scheduled tasks with cron/daily/weekly/interval triggers, mix local and cloud models freely |
+| **Voice** | Cloud-processed speech | Local Whisper STT + Kokoro TTS — never leaves your mic |
+| **Availability** | Requires internet, subject to outages & rate limits | Local models work offline; cloud models available when connected |
+
+> **Bottom line:** Cloud AI assistants rent you access to someone else’s system. Thoth gives you **personal AI sovereignty** — run local models for full privacy, add cloud when you need it, and keep your data on your machine either way.
+
+### Why not just use another open-source assistant?
+
+Most open-source AI assistants are **developer tools disguised as products** — CLI-first, config-file-driven, Linux-only, and held together with Docker, YAML, and `.env` files. Getting them running means cloning repos, editing configs, wiring up databases, and debugging dependency conflicts before you can ask a single question.
+
+**Thoth is different.** One-click installer, native desktop GUI, works out of the box on Windows and macOS, zero accounts required. Install it, launch it, start talking. No terminal expertise needed, no Docker, no YAML — just a private AI assistant that works.
+
+### How is Thoth different from OpenClaw?
+
+[OpenClaw](https://github.com/openclaw/openclaw) is a solid open-source project, but it targets a different audience and solves a different problem. OpenClaw is a **developer-oriented messaging infrastructure platform**: it routes LLM calls to 25+ chat surfaces like WhatsApp, Slack, and Discord. It supports both cloud and local models, but getting it running requires Node.js, Docker, YAML config files, and considerable developer expertise.
+
+Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI, everything configurable from the settings panel — no terminal, no config files, no Docker. Whether you use local or cloud models, all your data stays on your machine — only the LLM inference can optionally go to the cloud.
+
+> **Pick Thoth** if you want a private, full-featured AI assistant with a polished desktop experience — local-first with optional cloud models, a personal knowledge graph, health tracking, and zero setup friction.
+> **Pick OpenClaw** if you're a developer who wants to build a cloud-powered assistant that connects to every chat platform you already use.
+
+| | OpenClaw | Thoth |
+|---|---|---|
+| **Target audience** | Developers comfortable with Node.js, Docker, and YAML | Everyone — one-click installer, native GUI, zero config files |
+| **LLM execution** | Cloud or local (requires manual Docker/config setup) | Local via Ollama (default) or opt-in cloud (OpenAI, OpenRouter) — switchable from the GUI |
+| **Data privacy** | Depends on your configuration | All data stays local — conversations, memories, files, history. Only LLM calls touch the cloud when using cloud models |
+| **Setup** | Node.js + Docker + YAML + channel config + API keys | One-click installer (Windows/macOS); cloud setup needs just an API key |
+| **Ongoing cost** | Free software, but typically requires paid API keys | Free with local models; cloud models billed per-token (pennies per conversation with smart trimming) |
+| **Offline capability** | Requires configuration for local LLMs | Local models work fully offline out of the box |
+| **Long-term memory** | Session compaction + pruning | Personal knowledge graph — entities, relations, visual explorer, semantic search, auto-extraction |
+| **Health & Habit Tracking** | ❌ None | Conversational tracker for meds, symptoms, exercise, periods — streaks, adherence, and trend analysis |
+| **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Kokoro TTS — fully offline, 10 voices |
+| **Tools** | Browser automation, Canvas, Skills platform | 23 tools / 61 sub-ops — Gmail, Calendar, filesystem, shell, browser, vision, habit tracker, charts, Wolfram, and more |
+| **Desktop experience** | macOS menu bar app, WebChat | Native desktop window with system tray, splash screen, dark mode UI |
+| **Tasks** | Cron jobs + webhooks | Named tasks with 7 schedule types, stop/cancel, channel delivery, per-task model override, and template variables |
+| **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows & macOS |
+
 
 ### Core Modules
 
@@ -493,7 +499,7 @@ Most tools work without any API keys. For cloud models and enhanced functionalit
 
 | Service | Key | Purpose | How to Get |
 |---------|-----|---------|------------|
-| **OpenAI** | `OPENAI_API_KEY` | GPT-4o, o3, GPT-4.1, and other OpenAI models | [platform.openai.com](https://platform.openai.com/) |
+| **OpenAI** | `OPENAI_API_KEY` | GPT and other OpenAI models | [platform.openai.com](https://platform.openai.com/) |
 | **OpenRouter** | `OPENROUTER_API_KEY` | 100+ models from all major providers (Claude, Gemini, Llama, etc.) | [openrouter.ai](https://openrouter.ai/) |
 
 Configure cloud keys in **⚙️ Settings → ☁️ Cloud** tab. Keys are stored locally in `~/.thoth/cloud_config.json` — never sent to Thoth’s servers (there are none).
@@ -535,7 +541,7 @@ For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credent
 
 1. **Launch Thoth** → on the setup wizard, choose **☁️ Cloud**
 2. **Enter your API key** (OpenAI or OpenRouter) → Thoth validates and fetches available models
-3. **Pick a default model** (e.g. GPT-4o) and start chatting — no downloads, no GPU needed
+3. **Pick a default model** (e.g. GPT) and start chatting — no downloads, no GPU needed
 4. Switch models per conversation anytime from the chat header dropdown
 
 ---
