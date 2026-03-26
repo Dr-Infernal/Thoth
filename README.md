@@ -19,12 +19,16 @@ Thoth is a **local-first AI assistant built for personal AI sovereignty** — yo
 
 > **🖥️ One-click install on Windows & macOS** — download, run, done. No terminal, no Docker, no config files. [Get it here.](https://github.com/siddsachar/Thoth/releases)
 
-<p align="center">
-  <a href="https://youtu.be/xYJC2IVKH7Y"><img src="https://img.youtube.com/vi/xYJC2IVKH7Y/mqdefault.jpg" width="240" alt="Demo 1 — Power User"></a>&nbsp;
-  <a href="https://youtu.be/zEma6vXKWH4"><img src="https://img.youtube.com/vi/zEma6vXKWH4/mqdefault.jpg" width="240" alt="Demo 2 — Small Business"></a>&nbsp;
-  <a href="https://youtu.be/3vg1po9IQVg"><img src="https://img.youtube.com/vi/3vg1po9IQVg/mqdefault.jpg" width="240" alt="Demo 3 — Researcher"></a>&nbsp;
-  <a href="https://youtu.be/dMoSay7uyoc"><img src="https://img.youtube.com/vi/dMoSay7uyoc/mqdefault.jpg" width="240" alt="Demo 4 — Developer"></a>
-</p>
+<table align="center">
+  <tr>
+    <td align="center"><a href="https://youtu.be/xYJC2IVKH7Y"><img src="https://img.youtube.com/vi/xYJC2IVKH7Y/mqdefault.jpg" width="360" alt="Demo 1 — Power User"><br><b>Demo 1 — Power User</b></a></td>
+    <td align="center"><a href="https://youtu.be/zEma6vXKWH4"><img src="https://img.youtube.com/vi/zEma6vXKWH4/mqdefault.jpg" width="360" alt="Demo 2 — Small Business"><br><b>Demo 2 — Small Business</b></a></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="https://youtu.be/3vg1po9IQVg"><img src="https://img.youtube.com/vi/3vg1po9IQVg/mqdefault.jpg" width="360" alt="Demo 3 — Researcher"><br><b>Demo 3 — Researcher</b></a></td>
+    <td align="center"><a href="https://youtu.be/dMoSay7uyoc"><img src="https://img.youtube.com/vi/dMoSay7uyoc/mqdefault.jpg" width="360" alt="Demo 4 — Developer"><br><b>Demo 4 — Developer</b></a></td>
+  </tr>
+</table>
 
 ### Why the name "Thoth"?
 
