@@ -146,35 +146,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          submit_notary_with_retry() {
-            local artifact_path="$1"
-            local output_json="$2"
-            local label="$3"
-            local attempts=0
-            local max_attempts=3
-
-            while true; do
-              attempts=$((attempts + 1))
-              echo "Submitting ${label} for notarization (attempt ${attempts}/${max_attempts}): ${artifact_path}"
-
-              if xcrun notarytool submit "$artifact_path" \
-                   --apple-id "$APPLE_ID" \
-                   --password "$APPLE_APP_PASSWORD" \
-                   --team-id "$APPLE_TEAM_ID" \
-                   --wait --timeout 90m --output-format json > "$output_json"; then
-                return 0
-              fi
-
-              if [ "$attempts" -ge "$max_attempts" ]; then
-                echo "::error::${label} notarization failed after ${max_attempts} attempts"
-                return 1
-              fi
-
-              echo "::warning::${label} notarization attempt ${attempts} failed (possible transient Apple connectivity issue). Retrying in 30s..."
-              sleep 30
-            done
-          }
-
           fail() {
             echo "::error::$1"
             exit 1
@@ -336,6 +307,35 @@ jobs:
           CODESIGN_IDENTITY: ${{ env.CODESIGN_IDENTITY }}
         run: |
           set -euo pipefail
+
+          submit_notary_with_retry() {
+            local artifact_path="$1"
+            local output_json="$2"
+            local label="$3"
+            local attempts=0
+            local max_attempts=3
+
+            while true; do
+              attempts=$((attempts + 1))
+              echo "Submitting ${label} for notarization (attempt ${attempts}/${max_attempts}): ${artifact_path}"
+
+              if xcrun notarytool submit "$artifact_path" \
+                   --apple-id "$APPLE_ID" \
+                   --password "$APPLE_APP_PASSWORD" \
+                   --team-id "$APPLE_TEAM_ID" \
+                   --wait --timeout 90m --output-format json > "$output_json"; then
+                return 0
+              fi
+
+              if [ "$attempts" -ge "$max_attempts" ]; then
+                echo "::error::${label} notarization failed after ${max_attempts} attempts"
+                return 1
+              fi
+
+              echo "::warning::${label} notarization attempt ${attempts} failed (possible transient Apple connectivity issue). Retrying in 30s..."
+              sleep 30
+            done
+          }
 
           ARCH="$(uname -m)"
           APP_PATH="installer/build/mac/Thoth.app"
