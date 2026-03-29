@@ -298,8 +298,8 @@ jobs:
           chmod +x installer/build_mac_app.sh
           ./installer/build_mac_app.sh "${{ env.DEFAULT_VERSION }}"
 
-      # ── Notarize with Apple ────────────────────────────────────────────────
-      - name: Notarize .pkg
+      # ── Build + notarize DMG with Apple ───────────────────────────────────
+      - name: Notarize .dmg
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
@@ -377,48 +377,13 @@ jobs:
 
           ARCH="$(uname -m)"
           APP_PATH="installer/build/mac/Thoth.app"
-          PKG_PATH="dist/Thoth-${{ env.DEFAULT_VERSION }}-macOS-${ARCH}.pkg"
           DMG_PATH="dist/Thoth-${{ env.DEFAULT_VERSION }}-macOS-${ARCH}.dmg"
-          PKG_NOTARY_JSON="$RUNNER_TEMP/notary_pkg_result.json"
           DMG_NOTARY_JSON="$RUNNER_TEMP/notary_dmg_result.json"
 
           if [ ! -d "$APP_PATH" ]; then
             echo "::error::Expected app bundle not found at $APP_PATH"
             exit 1
           fi
-
-          echo "PKG size (bytes):"
-          stat -f%z "$PKG_PATH"
-          echo "PKG size (human):"
-          du -h "$PKG_PATH"
-
-          submit_notary_with_retry "$PKG_PATH" "$PKG_NOTARY_JSON" "PKG"
-
-          PKG_SUBMISSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$PKG_NOTARY_JSON")"
-          echo "PKG notarization submission id: $PKG_SUBMISSION_ID"
-
-          set +e
-          wait_notary_status "$PKG_SUBMISSION_ID" "PKG"
-          PKG_WAIT_RC=$?
-          set -e
-
-          if [ "$PKG_WAIT_RC" -eq 2 ]; then
-            echo "::error::PKG notarization invalid. Fetching Apple notary log..."
-            xcrun notarytool log "$PKG_SUBMISSION_ID" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_APP_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" || true
-            exit 1
-          elif [ "$PKG_WAIT_RC" -ne 0 ]; then
-            echo "::error::PKG notarization timed out waiting for Apple processing"
-            exit 1
-          fi
-
-          echo "Stapling PKG notarization ticket..."
-          xcrun stapler staple "$PKG_PATH"
-
-          echo "Verifying PKG..."
-          spctl --assess --type install "$PKG_PATH"
 
           echo "Building DMG from app bundle..."
           DMG_STAGING="$RUNNER_TEMP/dmg-root"
@@ -467,14 +432,13 @@ jobs:
           echo "Verifying DMG Gatekeeper assessment..."
           spctl --assess --type open "$DMG_PATH"
 
-          echo "macOS notarization complete for PKG and DMG."
+          echo "macOS notarization complete for DMG."
 
       - name: Upload macOS installer
         uses: actions/upload-artifact@v4
         with:
           name: Thoth-macOS
           path: |
-            dist/Thoth-*-macOS-*.pkg
             dist/Thoth-*-macOS-*.dmg
           retention-days: 90
 
