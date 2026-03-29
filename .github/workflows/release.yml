@@ -216,6 +216,10 @@ jobs:
               cmd+=( -T "$app" )
             done
             if ! "${cmd[@]}" >"$RUNNER_TEMP/${label}.security_import.out" 2>"$RUNNER_TEMP/${label}.security_import.err"; then
+              if grep -qi "already exists in the keychain" "$RUNNER_TEMP/${label}.security_import.err"; then
+                echo "::warning::$label already exists in keychain, continuing"
+                return 0
+              fi
               echo "security import stderr for $label:"
               sed -n '1,120p' "$RUNNER_TEMP/${label}.security_import.err" || true
               fail "$label failed during security import"
