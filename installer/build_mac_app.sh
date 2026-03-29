@@ -270,6 +270,14 @@ rm -rf "$PYTHON_PREFIX/lib/python"*/test 2>/dev/null || true
 rm -rf "$PYTHON_PREFIX/lib/python"*/unittest/test 2>/dev/null || true
 find "$PYTHON_PREFIX/lib" -type d -name 'tests' -exec rm -rf {} + 2>/dev/null || true
 
+# Strip debug symbols from native libraries to reduce bundle size
+info "Stripping debug symbols from shared libraries..."
+STRIPPED_COUNT=0
+find "$APP_BUNDLE" \( -name '*.so' -o -name '*.dylib' \) -print0 | while IFS= read -r -d '' lib; do
+    strip -x "$lib" 2>/dev/null && STRIPPED_COUNT=$((STRIPPED_COUNT + 1)) || true
+done
+ok "Stripped debug symbols from shared libraries"
+
 BUNDLE_SIZE=$(du -sh "$APP_BUNDLE" | cut -f1)
 ok "Bundle size: $BUNDLE_SIZE"
 

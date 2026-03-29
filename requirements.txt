@@ -28,7 +28,6 @@ networkx
 # ── PyTorch (CPU-only for installer; swap for CUDA if GPU available) ────────
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
-torchvision
 
 # ── Retrieval Sources ───────────────────────────────────────────────────────
 tavily-python

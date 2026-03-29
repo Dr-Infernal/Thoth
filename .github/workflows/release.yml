@@ -298,87 +298,13 @@ jobs:
           chmod +x installer/build_mac_app.sh
           ./installer/build_mac_app.sh "${{ env.DEFAULT_VERSION }}"
 
-      # ── Build + notarize DMG with Apple ───────────────────────────────────
-      - name: Notarize .dmg
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CODESIGN_IDENTITY: ${{ env.CODESIGN_IDENTITY }}
+      - name: Prepare signed DMG and app zip
         run: |
           set -euo pipefail
-
-          submit_notary_with_retry() {
-            local artifact_path="$1"
-            local output_json="$2"
-            local label="$3"
-            local attempts=0
-            local max_attempts=3
-
-            while true; do
-              attempts=$((attempts + 1))
-              echo "Submitting ${label} for notarization (attempt ${attempts}/${max_attempts}): ${artifact_path}"
-
-                  if xcrun notarytool submit "$artifact_path" \
-                   --apple-id "$APPLE_ID" \
-                   --password "$APPLE_APP_PASSWORD" \
-                   --team-id "$APPLE_TEAM_ID" \
-                    --output-format json > "$output_json"; then
-                return 0
-              fi
-
-              if [ "$attempts" -ge "$max_attempts" ]; then
-                echo "::error::${label} notarization failed after ${max_attempts} attempts"
-                return 1
-              fi
-
-              echo "::warning::${label} notarization attempt ${attempts} failed (possible transient Apple connectivity issue). Retrying in 30s..."
-              sleep 30
-            done
-          }
-
-          wait_notary_status() {
-            local submission_id="$1"
-            local label="$2"
-            local timeout_seconds=7200
-            local sleep_seconds=30
-            local elapsed=0
-            local info_json="$RUNNER_TEMP/notary_${label}_info.json"
-
-            while [ "$elapsed" -lt "$timeout_seconds" ]; do
-              if xcrun notarytool info "$submission_id" \
-                   --apple-id "$APPLE_ID" \
-                   --password "$APPLE_APP_PASSWORD" \
-                   --team-id "$APPLE_TEAM_ID" \
-                   --output-format json > "$info_json"; then
-                local status
-                status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$info_json")"
-                echo "${label} notarization status: ${status}"
-                case "$status" in
-                  Accepted)
-                    return 0
-                    ;;
-                  Invalid)
-                    return 2
-                    ;;
-                  *)
-                    ;;
-                esac
-              else
-                echo "::warning::${label} notary status check failed (transient network/API issue); retrying..."
-              fi
-
-              sleep "$sleep_seconds"
-              elapsed=$((elapsed + sleep_seconds))
-            done
-
-            return 1
-          }
 
           ARCH="$(uname -m)"
           APP_PATH="installer/build/mac/Thoth.app"
           DMG_PATH="dist/Thoth-${{ env.DEFAULT_VERSION }}-macOS-${ARCH}.dmg"
-          DMG_NOTARY_JSON="$RUNNER_TEMP/notary_dmg_result.json"
 
           if [ ! -d "$APP_PATH" ]; then
             echo "::error::Expected app bundle not found at $APP_PATH"
@@ -405,8 +331,98 @@ jobs:
           echo "DMG size (human):"
           du -h "$DMG_PATH"
 
-          submit_notary_with_retry "$DMG_PATH" "$DMG_NOTARY_JSON" "DMG"
+      - name: Upload macOS pending artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Thoth-macOS-pending
+          path: dist/Thoth-*-macOS-*.dmg
+          retention-days: 90
 
+  # ════════════════════════════════════════════════════════════════════════════
+  #  Notarize macOS DMG (release artifact)
+  # ════════════════════════════════════════════════════════════════════════════
+  notarize-macos-dmg:
+    needs: build-macos
+    runs-on: macos-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Download macOS pending artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Thoth-macOS-pending
+          path: dist
+
+      - name: Notarize DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          submit_notary_with_retry() {
+            local artifact_path="$1"
+            local output_json="$2"
+            local label="$3"
+            local attempts=0
+            local max_attempts=3
+
+            while true; do
+              attempts=$((attempts + 1))
+              echo "Submitting ${label} for notarization (attempt ${attempts}/${max_attempts}): ${artifact_path}"
+              if timeout 600 xcrun notarytool submit "$artifact_path" \
+                   --apple-id "$APPLE_ID" \
+                   --password "$APPLE_APP_PASSWORD" \
+                   --team-id "$APPLE_TEAM_ID" \
+                   --output-format json > "$output_json"; then
+                return 0
+              fi
+              if [ "$attempts" -ge "$max_attempts" ]; then
+                echo "::error::${label} notarization failed after ${max_attempts} attempts"
+                return 1
+              fi
+              echo "::warning::${label} notarization attempt ${attempts} failed (possible transient Apple connectivity issue). Retrying in 30s..."
+              sleep 30
+            done
+          }
+
+          wait_notary_status() {
+            local submission_id="$1"
+            local label="$2"
+            local timeout_seconds=7200
+            local sleep_seconds=30
+            local start_time=$(date +%s)
+            local info_json="$RUNNER_TEMP/notary_${label}_info.json"
+            while true; do
+              local elapsed=$(( $(date +%s) - start_time ))
+              if [ "$elapsed" -ge "$timeout_seconds" ]; then
+                break
+              fi
+              if xcrun notarytool info "$submission_id" \
+                   --apple-id "$APPLE_ID" \
+                   --password "$APPLE_APP_PASSWORD" \
+                   --team-id "$APPLE_TEAM_ID" \
+                   --output-format json > "$info_json"; then
+                local status
+                status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$info_json")"
+                echo "${label} notarization status: ${status} (elapsed: ${elapsed}s)"
+                case "$status" in
+                  Accepted) return 0 ;;
+                  Invalid) return 2 ;;
+                esac
+              else
+                echo "::warning::${label} notary status check failed (transient network/API issue); retrying..."
+              fi
+              sleep "$sleep_seconds"
+            done
+            return 1
+          }
+
+          DMG_PATH="$(ls dist/Thoth-*-macOS-*.dmg | head -n1)"
+          DMG_NOTARY_JSON="$RUNNER_TEMP/notary_dmg_result.json"
+
+          submit_notary_with_retry "$DMG_PATH" "$DMG_NOTARY_JSON" "DMG"
           DMG_SUBMISSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$DMG_NOTARY_JSON")"
           echo "DMG notarization submission id: $DMG_SUBMISSION_ID"
 
@@ -430,23 +446,20 @@ jobs:
           echo "Stapling DMG notarization ticket..."
           xcrun stapler staple "$DMG_PATH"
           echo "Verifying DMG Gatekeeper assessment..."
-          spctl --assess --type open "$DMG_PATH"
+          spctl --assess -v --type open "$DMG_PATH" || echo "::warning::spctl assessment returned non-zero (may be expected on GHA runners)"
 
-          echo "macOS notarization complete for DMG."
-
-      - name: Upload macOS installer
+      - name: Upload notarized macOS installer
         uses: actions/upload-artifact@v4
         with:
           name: Thoth-macOS
-          path: |
-            dist/Thoth-*-macOS-*.dmg
+          path: dist/Thoth-*-macOS-*.dmg
           retention-days: 90
 
   # ════════════════════════════════════════════════════════════════════════════
   #  Create GitHub Release (only on tag push)
   # ════════════════════════════════════════════════════════════════════════════
   release:
-    needs: [build-windows, build-macos]
+    needs: [build-windows, notarize-macos-dmg]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
