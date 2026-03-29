@@ -14,7 +14,9 @@
 # Required secrets (set in repo Settings → Secrets → Actions):
 #   APPLE_APPLICATION_P12   Base64 of Developer ID Application .p12
 #   APPLE_INSTALLER_P12     Base64 of Developer ID Installer .p12
-#   APPLE_P12_PASSWORD      Password for both .p12 files
+#   APPLE_P12_PASSWORD      Fallback password for .p12 files
+#   APPLE_APPLICATION_P12_PASSWORD  Optional password override for app .p12
+#   APPLE_INSTALLER_P12_PASSWORD    Optional password override for installer .p12
 #   APPLE_ID                Apple ID email (for notarization)
 #   APPLE_APP_PASSWORD      App-specific password (appleid.apple.com)
 #   APPLE_TEAM_ID           Apple Developer Team ID
@@ -139,24 +141,68 @@ jobs:
           APPLICATION_P12: ${{ secrets.APPLE_APPLICATION_P12 }}
           INSTALLER_P12: ${{ secrets.APPLE_INSTALLER_P12 }}
           P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+          APPLICATION_P12_PASSWORD: ${{ secrets.APPLE_APPLICATION_P12_PASSWORD }}
+          INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_INSTALLER_P12_PASSWORD }}
         run: |
+          set -euo pipefail
+
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          decode_b64_to_file() {
+            local secret_value="$1"
+            local out_file="$2"
+            local label="$3"
+            if [ -z "$secret_value" ]; then
+              fail "$label secret is empty or missing"
+            fi
+            if ! printf '%s' "$secret_value" | base64 --decode > "$out_file" 2>"$RUNNER_TEMP/${label}.decode.err"; then
+              echo "base64 decode stderr for $label:"
+              cat "$RUNNER_TEMP/${label}.decode.err" || true
+              fail "$label is not valid base64 (expected raw base64 of .p12 bytes)"
+            fi
+            if [ ! -s "$out_file" ]; then
+              fail "$label decoded to an empty file"
+            fi
+          }
+
+          verify_pkcs12_password() {
+            local p12_file="$1"
+            local password="$2"
+            local label="$3"
+            if [ -z "$password" ]; then
+              fail "No password provided for $label (.p12 import requires its export password)"
+            fi
+            if ! openssl pkcs12 -in "$p12_file" -noout -info -passin pass:"$password" >"$RUNNER_TEMP/${label}.openssl.out" 2>"$RUNNER_TEMP/${label}.openssl.err"; then
+              echo "openssl stderr for $label:"
+              sed -n '1,80p' "$RUNNER_TEMP/${label}.openssl.err" || true
+              fail "$label failed PKCS12 validation; likely wrong password for this specific .p12 or corrupted secret data"
+            fi
+          }
+
           # Create a temporary keychain for this build
           KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          APP_P12_PASSWORD="${APPLICATION_P12_PASSWORD:-$P12_PASSWORD}"
+          INST_P12_PASSWORD="${INSTALLER_P12_PASSWORD:-$P12_PASSWORD}"
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           # Import Developer ID Application certificate
-          echo "$APPLICATION_P12" | base64 --decode > "$RUNNER_TEMP/app.p12"
+          decode_b64_to_file "$APPLICATION_P12" "$RUNNER_TEMP/app.p12" "APPLE_APPLICATION_P12"
+          verify_pkcs12_password "$RUNNER_TEMP/app.p12" "$APP_P12_PASSWORD" "APPLE_APPLICATION_P12"
           security import "$RUNNER_TEMP/app.p12" -k "$KEYCHAIN_PATH" \
-            -P "$P12_PASSWORD" -T /usr/bin/codesign
+            -P "$APP_P12_PASSWORD" -T /usr/bin/codesign
 
           # Import Developer ID Installer certificate
-          echo "$INSTALLER_P12" | base64 --decode > "$RUNNER_TEMP/inst.p12"
+          decode_b64_to_file "$INSTALLER_P12" "$RUNNER_TEMP/inst.p12" "APPLE_INSTALLER_P12"
+          verify_pkcs12_password "$RUNNER_TEMP/inst.p12" "$INST_P12_PASSWORD" "APPLE_INSTALLER_P12"
           security import "$RUNNER_TEMP/inst.p12" -k "$KEYCHAIN_PATH" \
-            -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+            -P "$INST_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
 
           # Import Apple Developer ID intermediate certificate (G2)
           curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
@@ -171,8 +217,14 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH" \
             $(security default-keychain -d user | tr -d '"')
 
-          # Clean up .p12 files from disk
-          rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/inst.p12"
+          # Clean up temporary artifacts from disk
+          rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/inst.p12" \
+                "$RUNNER_TEMP/APPLE_APPLICATION_P12.decode.err" \
+                "$RUNNER_TEMP/APPLE_INSTALLER_P12.decode.err" \
+                "$RUNNER_TEMP/APPLE_APPLICATION_P12.openssl.out" \
+                "$RUNNER_TEMP/APPLE_APPLICATION_P12.openssl.err" \
+                "$RUNNER_TEMP/APPLE_INSTALLER_P12.openssl.out" \
+                "$RUNNER_TEMP/APPLE_INSTALLER_P12.openssl.err"
 
       # ── Build the self-contained .app and .pkg ─────────────────────────────
       - name: Build, sign, and package
