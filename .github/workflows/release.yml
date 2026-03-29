@@ -305,15 +305,33 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
+
           ARCH="$(uname -m)"
           PKG_PATH="dist/Thoth-${{ env.DEFAULT_VERSION }}-macOS-${ARCH}.pkg"
+          NOTARY_JSON="$RUNNER_TEMP/notary_result.json"
 
           echo "Submitting $PKG_PATH for notarization..."
           xcrun notarytool submit "$PKG_PATH" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 30m
+            --wait --timeout 30m --output-format json > "$NOTARY_JSON"
+
+          SUBMISSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$NOTARY_JSON")"
+          STATUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$NOTARY_JSON")"
+
+          echo "Notarization submission id: $SUBMISSION_ID"
+          echo "Notarization status: $STATUS"
+
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::Notarization did not succeed (status=$STATUS). Fetching Apple notary log..."
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || true
+            exit 1
+          fi
 
           echo "Stapling notarization ticket..."
           xcrun stapler staple "$PKG_PATH"
