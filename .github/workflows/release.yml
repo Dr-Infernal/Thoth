@@ -2,7 +2,7 @@
 # release.yml — Build, sign, and publish Thoth installers
 #
 # Triggers:
-#   • Push a tag like v3.7.0   → full build + GitHub Release (draft)
+#   • Push a tag like v3.8.0   → full build + GitHub Release (draft)
 #   • Manual workflow_dispatch  → build only (no release), for testing
 #
 # Jobs:
@@ -42,7 +42,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DEFAULT_VERSION: "3.7.0"
+  DEFAULT_VERSION: "3.8.0"
 
 jobs:
   # ════════════════════════════════════════════════════════════════════════════

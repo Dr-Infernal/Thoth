@@ -20,8 +20,8 @@
 set -euo pipefail
 
 VERSION="${1:-3.8.0}"
-PYTHON_VERSION="${PYTHON_VERSION:-3.12.8}"
-PBS_RELEASE="${PBS_RELEASE:-20250213}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.12.13}"
+PBS_RELEASE="${PBS_RELEASE:-20260303}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -42,7 +42,7 @@ case "$ARCH" in
 esac
 
 PBS_FILENAME="cpython-${PYTHON_VERSION}+${PBS_RELEASE}-${PBS_ARCH}-apple-darwin-install_only.tar.gz"
-PBS_URL="https://github.com/indygreg/python-build-standalone/releases/download/${PBS_RELEASE}/${PBS_FILENAME}"
+PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${PBS_FILENAME}"
 
 # App bundle layout
 APP_BUNDLE="$BUILD_DIR/Thoth.app"
