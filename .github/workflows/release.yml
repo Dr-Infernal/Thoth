@@ -371,7 +371,7 @@ jobs:
             while true; do
               attempts=$((attempts + 1))
               echo "Submitting ${label} for notarization (attempt ${attempts}/${max_attempts}): ${artifact_path}"
-              if timeout 600 xcrun notarytool submit "$artifact_path" \
+              if perl -e 'alarm 600; exec @ARGV' -- xcrun notarytool submit "$artifact_path" \
                    --apple-id "$APPLE_ID" \
                    --password "$APPLE_APP_PASSWORD" \
                    --team-id "$APPLE_TEAM_ID" \
