@@ -251,7 +251,16 @@ jobs:
           # Import Apple Developer ID intermediate certificate (G2)
           curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
                -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
-          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH"
+          if ! security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" \
+               >"$RUNNER_TEMP/DeveloperIDG2CA.import.out" 2>"$RUNNER_TEMP/DeveloperIDG2CA.import.err"; then
+            if grep -qi "already exists in the keychain" "$RUNNER_TEMP/DeveloperIDG2CA.import.err"; then
+              echo "::warning::DeveloperIDG2CA certificate already exists in keychain, continuing"
+            else
+              echo "security import stderr for DeveloperIDG2CA:"
+              sed -n '1,120p' "$RUNNER_TEMP/DeveloperIDG2CA.import.err" || true
+              fail "DeveloperIDG2CA import failed"
+            fi
+          fi
 
           # Allow codesign to access the imported private keys
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
@@ -279,7 +288,9 @@ jobs:
                 "$RUNNER_TEMP/APPLE_APPLICATION_P12.security_import.out" \
                 "$RUNNER_TEMP/APPLE_APPLICATION_P12.security_import.err" \
                 "$RUNNER_TEMP/APPLE_INSTALLER_P12.security_import.out" \
-                "$RUNNER_TEMP/APPLE_INSTALLER_P12.security_import.err"
+                "$RUNNER_TEMP/APPLE_INSTALLER_P12.security_import.err" \
+                "$RUNNER_TEMP/DeveloperIDG2CA.import.out" \
+                "$RUNNER_TEMP/DeveloperIDG2CA.import.err"
 
       # ── Build the self-contained .app and .pkg ─────────────────────────────
       - name: Build, sign, and package
