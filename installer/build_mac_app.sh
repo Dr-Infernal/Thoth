@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./installer/build_mac_app.sh                  # local unsigned build
-#   ./installer/build_mac_app.sh 3.7.0            # specify version
+#   ./installer/build_mac_app.sh 3.8.0            # specify version
 #
 # For signed builds (CI), set environment variables:
 #   CODESIGN_IDENTITY="Developer ID Application: Name (TEAMID)"
@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-VERSION="${1:-3.7.0}"
+VERSION="${1:-3.8.0}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.12.8}"
 PBS_RELEASE="${PBS_RELEASE:-20250213}"
 
@@ -100,6 +100,13 @@ info "[2/6] Installing Python packages from requirements.txt..."
 "$PYTHON_PREFIX/bin/python3" -m pip install -r "$PROJECT_DIR/requirements.txt" --quiet 2>&1 | tail -5
 ok "Python packages installed"
 
+# Install Playwright Chromium into the app bundle
+info "Installing Playwright Chromium browser..."
+export PLAYWRIGHT_BROWSERS_PATH="$PYTHON_PREFIX/playwright-browsers"
+"$PYTHON_PREFIX/bin/python3" -m playwright install chromium 2>&1 | tail -3 || \
+    warn "Playwright Chromium install failed — browser tool will auto-install on first use"
+ok "Playwright Chromium installed"
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  3. Copy Thoth source code
 # ═════════════════════════════════════════════════════════════════════════════
@@ -158,6 +165,9 @@ DATA_DIR="$HOME/.thoth"
 
 # Ensure data directory exists
 mkdir -p "$DATA_DIR"
+
+# Point Playwright at the bundled Chromium browsers
+export PLAYWRIGHT_BROWSERS_PATH="$RESOURCES/python/playwright-browsers"
 
 # Try to start Ollama if installed (optional — cloud models work without it)
 OLLAMA_PORT=11434

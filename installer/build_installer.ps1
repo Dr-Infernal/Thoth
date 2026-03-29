@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 $BuildDir = Join-Path $PSScriptRoot "build"
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host " Thoth v3.7.0 Installer Builder"              -ForegroundColor Cyan
+Write-Host " Thoth v3.8.0 Installer Builder"              -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -169,6 +169,20 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 Write-Host "      All packages pre-installed" -ForegroundColor Green
+
+# Install Playwright Chromium into the embedded Python's cache
+Write-Host "      Installing Playwright Chromium browser..." -ForegroundColor Yellow
+$env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PythonDir "playwright-browsers"
+& $PythonExe -m playwright install chromium 2>&1 | ForEach-Object {
+    if ($_ -match 'downloading|Chromium') {
+        Write-Host "      $_" -ForegroundColor Green
+    }
+}
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "WARNING: Playwright Chromium install failed. Browser tool will auto-install on first use." -ForegroundColor DarkYellow
+} else {
+    Write-Host "      Playwright Chromium installed" -ForegroundColor Green
+}
 
 # ── 3. Create dist directory ────────────────────────────────────────────────
 $DistDir = Join-Path (Join-Path $PSScriptRoot "..") "dist"

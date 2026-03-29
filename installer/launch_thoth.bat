@@ -19,6 +19,9 @@ set "PYTHONIOENCODING=utf-8"
 set "TCL_LIBRARY=%PYTHON_DIR%\tcl\tcl8.6"
 set "TK_LIBRARY=%PYTHON_DIR%\tcl\tk8.6"
 
+:: ── Point Playwright at the bundled Chromium browsers ───────────────────────
+set "PLAYWRIGHT_BROWSERS_PATH=%PYTHON_DIR%\playwright-browsers"
+
 :: ── Find Ollama (optional — only needed for local models) ────────────────────
 set "OLLAMA_APP="
 if exist "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe" (
