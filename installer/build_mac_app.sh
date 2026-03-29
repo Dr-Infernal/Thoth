@@ -33,6 +33,19 @@ CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"       # Developer ID Application
 PKG_SIGN_IDENTITY="${PKG_SIGN_IDENTITY:-}"       # Developer ID Installer
 ENTITLEMENTS="$SCRIPT_DIR/entitlements.plist"
 
+# Playwright browser bundling policy:
+# - auto: bundle for local unsigned builds, skip for signed/notarized builds
+# - 1:    force bundle Chromium
+# - 0:    never bundle Chromium
+BUNDLE_PLAYWRIGHT="${BUNDLE_PLAYWRIGHT:-auto}"
+if [ "$BUNDLE_PLAYWRIGHT" = "auto" ]; then
+    if [ -n "$CODESIGN_IDENTITY" ]; then
+        BUNDLE_PLAYWRIGHT="0"
+    else
+        BUNDLE_PLAYWRIGHT="1"
+    fi
+fi
+
 # Detect architecture
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -100,12 +113,17 @@ info "[2/6] Installing Python packages from requirements.txt..."
 "$PYTHON_PREFIX/bin/python3" -m pip install -r "$PROJECT_DIR/requirements.txt" --quiet 2>&1 | tail -5
 ok "Python packages installed"
 
-# Install Playwright Chromium into the app bundle
-info "Installing Playwright Chromium browser..."
-export PLAYWRIGHT_BROWSERS_PATH="$PYTHON_PREFIX/playwright-browsers"
-"$PYTHON_PREFIX/bin/python3" -m playwright install chromium 2>&1 | tail -3 || \
-    warn "Playwright Chromium install failed — browser tool will auto-install on first use"
-ok "Playwright Chromium installed"
+# Install Playwright Chromium into the app bundle when enabled.
+# For signed/notarized builds we skip this because bundled Chromium fails notarization.
+if [ "$BUNDLE_PLAYWRIGHT" = "1" ]; then
+    info "Installing Playwright Chromium browser into app bundle..."
+    export PLAYWRIGHT_BROWSERS_PATH="$PYTHON_PREFIX/playwright-browsers"
+    "$PYTHON_PREFIX/bin/python3" -m playwright install chromium 2>&1 | tail -3 || \
+        warn "Playwright Chromium install failed — browser tool will auto-install on first use"
+    ok "Playwright Chromium installed"
+else
+    info "Skipping bundled Playwright Chromium for signed/notarized build"
+fi
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  3. Copy Thoth source code
@@ -166,8 +184,15 @@ DATA_DIR="$HOME/.thoth"
 # Ensure data directory exists
 mkdir -p "$DATA_DIR"
 
-# Point Playwright at the bundled Chromium browsers
-export PLAYWRIGHT_BROWSERS_PATH="$RESOURCES/python/playwright-browsers"
+# Prefer bundled Playwright browsers when present; otherwise use a writable user path
+BUNDLED_BROWSERS="$RESOURCES/python/playwright-browsers"
+USER_BROWSERS="$DATA_DIR/playwright-browsers"
+if [ -d "$BUNDLED_BROWSERS" ]; then
+    export PLAYWRIGHT_BROWSERS_PATH="$BUNDLED_BROWSERS"
+else
+    mkdir -p "$USER_BROWSERS"
+    export PLAYWRIGHT_BROWSERS_PATH="$USER_BROWSERS"
+fi
 
 # Try to start Ollama if installed (optional — cloud models work without it)
 OLLAMA_PORT=11434
