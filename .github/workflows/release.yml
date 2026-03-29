@@ -187,9 +187,18 @@ jobs:
             local out_file="$2"
             local password="$3"
             local label="$4"
-              if ! openssl pkcs12 -in "$in_file" -passin pass:"$password" \
-                -export -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
-                 -passout pass:"$password" -out "$out_file" >"$RUNNER_TEMP/${label}.repack.out" 2>"$RUNNER_TEMP/${label}.repack.err"; then
+            local pem_file="$RUNNER_TEMP/${label}.repack.pem"
+            # Step 1: extract cert+private key from source PKCS12
+            if ! openssl pkcs12 -in "$in_file" -passin pass:"$password" \
+                 -nodes -out "$pem_file" >"$RUNNER_TEMP/${label}.repack.out" 2>"$RUNNER_TEMP/${label}.repack.err"; then
+              echo "openssl repack stderr for $label:"
+              sed -n '1,120p' "$RUNNER_TEMP/${label}.repack.err" || true
+              fail "$label could not be decoded for repack"
+            fi
+            # Step 2: re-export with legacy-compatible PBE/MAC expected by macOS tooling
+            if ! openssl pkcs12 -export -in "$pem_file" \
+                 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
+                 -passout pass:"$password" -out "$out_file" >>"$RUNNER_TEMP/${label}.repack.out" 2>>"$RUNNER_TEMP/${label}.repack.err"; then
               echo "openssl repack stderr for $label:"
               sed -n '1,120p' "$RUNNER_TEMP/${label}.repack.err" || true
               fail "$label could not be repacked into macOS-compatible PKCS12"
@@ -259,8 +268,10 @@ jobs:
                 "$RUNNER_TEMP/APPLE_INSTALLER_P12.openssl.err" \
                 "$RUNNER_TEMP/APPLE_APPLICATION_P12.repack.out" \
                 "$RUNNER_TEMP/APPLE_APPLICATION_P12.repack.err" \
+                "$RUNNER_TEMP/APPLE_APPLICATION_P12.repack.pem" \
                 "$RUNNER_TEMP/APPLE_INSTALLER_P12.repack.out" \
                 "$RUNNER_TEMP/APPLE_INSTALLER_P12.repack.err" \
+                "$RUNNER_TEMP/APPLE_INSTALLER_P12.repack.pem" \
                 "$RUNNER_TEMP/APPLE_APPLICATION_P12.security_import.out" \
                 "$RUNNER_TEMP/APPLE_APPLICATION_P12.security_import.err" \
                 "$RUNNER_TEMP/APPLE_INSTALLER_P12.security_import.out" \
