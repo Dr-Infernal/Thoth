@@ -2,6 +2,96 @@
 
 ---
 
+## v3.8.0 — Bundled Skills, Memory Intelligence & Self-Contained Installers
+
+Thoth ships with **9 bundled skills** — reusable instruction packs that shape how the agent thinks and responds. The memory system gets smarter with **auto-linking, FAISS fallback search, background orphan repair, and memory decay**. Token counting is now accurate via **tiktoken**, and the agent dynamically adjusts its tool set based on available context. Installers are now fully **self-contained** (no post-install downloads), and a new **CI/CD pipeline** automates builds, code signing, notarization, and GitHub Releases.
+
+### 🧩 Bundled Skills Engine
+
+New `skills.py` engine and `bundled_skills/` directory — a system for packaging and injecting domain-specific instructions into the agent's behavior.
+
+- **SKILL.md format** — each skill is a Markdown file with YAML frontmatter (`display_name`, `icon`, `description`, `tools`, `tags`, `version`, `author`, `enabled_by_default`) followed by freeform instructions
+- **9 bundled skills** — 🧠 Brain Dump, ☀️ Daily Briefing, 🔬 Deep Research, 🗣️ Humanizer, 📋 Meeting Notes, 🎯 Proactive Agent, 🪞 Self-Reflection, ⚙️ Task Automation, 🌐 Web Navigator
+- **Two-tier discovery** — bundled skills ship read-only in `<app_root>/bundled_skills/`; user skills in `~/.thoth/skills/` override bundled skills by name
+- **Prompt injection** — enabled skills have their instructions injected into the system prompt before every LLM call
+- **Per-skill enable/disable** — toggle skills from Settings → Skills tab; config persisted in `~/.thoth/skills_config.json`
+- **Tool-aware** — each skill declares the tools it uses (`tools` field in frontmatter)
+- **Cache & reload** — skills are cached in memory after first load; `load_skills(force_refresh=True)` forces a re-scan
+
+### 🧠 Memory Intelligence
+
+Four improvements to the knowledge graph that make memory recall smarter and the graph healthier.
+
+- **Auto-link on save** — when a new entity is saved, the engine automatically scans existing entities for potential relationships and creates links, building the knowledge graph organically without manual `link_memories` calls
+- **FAISS fallback search** — if the primary semantic recall returns no results above the 0.80 similarity threshold, a broader relaxed search is attempted automatically; prevents empty recall on edge-case queries
+- **Background orphan repair** — a periodic background process detects entities with zero relationships and attempts to link them to related entities, keeping the knowledge graph connected over time
+- **Memory decay** — memories that haven't been recalled recently are gradually deprioritized in retrieval results, ensuring frequently relevant information surfaces first
+
+### 📏 Accurate Token Counting & Dynamic Tool Budgets
+
+Context window management is now more precise and adaptive.
+
+- **tiktoken integration** — token counting uses OpenAI's `tiktoken` library (cl100k_base encoding) instead of character-based estimates; the live token counter and all trimming decisions are now accurate to the token
+- **Dynamic tool budgets** — the agent automatically adjusts how many tools are exposed to the model based on available context headroom; when context usage is high, lower-priority tools are temporarily hidden to prevent the system prompt from crowding out conversation history
+- **Cloud model context fix** — `contextvars.ContextVar` now correctly propagates model overrides through the full agent pipeline, fixing a bug where cloud model threads could miscalculate available context
+
+### 📦 Self-Contained Installers
+
+Both Windows and macOS installers now bundle all dependencies at build time — no post-install downloads.
+
+- **Windows (`build_installer.ps1`)** — patches Python's `._pth` file, installs pip, and runs `pip install -r requirements.txt` into the bundled Python during the build step; `install_deps.bat` and `get-pip.py` removed from the installer
+- **macOS (`build_mac_app.sh`)** — new self-contained build script using python-build-standalone; downloads a standalone Python, installs all pip deps, assembles a `.app` bundle with entitlements, code-signs, and creates a `.pkg` installer
+- **Inno Setup (`thoth_setup.iss`)** — updated to include `bundled_skills/` and `workflows.py`; removed post-install dependency download steps
+
+### 🔄 CI/CD Pipeline
+
+New `.github/workflows/release.yml` — automated build, sign, notarize, and release.
+
+- **Trigger** — tag push (`v*`) or manual `workflow_dispatch`
+- **Test stage** — runs full test suite before building
+- **Parallel builds** — Windows (Inno Setup) and macOS (build_mac_app.sh) build in parallel
+- **macOS code signing** — signs the `.app` and `.pkg` with Apple Developer certificates (Application + Installer)
+- **macOS notarization** — submits the `.pkg` to Apple for notarization and staples the ticket
+- **GitHub Release** — creates a draft release with both platform installers attached
+- **6 GitHub secrets** — `APPLE_CERTIFICATE_P12`, `APPLE_INSTALLER_P12`, `APPLE_CERT_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`
+
+### 🐛 Bug Fixes
+
+- **Cloud model override propagation** — `contextvars.ContextVar` replaces thread-local storage for model overrides, fixing context window miscalculation in cloud model threads
+- **User entity prompt** — memory extraction prompt updated to fix entity naming for the canonical "User" node
+- **Memory content merge** — fixed a bug where merging duplicate entities could lose content from the richer entry
+
+### 🧪 Tests
+
+- **841 PASS**, 0 FAIL, 2 WARN (up from 745 in v3.7.0)
+- New test sections: Skills engine (discovery, parsing, enable/disable, user override, prompt injection, cache)
+- New test sections: Memory intelligence (auto-link, FAISS fallback, orphan repair, decay scoring)
+- New test sections: Dynamic tool budgets (budget calculation, tool hiding, priority ordering)
+- New test sections: tiktoken token counting (accuracy, encoding selection)
+- Extended integration tests for cloud model context propagation
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`skills.py`** | **New** — skills engine: YAML frontmatter parsing, bundled + user skill discovery, enable/disable config, prompt building, caching |
+| **`bundled_skills/`** | **New** — 9 skill directories, each with `SKILL.md` (Brain Dump, Daily Briefing, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) |
+| **`agent.py`** | Dynamic tool budgets based on context headroom; tiktoken-based token counting; `contextvars.ContextVar` for model override propagation; skills prompt injection in pre-model hook |
+| **`knowledge_graph.py`** | Auto-link on save; FAISS fallback search with relaxed threshold; background orphan repair; memory decay scoring |
+| **`memory_extraction.py`** | User entity prompt fix; content merge bug fix |
+| **`models.py`** | `contextvars.ContextVar` for cloud model override |
+| **`installer/build_installer.ps1`** | Pre-installs pip deps at build time; patches `._pth` file |
+| **`installer/build_mac_app.sh`** | **New** — self-contained macOS build with python-build-standalone, code signing, `.pkg` creation |
+| **`installer/entitlements.plist`** | **New** — macOS hardened runtime entitlements |
+| **`installer/thoth_setup.iss`** | Removed post-install downloads; added `bundled_skills/` and `workflows.py` |
+| **`.github/workflows/release.yml`** | **New** — CI/CD: test → build → sign → notarize → GitHub Release |
+| **`.gitignore`** | Added `installer/apple_signing/` |
+| **`test_suite.py`** | ~96 new tests across skills, memory intelligence, tool budgets, tiktoken |
+| **`requirements.txt`** | Added `tiktoken` |
+| **`README.md`** | Added Skills section, updated Memory/Agent/Architecture docs |
+
+---
+
 ## v3.7.0 — Cloud-Primary Mode, Per-Thread Model Switching & Task Stop
 
 Thoth now works **without Ollama**. Connect your OpenAI or OpenRouter API key and use cloud models (GPT-4o, Claude, Gemini, etc.) as your default — or mix cloud and local models across different conversations. A new **per-thread model picker** lets you switch models mid-conversation, and a **task stop** feature lets you cancel running tasks at any point.

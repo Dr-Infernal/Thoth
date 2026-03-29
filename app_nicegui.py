@@ -70,7 +70,7 @@ from channels.email import (
 from channels import config as _ch_config
 
 # ── Backend imports (shared with Streamlit frontend) ─────────────────────────
-from threads import _list_threads, _save_thread_meta, _delete_thread
+from threads import _list_threads, _save_thread_meta, _delete_thread, get_thread_skills_override, set_thread_skills_override
 from agent import (
     get_agent_graph, stream_agent, resume_stream_agent,
     clear_agent_cache, repair_orphaned_tool_calls, get_token_usage,
@@ -173,7 +173,7 @@ _TEXT_EXTENSIONS = {
     ".r", ".java", ".c", ".cpp", ".h", ".cs", ".go", ".rs", ".rb", ".php",
     ".swift", ".kt", ".lua", ".pl",
 }
-_CHARS_PER_TOKEN = 4  # conservative approximation
+_CHARS_PER_TOKEN_APPROX = 3  # used only for file-size char budgets
 
 def _file_budget() -> int:
     """Dynamic char budget for attached files: 35 % of the model's context window.
@@ -186,7 +186,7 @@ def _file_budget() -> int:
         ctx = get_context_size()
     except Exception:
         ctx = 32_768
-    return int(ctx * 0.35 * _CHARS_PER_TOKEN)
+    return int(ctx * 0.35 * _CHARS_PER_TOKEN_APPROX)
 
 _YT_URL_PATTERN = re.compile(
     r"https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})(?:[^\s)\]]*)"
@@ -2503,6 +2503,32 @@ async def index():
                             value="\n".join(_allowed_cmds),
                         ).classes("w-full").props('rows="3"')
 
+                    # ── Skills override (optional) ───────────────────────
+                    import skills as _task_skills_mod
+                    _task_skills_mod.load_skills()
+                    _task_all_skills = _task_skills_mod.get_enabled_skills()
+                    _task_sk_override = task.get("skills_override") if task else None
+                    _task_enabled_names = set(sk.name for sk in _task_all_skills)
+                    # If override is set, intersect with enabled; else all enabled
+                    _task_sk_active = (
+                        set(_task_sk_override) & _task_enabled_names
+                        if _task_sk_override is not None
+                        else set(_task_enabled_names)
+                    )
+                    _task_sk_checkboxes = {}
+                    if _task_all_skills:
+                        with ui.expansion("✨ Skills override (optional)").classes("w-full"):
+                            ui.label(
+                                "Choose which skills are active when this task runs. "
+                                "Leave unchecked to use the global default."
+                            ).style("font-size: 0.75rem; color: #666;")
+                            for _tsk in _task_all_skills:
+                                _tcb = ui.checkbox(
+                                    f"{_tsk.icon} {_tsk.display_name}",
+                                    value=_tsk.name in _task_sk_active,
+                                ).classes("text-sm")
+                                _task_sk_checkboxes[_tsk.name] = _tcb
+
                     # Run history (edit mode only)
                     if not is_new:
                         runs = get_run_history(task["id"], limit=5)
@@ -2604,6 +2630,12 @@ async def index():
                         if ln.strip()
                     ]
 
+                    # Parse skills override
+                    cur_skills_override = None
+                    if _task_sk_checkboxes:
+                        _checked = [n for n, cb in _task_sk_checkboxes.items() if cb.value]
+                        cur_skills_override = _checked if _checked else []
+
                     try:
                         if is_new:
                             # Determine notify_only: no prompts = notification only
@@ -2618,6 +2650,7 @@ async def index():
                                 delivery_channel=cur_del_ch,
                                 delivery_target=cur_del_tgt,
                                 model_override=cur_model_ov,
+                                skills_override=cur_skills_override,
                             )
                             # Set permissions after creation (they're not in create_task signature)
                             all_t = list_tasks()
@@ -2657,6 +2690,8 @@ async def index():
                                 updates["allowed_commands"] = cur_allowed_cmds
                             if cur_allowed_recip != (task.get("allowed_recipients") or []):
                                 updates["allowed_recipients"] = cur_allowed_recip
+                            if cur_skills_override != task.get("skills_override"):
+                                updates["skills_override"] = cur_skills_override
 
                             if updates:
                                 update_task(task["id"], **updates)
@@ -2719,6 +2754,7 @@ async def index():
                             tab_tracker = ui.tab("Tracker", icon="checklist")
                             tab_docs = ui.tab("Documents", icon="description")
                             tab_tools = ui.tab("Search", icon="search")
+                            tab_skills = ui.tab("Skills", icon="auto_fix_high")
                             tab_gmail = ui.tab("Gmail", icon="email")
                             tab_cal = ui.tab("Calendar", icon="event")
                             tab_channels = ui.tab("Channels", icon="forum")
@@ -2728,6 +2764,7 @@ async def index():
                                 "Memory": tab_mem, "Voice": tab_voice,
                                 "System": tab_fs, "Tracker": tab_tracker,
                                 "Documents": tab_docs, "Search": tab_tools,
+                                "Skills": tab_skills,
                                 "Gmail": tab_gmail, "Calendar": tab_cal,
                                 "Channels": tab_channels, "Utilities": tab_utils,
                             }
@@ -2745,6 +2782,8 @@ async def index():
                                 _build_cloud_tab()
                             with ui.tab_panel(tab_tools).classes("px-6 py-4"):
                                 _build_tools_tab()
+                            with ui.tab_panel(tab_skills).classes("px-6 py-4"):
+                                _build_skills_tab()
                             with ui.tab_panel(tab_fs).classes("px-6 py-4"):
                                 _build_system_access_tab()
                             with ui.tab_panel(tab_gmail).classes("px-6 py-4"):
@@ -3368,6 +3407,253 @@ async def index():
             _refresh_model_list()
         ui.timer(0.5, _initial_fetch, once=True)
 
+    # ── Skills Settings Tab ──────────────────────────────────────────
+
+    def _build_skills_tab() -> None:
+        import skills as skills_mod
+
+        ui.label("✨ Skills").classes("text-h6")
+        ui.label(
+            "Skills teach the agent step-by-step workflows using your existing tools. "
+            "Enable a skill and it gets injected into every conversation — "
+            "when your request matches the skill's purpose, the agent follows its instructions."
+        ).classes("text-grey-6 text-sm")
+        ui.separator().classes("q-my-md")
+
+        skills_container = ui.column().classes("w-full gap-2")
+
+        def _refresh_skills_list():
+            skills_container.clear()
+            all_skills = skills_mod.get_all_skills()
+            if not all_skills:
+                with skills_container:
+                    ui.label("No skills found. Create one to get started!").classes(
+                        "text-grey-5 italic"
+                    )
+                return
+
+            with skills_container:
+                for sk in all_skills:
+                    with ui.card().classes("w-full q-pa-sm"):
+                        with ui.row().classes("w-full items-center no-wrap"):
+                            ui.switch(
+                                "",
+                                value=skills_mod.is_enabled(sk.name),
+                                on_change=lambda e, n=sk.name: skills_mod.set_enabled(n, e.value),
+                            )
+                            ui.label(f"{sk.icon} {sk.display_name}").classes("text-body1 text-weight-medium")
+                            ui.space()
+                            if sk.source == "bundled":
+                                ui.badge("Bundled", color="blue-grey").props("outline")
+                            else:
+                                ui.badge("Custom", color="teal").props("outline")
+                            # Token estimate badge
+                            tokens = skills_mod.estimate_tokens([sk.name])
+                            if tokens > 0:
+                                ui.badge(f"~{tokens} tokens", color="orange").props(
+                                    "outline"
+                                ).tooltip("Approximate tokens added to context when enabled")
+                        ui.label(sk.description).classes("text-grey-6 text-sm q-pl-lg")
+
+                        # Tool dependencies
+                        if sk.tools:
+                            with ui.row().classes("q-pl-lg gap-1 q-mt-xs"):
+                                ui.label("Tools:").classes("text-grey-5 text-xs")
+                                for t in sk.tools:
+                                    _enabled = tool_registry.is_enabled(t)
+                                    _color = "positive" if _enabled else "warning"
+                                    ui.badge(t, color=_color).props("outline dense")
+
+                        # Action buttons
+                        with ui.row().classes("q-pl-lg q-mt-xs gap-1"):
+                            if sk.source == "user":
+                                ui.button(
+                                    "Edit", icon="edit",
+                                    on_click=lambda _, n=sk.name: _open_skill_editor(n),
+                                ).props("flat dense size=sm")
+                                ui.button(
+                                    "Delete", icon="delete",
+                                    on_click=lambda _, n=sk.name: _confirm_delete_skill(n),
+                                ).props("flat dense size=sm color=negative")
+                            else:
+                                ui.button(
+                                    "Duplicate & Customise", icon="content_copy",
+                                    on_click=lambda _, n=sk.name: _duplicate_skill(n),
+                                ).props("flat dense size=sm")
+
+        def _open_skill_editor(name=None):
+            """Open create/edit dialog for a skill."""
+            skill = skills_mod.get_skill(name) if name else None
+            is_edit = skill is not None
+
+            with ui.dialog().props("persistent maximized=false") as dlg, ui.card().classes(
+                "w-full"
+            ).style("min-width: 600px; max-width: 800px;"):
+                ui.label(
+                    f"{'Edit' if is_edit else 'Create'} Skill"
+                ).classes("text-h6")
+
+                # Name
+                name_input = ui.input(
+                    "Name (identifier)",
+                    value=skill.name if skill else "",
+                    validation={"Required": lambda v: bool(v.strip())},
+                ).classes("w-full")
+                if is_edit:
+                    name_input.props("readonly")
+
+                # Display name
+                display_input = ui.input(
+                    "Display Name",
+                    value=skill.display_name if skill else "",
+                ).classes("w-full")
+
+                # Icon + Description row
+                _wf_icon_opts = list(_ICON_OPTIONS)
+                _icon = skill.icon if skill else "✨"
+                if _icon not in _wf_icon_opts:
+                    _wf_icon_opts.insert(0, _icon)
+                with ui.row().classes("w-full items-end gap-4"):
+                    icon_sel = ui.select(
+                        label="Icon", options=_wf_icon_opts, value=_icon,
+                    ).classes("w-20")
+                    desc_input = ui.input(
+                        "Description (one line)",
+                        value=skill.description if skill else "",
+                    ).classes("flex-grow")
+
+                # Tools
+                ui.label("Tool Dependencies (optional)").classes("text-sm font-bold mt-2")
+                ui.label(
+                    "Tools this skill relies on — you'll see a warning badge "
+                    "on the skill card if any are disabled in Settings."
+                ).classes("text-grey-6 text-xs")
+                _all_tools = [t.name for t in tool_registry.get_all_tools()]
+                _selected_tools = list(skill.tools) if skill else []
+                tool_checkboxes = {}
+                with ui.row().classes("w-full gap-4 flex-wrap"):
+                    for tname in _all_tools:
+                        cb = ui.checkbox(
+                            tname, value=tname in _selected_tools,
+                        )
+                        tool_checkboxes[tname] = cb
+
+                # Tags
+                tags_input = ui.input(
+                    "Tags (comma-separated)",
+                    value=", ".join(skill.tags) if skill and skill.tags else "",
+                ).classes("w-full")
+
+                # Instructions
+                ui.label("Instructions").classes("text-sm font-bold mt-4")
+                ui.label(
+                    "Step-by-step guide the agent follows when this skill matches. "
+                    "Use Markdown formatting."
+                ).classes("text-grey-6 text-xs")
+                instructions_input = ui.textarea(
+                    value=skill.instructions if skill else "",
+                ).classes("w-full").props('rows="12"')
+
+                # Token estimate
+                def _update_token_est():
+                    txt = instructions_input.value or ""
+                    est = len(txt) // 4
+                    token_label.text = f"~{est} tokens"
+
+                with ui.row().classes("w-full items-center"):
+                    token_label = ui.label("~0 tokens").classes("text-grey-5 text-sm")
+                    _update_token_est()
+                    instructions_input.on("blur", lambda: _update_token_est())
+
+                # Save/Cancel
+                with ui.row().classes("w-full justify-end gap-2 q-mt-md"):
+                    ui.button("Cancel", on_click=dlg.close).props("flat")
+
+                    def _save():
+                        _name = name_input.value.strip()
+                        _display = display_input.value.strip() or _name.replace("_", " ").title()
+                        _desc = desc_input.value.strip()
+                        _icon_val = icon_sel.value
+                        _instr = instructions_input.value.strip()
+                        _tools = [n for n, cb in tool_checkboxes.items() if cb.value]
+                        _tags = [t.strip() for t in tags_input.value.split(",") if t.strip()]
+
+                        if not _name:
+                            ui.notify("Name is required", type="warning")
+                            return
+                        if not _instr:
+                            ui.notify("Instructions are required", type="warning")
+                            return
+
+                        if is_edit:
+                            skills_mod.update_skill(
+                                name=_name,
+                                display_name=_display,
+                                icon=_icon_val,
+                                description=_desc,
+                                instructions=_instr,
+                                tools=_tools,
+                                tags=_tags,
+                            )
+                            ui.notify(f"✅ Skill '{_display}' updated", type="positive")
+                        else:
+                            skills_mod.create_skill(
+                                name=_name,
+                                display_name=_display,
+                                icon=_icon_val,
+                                description=_desc,
+                                instructions=_instr,
+                                tools=_tools,
+                                tags=_tags,
+                            )
+                            ui.notify(f"✅ Skill '{_display}' created", type="positive")
+                        dlg.close()
+                        _refresh_skills_list()
+
+                    ui.button("Save", icon="save", on_click=_save).props("color=primary")
+
+            dlg.open()
+
+        def _confirm_delete_skill(name):
+            sk = skills_mod.get_skill(name)
+            if not sk:
+                return
+            with ui.dialog() as dlg, ui.card():
+                ui.label(f"Delete skill '{sk.display_name}'?").classes("text-body1")
+                ui.label("This will permanently remove the skill files.").classes(
+                    "text-grey-6 text-sm"
+                )
+                with ui.row().classes("w-full justify-end gap-2 q-mt-md"):
+                    ui.button("Cancel", on_click=dlg.close).props("flat")
+
+                    def _do_delete():
+                        skills_mod.delete_skill(name)
+                        ui.notify(f"Skill '{sk.display_name}' deleted", type="info")
+                        dlg.close()
+                        _refresh_skills_list()
+
+                    ui.button("Delete", on_click=_do_delete).props("color=negative")
+            dlg.open()
+
+        def _duplicate_skill(name):
+            result = skills_mod.duplicate_skill(name)
+            if result:
+                ui.notify(f"✅ Duplicated as '{result.display_name}'", type="positive")
+                _refresh_skills_list()
+            else:
+                ui.notify("Failed to duplicate skill", type="negative")
+
+        # ── Create button + initial list ─────────────────────────────
+        with ui.row().classes("w-full justify-end q-mb-md"):
+            ui.button(
+                "Create Skill", icon="add",
+                on_click=lambda: _open_skill_editor(),
+            ).props("color=primary")
+
+        # Ensure skills are loaded
+        skills_mod.load_skills()
+        _refresh_skills_list()
+
     def _build_tools_tab() -> None:
         # ── Retrieval Compression selector ────────────────────────────
         ui.label("⚡ Retrieval Compression").classes("text-h6")
@@ -3401,7 +3687,7 @@ async def index():
             "filesystem", "shell", "gmail", "documents", "calendar", "timer",
             "url_reader", "calculator", "weather", "vision", "chart",
             "system_info", "conversation_search", "memory", "tracker",
-            "browser", "telegram",
+            "browser", "telegram", "task",
         }
         for tool in tool_registry.get_all_tools():
             if tool.name in skip_tools:
@@ -3845,7 +4131,7 @@ async def index():
             "reading web pages, and other everyday tasks."
         ).classes("text-grey-6 text-sm")
         ui.separator()
-        util_names = ["timer", "url_reader", "calculator", "weather", "chart", "system_info", "conversation_search"]
+        util_names = ["task", "timer", "url_reader", "calculator", "weather", "chart", "system_info", "conversation_search"]
         for uname in util_names:
             utool = tool_registry.get_tool(uname)
             if utool is None:
@@ -5535,6 +5821,85 @@ async def index():
                 ).props('dense borderless use-input input-debounce=300').classes("text-sm").style(
                     "min-width: 200px; max-width: 320px;"
                 ).tooltip("Select model for this thread")
+
+                # ── Per-thread skills override ───────────────────────────
+                import skills as _skills_mod
+                _skills_mod.load_skills()  # ensure loaded
+                _enabled_sk = _skills_mod.get_enabled_skills()
+                if _enabled_sk:
+                    _thread_sk_override = get_thread_skills_override(state.thread_id)
+                    _enabled_names = set(sk.name for sk in _enabled_sk)
+                    # If override is set, intersect with currently-enabled;
+                    # otherwise all enabled skills are active.
+                    _active_sk_names = (
+                        set(_thread_sk_override) & _enabled_names
+                        if _thread_sk_override is not None
+                        else set(_enabled_names)
+                    )
+
+                    _sk_count = len(_active_sk_names)
+                    _sk_label = (
+                        f"✨ {_sk_count} skill{'s' if _sk_count != 1 else ''}"
+                        if _sk_count > 0
+                        else "✨ No skills"
+                    )
+
+                    _sk_btn = ui.button(_sk_label).props(
+                        "flat dense no-caps size=sm"
+                    ).classes("text-sm").style("min-width: 100px;")
+                    with _sk_btn:
+                        with ui.menu().classes("q-pa-sm"):
+                            ui.label("Skills for this thread").classes(
+                                "text-xs text-grey-5 q-mb-xs"
+                            )
+
+                            def _update_sk_label():
+                                _cur = get_thread_skills_override(state.thread_id)
+                                _en = set(sk.name for sk in _skills_mod.get_enabled_skills())
+                                _act = set(_cur) & _en if _cur is not None else _en
+                                n = len(_act)
+                                _sk_btn.text = (
+                                    f"✨ {n} skill{'s' if n != 1 else ''}"
+                                    if n > 0 else "✨ No skills"
+                                )
+
+                            def _on_sk_toggle(name, val):
+                                _cur = get_thread_skills_override(state.thread_id)
+                                if _cur is None:
+                                    _cur = list(_enabled_names)
+                                names_set = set(_cur)
+                                if val:
+                                    names_set.add(name)
+                                else:
+                                    names_set.discard(name)
+                                set_thread_skills_override(state.thread_id, list(names_set))
+                                clear_agent_cache()
+                                _update_sk_label()
+
+                            async def _reset_skills():
+                                set_thread_skills_override(state.thread_id, None)
+                                clear_agent_cache()
+                                _update_sk_label()
+                                # Update all checkboxes to checked
+                                for _cbn, _cbw in _sk_cbs.items():
+                                    _cbw.value = True
+
+                            _sk_cbs = {}
+                            with ui.column().classes("gap-0"):
+                                for _sk in _enabled_sk:
+                                    _cb = ui.checkbox(
+                                        f"{_sk.icon} {_sk.display_name}",
+                                        value=_sk.name in _active_sk_names,
+                                        on_change=lambda e, n=_sk.name: _on_sk_toggle(n, e.value),
+                                    ).classes("text-sm")
+                                    _sk_cbs[_sk.name] = _cb
+
+                            ui.separator()
+                            ui.button(
+                                "Reset to global", icon="restart_alt",
+                                on_click=lambda: asyncio.create_task(_reset_skills()),
+                            ).props("flat dense size=sm")
+
             if state.messages:
                 ui.button(icon="download", on_click=_open_export).props("flat round").tooltip("Export")
 

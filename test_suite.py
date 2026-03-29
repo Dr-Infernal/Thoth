@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 # ── Ensure project root is on sys.path ──────────────────────────────────────
@@ -1213,6 +1214,16 @@ try:
     else:
         record("FAIL", "memory_tool: _save_memory missing merge message")
 
+    # _save_memory merges content instead of picking by length
+    if "old_content.lower() in new_content.lower()" in _save_src:
+        record("PASS", "memory_tool: _save_memory uses content merge (not length)")
+    else:
+        record("FAIL", "memory_tool: _save_memory should merge content not pick by len")
+    if 'len(content) >=' not in _save_src and 'len(content) >' not in _save_src:
+        record("PASS", "memory_tool: _save_memory no length-based content selection")
+    else:
+        record("FAIL", "memory_tool: _save_memory still uses length-based content pick")
+
     # find_by_subject exists and has correct params (category is optional)
     if callable(getattr(_mem_mod, "find_by_subject", None)):
         _fbs_sig = _inspect.signature(_mem_mod.find_by_subject)
@@ -1262,6 +1273,167 @@ try:
         record("PASS", "agent: auto-recall includes memory IDs")
     else:
         record("FAIL", "agent: auto-recall missing memory IDs")
+
+    # --- 17g. Auto-link on save ------------------------------------------
+    import knowledge_graph as _kg17
+
+    # _CATEGORY_RELATION_MAP exists and covers all entity types
+    if hasattr(_kg17, "_CATEGORY_RELATION_MAP"):
+        _crm = _kg17._CATEGORY_RELATION_MAP
+        record("PASS", "kg: _CATEGORY_RELATION_MAP exists")
+        for _et in _kg17.VALID_ENTITY_TYPES:
+            if _et in _crm:
+                record("PASS", f"kg: relation map has '{_et}'")
+            else:
+                record("FAIL", f"kg: relation map missing '{_et}'")
+    else:
+        record("FAIL", "kg: _CATEGORY_RELATION_MAP missing")
+
+    # _ensure_user_entity callable
+    if callable(getattr(_kg17, "_ensure_user_entity", None)):
+        record("PASS", "kg: _ensure_user_entity callable")
+    else:
+        record("FAIL", "kg: _ensure_user_entity missing")
+
+    # _auto_link_to_user callable
+    if callable(getattr(_kg17, "_auto_link_to_user", None)):
+        record("PASS", "kg: _auto_link_to_user callable")
+    else:
+        record("FAIL", "kg: _auto_link_to_user missing")
+
+    # save_entity source code calls _auto_link_to_user
+    _se_src = _inspect.getsource(_kg17.save_entity)
+    if "_auto_link_to_user" in _se_src:
+        record("PASS", "kg: save_entity calls _auto_link_to_user")
+    else:
+        record("FAIL", "kg: save_entity missing _auto_link_to_user call")
+
+    # Auto-link skips when _skip_reindex is True and when subject is "user"
+    if '_normalize_subject(subject) != "user"' in _se_src:
+        record("PASS", "kg: save_entity skips auto-link for User entity")
+    else:
+        record("FAIL", "kg: save_entity should skip auto-link for User")
+    if "_skip_reindex" in _se_src:
+        record("PASS", "kg: save_entity respects _skip_reindex for auto-link")
+    else:
+        record("FAIL", "kg: save_entity should check _skip_reindex")
+
+    # --- 17h. Memory decay & recall reinforcement -------------------------
+    import json as _json17
+
+    # _decay_multiplier exists and has correct signature
+    if callable(getattr(_kg17, "_decay_multiplier", None)):
+        record("PASS", "kg: _decay_multiplier callable")
+        # Test with a recent entity (should be ~1.0)
+        from datetime import datetime as _dt17
+        _recent = {"updated_at": _dt17.now().isoformat(), "properties": "{}"}
+        _decay_recent = _kg17._decay_multiplier(_recent)
+        if 0.95 <= _decay_recent <= 1.0:
+            record("PASS", f"kg: decay of recent entity = {_decay_recent:.3f}")
+        else:
+            record("FAIL", f"kg: decay of recent entity unexpected: {_decay_recent}")
+
+        # Test with a 60-day-old entity (should be ~0.81)
+        from datetime import timedelta as _td17
+        _old_ts = (_dt17.now() - _td17(days=60)).isoformat()
+        _old = {"updated_at": _old_ts, "properties": "{}"}
+        _decay_old = _kg17._decay_multiplier(_old)
+        if 0.7 <= _decay_old <= 0.9:
+            record("PASS", f"kg: decay of 60-day entity = {_decay_old:.3f}")
+        else:
+            record("FAIL", f"kg: decay of 60-day entity unexpected: {_decay_old}")
+
+        # Test with a 120-day-old entity (should be 0.7 floor)
+        _ancient_ts = (_dt17.now() - _td17(days=120)).isoformat()
+        _ancient = {"updated_at": _ancient_ts, "properties": "{}"}
+        _decay_ancient = _kg17._decay_multiplier(_ancient)
+        if abs(_decay_ancient - 0.7) < 0.01:
+            record("PASS", f"kg: decay of 120-day entity = {_decay_ancient:.3f} (floor)")
+        else:
+            record("FAIL", f"kg: decay of 120-day entity unexpected: {_decay_ancient}")
+
+        # Test with recalled_at refreshing old entity
+        _refreshed = {
+            "updated_at": _ancient_ts,
+            "properties": _json17.dumps({"recalled_at": _dt17.now().isoformat()}),
+        }
+        _decay_refreshed = _kg17._decay_multiplier(_refreshed)
+        if 0.95 <= _decay_refreshed <= 1.0:
+            record("PASS", f"kg: recalled entity refreshed = {_decay_refreshed:.3f}")
+        else:
+            record("FAIL", f"kg: recalled entity not refreshed: {_decay_refreshed}")
+    else:
+        record("FAIL", "kg: _decay_multiplier missing")
+
+    # _touch_recalled callable
+    if callable(getattr(_kg17, "_touch_recalled", None)):
+        record("PASS", "kg: _touch_recalled callable")
+    else:
+        record("FAIL", "kg: _touch_recalled missing")
+
+    # graph_enhanced_recall source calls _decay_multiplier and _touch_recalled
+    _ger_src = _inspect.getsource(_kg17.graph_enhanced_recall)
+    if "_decay_multiplier" in _ger_src:
+        record("PASS", "kg: graph_enhanced_recall uses _decay_multiplier")
+    else:
+        record("FAIL", "kg: graph_enhanced_recall missing _decay_multiplier")
+    if "_touch_recalled" in _ger_src:
+        record("PASS", "kg: graph_enhanced_recall uses _touch_recalled")
+    else:
+        record("FAIL", "kg: graph_enhanced_recall missing _touch_recalled")
+
+    # --- 17i. Orphan repair -----------------------------------------------
+
+    if callable(getattr(_kg17, "repair_orphan_entities", None)):
+        record("PASS", "kg: repair_orphan_entities callable")
+        _roe_src = _inspect.getsource(_kg17.repair_orphan_entities)
+        if "_ensure_user_entity" in _roe_src:
+            record("PASS", "kg: repair_orphan_entities uses _ensure_user_entity")
+        else:
+            record("FAIL", "kg: repair_orphan_entities missing _ensure_user_entity")
+        if "_CATEGORY_RELATION_MAP" in _roe_src:
+            record("PASS", "kg: repair_orphan_entities uses _CATEGORY_RELATION_MAP")
+        else:
+            record("FAIL", "kg: repair_orphan_entities missing _CATEGORY_RELATION_MAP")
+    else:
+        record("FAIL", "kg: repair_orphan_entities missing")
+
+    # extraction calls repair_orphan_entities
+    _re_src17 = _inspect.getsource(_me_mod.run_extraction)
+    if "repair_orphan_entities" in _re_src17:
+        record("PASS", "extraction: run_extraction calls repair_orphan_entities")
+    else:
+        record("FAIL", "extraction: run_extraction missing repair_orphan_entities")
+
+    # --- 17j. FAISS fallback in extraction relation resolution ------------
+
+    _dedup_src17 = _inspect.getsource(_me_mod._dedup_and_save)
+    if "semantic_search" in _dedup_src17 and "0.80" in _dedup_src17:
+        record("PASS", "extraction: _dedup_and_save has FAISS semantic fallback (0.80)")
+    else:
+        record("FAIL", "extraction: _dedup_and_save missing FAISS semantic fallback (0.80)")
+
+    # Pass 1 entity dedup also has FAISS fallback (catches synonyms like Father/Dad)
+    # Look for semantic_search call BEFORE the "if existing:" entity merge block
+    _pass1_faiss = _dedup_src17.find('semantic_search') < _dedup_src17.find('# Merge aliases')
+    if _pass1_faiss and 'f"{subject}: {content}"' in _dedup_src17:
+        record("PASS", "extraction: Pass 1 entity dedup has FAISS fallback")
+    else:
+        record("FAIL", "extraction: Pass 1 entity dedup should have FAISS fallback")
+
+    # Extraction uses content merge, not length-based pick
+    if "merged_content" in _dedup_src17 and "content_is_richer" not in _dedup_src17:
+        record("PASS", "extraction: _dedup_and_save uses content merge")
+    else:
+        record("FAIL", "extraction: _dedup_and_save should use content merge")
+
+    # --- 17k. Multi-message recall query ----------------------------------
+
+    _recall_src = _inspect.getsource(_agent_mod._pre_model_trim)
+    if "human_texts" in _recall_src and "human_texts[0]" in _recall_src and "2000" in _recall_src:
+        record("PASS", "agent: auto-recall uses multi-message query (newest-first, 2000 cap)")
+    else:
+        record("FAIL", "agent: auto-recall should use multi-message query")
 
 except Exception as e:
     record("FAIL", "memory system integrity", f"{type(e).__name__}: {e}")
@@ -1390,7 +1562,8 @@ try:
         get_session_manager as get_browser_session_manager,
         get_browser_history, append_browser_history, clear_browser_history,
         _block_if_background, _get_thread_id, _detect_channel,
-        _format_snapshot, _PROFILE_DIR, _HISTORY_PATH, _SNAPSHOT_JS,
+        _format_snapshot, _PROFILE_DIR, _HISTORY_PATH, _build_snapshot_js,
+        _snapshot_char_budget,
         _NavigateInput, _ClickInput, _TypeInput, _ScrollInput, _TabInput,
     )
 
@@ -1501,7 +1674,8 @@ try:
         "refCount": 1999,
     }
     _long_text = _format_snapshot(_long_snap)
-    assert len(_long_text) <= 25_100  # MAX_SNAPSHOT_CHARS + some fuzz
+    _budget = _snapshot_char_budget()
+    assert len(_long_text) <= _budget + 100  # budget + some fuzz
     assert "truncated" in _long_text
     record("PASS", "browser: snapshot truncation works")
 
@@ -1514,10 +1688,12 @@ try:
     assert "browser_history.json" in str(_HISTORY_PATH)
     record("PASS", "browser: history path correct")
 
-    # 19l. Snapshot JS is a non-empty string
-    assert isinstance(_SNAPSHOT_JS, str) and len(_SNAPSHOT_JS) > 100
-    assert "data-thoth-ref" in _SNAPSHOT_JS
-    assert "interactiveSelectors" in _SNAPSHOT_JS
+    # 19l. Snapshot JS builder returns a valid non-empty string
+    _js = _build_snapshot_js(100)
+    assert isinstance(_js, str) and len(_js) > 100
+    assert "data-thoth-ref" in _js
+    assert "interactiveSelectors" in _js
+    assert "MAX_ELEMENTS = 100" in _js
     record("PASS", "browser: snapshot JS valid")
 
     # 19m. javascript: URL rejection in navigate tool
@@ -1618,8 +1794,9 @@ try:
         if m.type == "tool" and (getattr(m, "name", "") or "").startswith("browser_")
     ]
     assert len(_b_indices) == 5, f"Expected 5 browser tool msgs, got {len(_b_indices)}"
-    if len(_b_indices) > _agent_mod._KEEP_BROWSER_SNAPSHOTS:
-        for i in _b_indices[:-_agent_mod._KEEP_BROWSER_SNAPSHOTS]:
+    _n_keep = _agent_mod._keep_browser_snapshots()
+    if len(_b_indices) > _n_keep:
+        for i in _b_indices[:-_n_keep]:
             m = _msgs_copy[i]
             content = m.content or ""
             url = ""
@@ -1678,8 +1855,8 @@ try:
         i for i, m in enumerate(_mixed_copy)
         if m.type == "tool" and (getattr(m, "name", "") or "").startswith("browser_")
     ]
-    if len(_b_mixed) > _agent_mod._KEEP_BROWSER_SNAPSHOTS:
-        for i in _b_mixed[:-_agent_mod._KEEP_BROWSER_SNAPSHOTS]:
+    if len(_b_mixed) > _n_keep:
+        for i in _b_mixed[:-_n_keep]:
             m = _mixed_copy[i]
             content = m.content or ""
             url = ""
@@ -1704,7 +1881,7 @@ try:
     assert _mixed_copy[1].name == "web_search"
     record("PASS", "browser compression: non-browser ToolMessages untouched")
 
-    # 20e. Fewer than _KEEP_BROWSER_SNAPSHOTS → no compression
+    # 20e. Fewer than _keep_browser_snapshots() → no compression
     _few = []
     for idx in range(2):
         tc_id = f"tc_f{idx}"
@@ -1716,15 +1893,15 @@ try:
         i for i, m in enumerate(_few_copy)
         if m.type == "tool" and (getattr(m, "name", "") or "").startswith("browser_")
     ]
-    if len(_b_few) > _agent_mod._KEEP_BROWSER_SNAPSHOTS:
+    if len(_b_few) > _n_keep:
         assert False, "Should not compress when count <= keep"
     for bi in _b_few:
         assert "Interactive elements" in _few_copy[bi].content
     record("PASS", "browser compression: ≤ keep count → no compression")
 
-    # 20f. _KEEP_BROWSER_SNAPSHOTS constant is 2
-    assert _agent_mod._KEEP_BROWSER_SNAPSHOTS == 2
-    record("PASS", "browser compression: _KEEP_BROWSER_SNAPSHOTS == 2")
+    # 20f. _keep_browser_snapshots() returns ≥ 2
+    assert _agent_mod._keep_browser_snapshots() >= 2
+    record("PASS", "browser compression: _keep_browser_snapshots() >= 2")
 
     # 20g. click/type results with action prefix — URL/title still extracted
     _click_msg = _make_browser_tool_msg(
@@ -1896,9 +2073,9 @@ try:
     else:
         record("FAIL", "activity: get_extraction_status()", f"got {_mem}")
 
-    # 22e. interval_hours is 6
-    if _mem.get("interval_hours") == 6.0:
-        record("PASS", "activity: extraction interval is 6h")
+    # 22e. interval_hours is 2
+    if _mem.get("interval_hours") == 2.0:
+        record("PASS", "activity: extraction interval is 2h")
     else:
         record("FAIL", "activity: extraction interval", f"got {_mem.get('interval_hours')}")
 
@@ -3825,7 +4002,7 @@ try:
     record("PASS", "v3.6: update_task accepts permission fields")
 
     # ── 31f. run_task_background sets ContextVars ────────────────────
-    _run_bg_section = _src_tasks31[_src_tasks31.index("def run_task_background"):][:4000]
+    _run_bg_section = _src_tasks31[_src_tasks31.index("def run_task_background"):][:5000]
     assert "_task_allowed_commands_var" in _run_bg_section, \
         "run_task_background should set _task_allowed_commands_var"
     assert "_task_allowed_recipients_var" in _run_bg_section, \
@@ -4857,7 +5034,7 @@ try:
 
     # ── 35bo. cloud auto-max context, local VRAM-controlled ──────────
     # get_context_size must auto-use native max for cloud models
-    _gcs_body = _mod_src35.split("def get_context_size")[1][:800]
+    _gcs_body = _mod_src35.split("def get_context_size")[1][:1200]
     assert 'is_cloud_model' in _gcs_body, "get_context_size must branch on cloud vs local"
     assert '_estimate_context_heuristic' in _gcs_body, "cloud fallback should use heuristic"
     # UI: local context dropdown must mention VRAM
@@ -4921,6 +5098,687 @@ try:
 except Exception as e:
     record("FAIL", "cloud model support tests", f"{type(e).__name__}: {e}")
     traceback.print_exc()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 36. SKILLS ENGINE
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("36. SKILLS ENGINE")
+print("=" * 70)
+
+try:
+    # ── 36a. skills.py imports cleanly ─────────────────────────────────
+    import skills as _skills_mod36
+    record("PASS", "skills: module imports cleanly")
+
+    # ── 36b. Skill dataclass fields ───────────────────────────────────
+    from skills import Skill
+    _sk = Skill(name="test", display_name="Test", icon="🧪",
+                description="desc", instructions="do stuff")
+    assert _sk.name == "test"
+    assert _sk.source == "user"
+    assert _sk.enabled_by_default is False
+    assert _sk.version == "1.0"
+    record("PASS", "skills: Skill dataclass defaults")
+
+    # ── 36c. YAML frontmatter parser ─────────────────────────────────
+    import tempfile, pathlib
+    from skills import _parse_skill_md
+    _tmp_dir36 = tempfile.mkdtemp()
+    _tmp_skill = pathlib.Path(_tmp_dir36) / "SKILL.md"
+    _tmp_skill.write_text(
+        "---\nname: test_skill\ndisplay_name: Test Skill\n"
+        "icon: \"🧪\"\ndescription: A test skill\n"
+        "tools:\n  - web_search\n  - memory\n"
+        "tags:\n  - testing\nversion: \"2.0\"\nauthor: Tester\n"
+        "enabled_by_default: true\n---\n\n"
+        "Step 1: Do something.\nStep 2: Do another thing.\n",
+        encoding="utf-8",
+    )
+    _parsed = _parse_skill_md(_tmp_skill, source="bundled")
+    assert _parsed is not None, "parser should return a Skill"
+    assert _parsed.name == "test_skill"
+    assert _parsed.display_name == "Test Skill"
+    assert _parsed.icon == "🧪"
+    assert _parsed.tools == ["web_search", "memory"]
+    assert _parsed.tags == ["testing"]
+    assert _parsed.version == "2.0"
+    assert _parsed.author == "Tester"
+    assert _parsed.enabled_by_default is True
+    assert _parsed.source == "bundled"
+    assert "Step 1" in _parsed.instructions
+    record("PASS", "skills: YAML frontmatter parser")
+
+    # ── 36d. Parser rejects missing name ──────────────────────────────
+    _bad_skill = pathlib.Path(_tmp_dir36) / "BAD.md"
+    _bad_skill.write_text("---\ndisplay_name: No Name\n---\n\nInstructions here.\n", encoding="utf-8")
+    assert _parse_skill_md(_bad_skill) is None, "should reject skills without name"
+    record("PASS", "skills: parser rejects missing name")
+
+    # ── 36e. Parser rejects empty body ────────────────────────────────
+    _empty_skill = pathlib.Path(_tmp_dir36) / "EMPTY.md"
+    _empty_skill.write_text("---\nname: empty_test\n---\n\n", encoding="utf-8")
+    assert _parse_skill_md(_empty_skill) is None, "should reject empty instructions"
+    record("PASS", "skills: parser rejects empty body")
+
+    # ── 36f. Parser rejects no frontmatter ────────────────────────────
+    _nofm_skill = pathlib.Path(_tmp_dir36) / "NOFM.md"
+    _nofm_skill.write_text("Just some text without frontmatter.\n", encoding="utf-8")
+    assert _parse_skill_md(_nofm_skill) is None, "should reject missing frontmatter"
+    record("PASS", "skills: parser rejects missing frontmatter")
+
+    # ── 36g. Bundled skills discovery ─────────────────────────────────
+    from skills import BUNDLED_SKILLS_DIR, _discover_skills
+    if BUNDLED_SKILLS_DIR.is_dir():
+        _discovered = _discover_skills()
+        assert len(_discovered) >= 8, f"expected ≥8 bundled skills, got {len(_discovered)}"
+        _expected_names = {
+            "daily_briefing", "deep_research", "meeting_notes", "brain_dump",
+            "task_automation", "humanizer", "self_reflection",
+            "proactive_agent", "web_navigator",
+        }
+        assert _expected_names.issubset(set(_discovered.keys())), \
+            f"missing bundled skills: {_expected_names - set(_discovered.keys())}"
+        for _sn, _sk36 in _discovered.items():
+            assert _sk36.source == "bundled", f"{_sn} should be bundled"
+            assert _sk36.instructions, f"{_sn} should have instructions"
+        record("PASS", f"skills: discovered {len(_discovered)} bundled skills")
+    else:
+        record("WARN", "skills: bundled_skills/ directory not found")
+
+    # ── 36h. load_skills + enable/disable ─────────────────────────────
+    # Reset persisted config so we test true defaults (manual testing may
+    # have enabled skills that persist across runs).
+    if _skills_mod36.CONFIG_PATH.exists():
+        _skills_mod36.CONFIG_PATH.unlink()
+    _skills_mod36._enabled.clear()
+    _skills_mod36._skills_cache.clear()
+    _skills_mod36.load_skills()
+    _all = _skills_mod36.get_all_skills()
+    assert len(_all) >= 5, f"expected ≥5 skills after load, got {len(_all)}"
+    # Bundled skills should be disabled by default
+    for _sk36 in _all:
+        if _sk36.source == "bundled":
+            assert not _skills_mod36.is_enabled(_sk36.name), \
+                f"bundled skill '{_sk36.name}' should be disabled by default"
+    # Enable one
+    _skills_mod36.set_enabled("daily_briefing", True)
+    assert _skills_mod36.is_enabled("daily_briefing"), "should be enabled after set"
+    # Disable it
+    _skills_mod36.set_enabled("daily_briefing", False)
+    assert not _skills_mod36.is_enabled("daily_briefing"), "should be disabled after set"
+    record("PASS", "skills: load_skills, enable/disable round-trip")
+
+    # ── 36i. get_skills_prompt ────────────────────────────────────────
+    # With no skills enabled, prompt should be empty
+    _empty_prompt = _skills_mod36.get_skills_prompt()
+    assert _empty_prompt == "", "prompt should be empty with no enabled skills"
+    # Enable two skills and check prompt
+    _skills_mod36.set_enabled("daily_briefing", True)
+    _skills_mod36.set_enabled("deep_research", True)
+    _prompt36 = _skills_mod36.get_skills_prompt()
+    assert "## Skills" in _prompt36, "prompt should have Skills header"
+    assert "Daily Briefing" in _prompt36
+    assert "Deep Research" in _prompt36
+    # With explicit names
+    _named_prompt = _skills_mod36.get_skills_prompt(["daily_briefing"])
+    assert "Daily Briefing" in _named_prompt
+    assert "Deep Research" not in _named_prompt
+    # With empty list
+    _empty_list_prompt = _skills_mod36.get_skills_prompt([])
+    assert _empty_list_prompt == "", "empty list → empty prompt"
+    # Clean up
+    _skills_mod36.set_enabled("daily_briefing", False)
+    _skills_mod36.set_enabled("deep_research", False)
+    record("PASS", "skills: get_skills_prompt with various inputs")
+
+    # ── 36j. estimate_tokens ──────────────────────────────────────────
+    _skills_mod36.set_enabled("daily_briefing", True)
+    _est = _skills_mod36.estimate_tokens()
+    assert _est > 0, "should estimate >0 tokens for enabled skill"
+    _est_none = _skills_mod36.estimate_tokens([])
+    assert _est_none == 0, "empty list → 0 tokens"
+    _skills_mod36.set_enabled("daily_briefing", False)
+    record("PASS", "skills: estimate_tokens")
+
+    # ── 36k. CRUD: create, update, delete ─────────────────────────────
+    _created = _skills_mod36.create_skill(
+        name="test_crud",
+        display_name="CRUD Test",
+        icon="🧪",
+        description="Test CRUD ops",
+        instructions="Step 1: Test.\nStep 2: Verify.",
+        tools=["web_search"],
+        tags=["test"],
+        enabled=True,
+    )
+    assert _created is not None, "create_skill should return a Skill"
+    assert _created.name == "test_crud"
+    assert _skills_mod36.is_enabled("test_crud"), "newly created should be enabled"
+    # Update
+    _updated = _skills_mod36.update_skill("test_crud", display_name="Updated CRUD")
+    assert _updated is not None
+    assert _updated.display_name == "Updated CRUD"
+    # The underlying file should be updated too
+    _re_parsed = _parse_skill_md(_updated.path / "SKILL.md", source="user")
+    assert _re_parsed.display_name == "Updated CRUD"
+    # Delete
+    assert _skills_mod36.delete_skill("test_crud") is True
+    assert _skills_mod36.get_skill("test_crud") is None
+    record("PASS", "skills: CRUD create/update/delete")
+
+    # ── 36l. duplicate_skill ──────────────────────────────────────────
+    _dup = _skills_mod36.duplicate_skill("daily_briefing")
+    assert _dup is not None
+    assert _dup.name == "daily_briefing_custom"
+    assert _dup.source == "user"
+    assert _skills_mod36.is_enabled("daily_briefing_custom")
+    # Clean up
+    _skills_mod36.delete_skill("daily_briefing_custom")
+    record("PASS", "skills: duplicate_skill")
+
+    # ── 36m. Config persistence ───────────────────────────────────────
+    from skills import CONFIG_PATH
+    assert CONFIG_PATH.exists(), "skills_config.json should exist after load_skills"
+    import json as _json36
+    _cfg = _json36.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    assert "skills" in _cfg, "config should have 'skills' key"
+    assert isinstance(_cfg["skills"], dict)
+    record("PASS", "skills: config persists to JSON")
+
+    # ── 36n. agent.py has skills injection in pre-model hook ──────────
+    _src_agent36 = (PROJECT_ROOT / "agent.py").read_text(encoding="utf-8")
+    assert "from skills import get_skills_prompt" in _src_agent36, \
+        "agent.py should import get_skills_prompt"
+    assert "get_thread_skills_override" in _src_agent36, \
+        "agent.py should read thread skills override"
+    assert "skills_msg" in _src_agent36 or "skills_text" in _src_agent36, \
+        "agent.py should build skills SystemMessage"
+    record("PASS", "skills: agent.py has skills injection")
+
+    # ── 36o. threads.py has skills_override support ───────────────────
+    _src_threads36 = (PROJECT_ROOT / "threads.py").read_text(encoding="utf-8")
+    assert "skills_override" in _src_threads36, \
+        "threads.py should have skills_override column"
+    assert "def get_thread_skills_override" in _src_threads36
+    assert "def set_thread_skills_override" in _src_threads36
+    record("PASS", "skills: threads.py has skills_override support")
+
+    # ── 36p. tasks.py has skills_override support ─────────────────────
+    _src_tasks36 = (PROJECT_ROOT / "tasks.py").read_text(encoding="utf-8")
+    assert "skills_override" in _src_tasks36, \
+        "tasks.py should have skills_override column"
+    assert "skills_override" in _src_tasks36[_src_tasks36.index("def update_task"):], \
+        "update_task should accept skills_override"
+    assert "skills_override" in _src_tasks36[_src_tasks36.index("def create_task"):], \
+        "create_task should accept skills_override"
+    record("PASS", "skills: tasks.py has skills_override support")
+
+    # ── 36q. app_nicegui.py has Skills tab ────────────────────────────
+    _src_app36 = (PROJECT_ROOT / "app_nicegui.py").read_text(encoding="utf-8")
+    assert "_build_skills_tab" in _src_app36, \
+        "app_nicegui.py should have _build_skills_tab function"
+    assert 'tab_skills' in _src_app36, \
+        "app_nicegui.py should have tab_skills defined"
+    assert "Skills" in _src_app36[_src_app36.index("_tab_map"):], \
+        "Skills should be in the tab map"
+    record("PASS", "skills: app_nicegui.py has Skills tab")
+
+    # ── 36r. app_nicegui.py has per-thread skills override ────────────
+    assert "get_thread_skills_override" in _src_app36, \
+        "app_nicegui.py should import get_thread_skills_override"
+    assert "set_thread_skills_override" in _src_app36, \
+        "app_nicegui.py should import set_thread_skills_override"
+    record("PASS", "skills: app_nicegui.py has per-thread skills override")
+
+    # ── 36s. Bundled SKILL.md files have valid YAML ───────────────────
+    import yaml as _yaml36
+    _bundled_dir = PROJECT_ROOT / "bundled_skills"
+    _bundled_count = 0
+    for _child in _bundled_dir.iterdir():
+        if _child.is_dir():
+            _md = _child / "SKILL.md"
+            if _md.exists():
+                _text = _md.read_text(encoding="utf-8")
+                import re as _re36
+                _match = _re36.match(r"\A---\s*\n(.*?)\n---\s*\n", _text, _re36.DOTALL)
+                assert _match, f"{_md} missing frontmatter"
+                _meta = _yaml36.safe_load(_match.group(1))
+                assert isinstance(_meta, dict), f"{_md} frontmatter not a dict"
+                assert "name" in _meta, f"{_md} missing name"
+                assert "display_name" in _meta, f"{_md} missing display_name"
+                assert "icon" in _meta, f"{_md} missing icon"
+                assert "description" in _meta, f"{_md} missing description"
+                _body = _text[_match.end():].strip()
+                assert len(_body) > 50, f"{_md} body too short"
+                _bundled_count += 1
+    assert _bundled_count >= 5, f"expected ≥5 bundled skills, found {_bundled_count}"
+    record("PASS", f"skills: {_bundled_count} bundled SKILL.md files validated")
+
+    # ── 36t. task runner propagates skills_override ───────────────────
+    _run_bg_section36 = _src_tasks36[_src_tasks36.index("def run_task_background"):]
+    _run_bg_section36 = _run_bg_section36[:5000]
+    assert "skills_override" in _run_bg_section36, \
+        "run_task_background should handle skills_override"
+    assert "set_thread_skills_override" in _run_bg_section36, \
+        "run_task_background should set skills_override on thread"
+    record("PASS", "skills: task runner propagates skills_override")
+
+    # ── 36u. User skill overrides bundled by same name ────────────────
+    # Create a user skill with same name as bundled "daily_briefing"
+    _override_dir = _skills_mod36.USER_SKILLS_DIR / "daily_briefing"
+    _override_dir.mkdir(parents=True, exist_ok=True)
+    (_override_dir / "SKILL.md").write_text(
+        "---\nname: daily_briefing\ndisplay_name: Overridden Briefing\n"
+        "icon: \"🔄\"\ndescription: User override\n---\n\n"
+        "Custom instructions here.\n",
+        encoding="utf-8",
+    )
+    _rediscovered = _skills_mod36._discover_skills()
+    assert _rediscovered["daily_briefing"].source == "user", \
+        "user skill should override bundled"
+    assert _rediscovered["daily_briefing"].display_name == "Overridden Briefing"
+    # Clean up
+    import shutil as _shutil36
+    _shutil36.rmtree(_override_dir, ignore_errors=True)
+    _skills_mod36.load_skills()  # reload to restore bundled
+    record("PASS", "skills: user skill overrides bundled by same name")
+
+    # ── 36v. Comma-separated tools parsing ────────────────────────────
+    _csv_skill = pathlib.Path(_tmp_dir36) / "CSV.md"
+    _csv_skill.write_text(
+        "---\nname: csv_test\ndisplay_name: CSV Test\nicon: \"📊\"\n"
+        "description: csv tools\ntools: \"web_search, memory, calendar\"\n"
+        "tags: \"test, integration\"\n---\n\nDo stuff.\n",
+        encoding="utf-8",
+    )
+    _csv_parsed = _parse_skill_md(_csv_skill, source="user")
+    assert _csv_parsed is not None
+    assert _csv_parsed.tools == ["web_search", "memory", "calendar"], \
+        f"expected 3 tools, got {_csv_parsed.tools}"
+    assert _csv_parsed.tags == ["test", "integration"], \
+        f"expected 2 tags, got {_csv_parsed.tags}"
+    record("PASS", "skills: comma-separated tools/tags parsing")
+
+    # ── 36w. Special characters in instructions ──────────────────────
+    _special_skill = pathlib.Path(_tmp_dir36) / "SPECIAL.md"
+    _special_skill.write_text(
+        "---\nname: special_test\ndisplay_name: 'Special <Test> & \"Stuff\"'\n"
+        "icon: \"⚠️\"\ndescription: testing special chars\n---\n\n"
+        'Use "quotes" and <brackets> & ampersands.\n'
+        "Also use: $dollar, %percent, @at, #hash.\n",
+        encoding="utf-8",
+    )
+    _special_parsed = _parse_skill_md(_special_skill, source="user")
+    assert _special_parsed is not None
+    assert '"quotes"' in _special_parsed.instructions
+    assert "<brackets>" in _special_parsed.instructions
+    record("PASS", "skills: special characters in instructions")
+
+    # ── 36x. Unicode in skill name/description ───────────────────────
+    _unicode_skill = pathlib.Path(_tmp_dir36) / "UNICODE.md"
+    _unicode_skill.write_text(
+        "---\nname: unicode_test\ndisplay_name: '日本語テスト'\n"
+        "icon: \"🇯🇵\"\ndescription: 'Ünïcödé dëscríptión'\n---\n\n"
+        "Instructions with émojis 🎉 and ñ.\n",
+        encoding="utf-8",
+    )
+    _unicode_parsed = _parse_skill_md(_unicode_skill, source="user")
+    assert _unicode_parsed is not None
+    assert _unicode_parsed.display_name == "日本語テスト"
+    assert "émojis" in _unicode_parsed.instructions
+    record("PASS", "skills: Unicode in skill name/description")
+
+    # ── 36y. Skills prompt header text verification ──────────────────
+    _skills_mod36.set_enabled("daily_briefing", True)
+    _hdr_prompt = _skills_mod36.get_skills_prompt()
+    assert _hdr_prompt.startswith("## Skills")
+    assert "user-configured workflows" in _hdr_prompt
+    assert "step-by-step instructions" in _hdr_prompt
+    _skills_mod36.set_enabled("daily_briefing", False)
+    record("PASS", "skills: prompt header text verified")
+
+    # ── 36z. get_skills_prompt with nonexistent skill name ───────────
+    _bogus_prompt = _skills_mod36.get_skills_prompt(["nonexistent_skill_xyz"])
+    assert _bogus_prompt == "", "nonexistent skill name → empty prompt"
+    record("PASS", "skills: get_skills_prompt ignores nonexistent names")
+
+    # ── 36aa. update preserves unchanged fields ──────────────────────
+    _upd_sk = _skills_mod36.create_skill(
+        name="test_update_preserve",
+        display_name="PreserveTest",
+        icon="🔒",
+        description="preserve fields",
+        instructions="Original instructions.",
+        tools=["web_search"],
+        tags=["prod"],
+        enabled=True,
+    )
+    # Update only icon
+    _updated_sk = _skills_mod36.update_skill("test_update_preserve", icon="🆕")
+    assert _updated_sk is not None
+    assert _updated_sk.icon == "🆕"
+    assert _updated_sk.display_name == "PreserveTest"
+    assert _updated_sk.description == "preserve fields"
+    assert _updated_sk.instructions == "Original instructions."
+    assert _updated_sk.tools == ["web_search"]
+    assert _updated_sk.tags == ["prod"]
+    _skills_mod36.delete_skill("test_update_preserve")
+    record("PASS", "skills: update preserves unchanged fields")
+
+    # ── 36ab. delete rejects bundled skills ──────────────────────────
+    assert _skills_mod36.delete_skill("daily_briefing") is False, \
+        "should not delete bundled skill"
+    assert _skills_mod36.get_skill("daily_briefing") is not None, \
+        "daily_briefing should still exist"
+    record("PASS", "skills: delete rejects bundled skills")
+
+    # ── 36ac. duplicate with custom name ─────────────────────────────
+    _dup_custom = _skills_mod36.duplicate_skill("deep_research", new_name="my_research")
+    assert _dup_custom is not None
+    assert _dup_custom.name == "my_research"
+    assert _dup_custom.source == "user"
+    assert _dup_custom.display_name == "Deep Research (Custom)"
+    _skills_mod36.delete_skill("my_research")
+    record("PASS", "skills: duplicate with custom name")
+
+    # ── 36ad. duplicate nonexistent skill returns None ───────────────
+    assert _skills_mod36.duplicate_skill("nonexistent_xyz") is None
+    record("PASS", "skills: duplicate nonexistent returns None")
+
+    # ── 36ae. get_skill returns None for unknown name ────────────────
+    assert _skills_mod36.get_skill("no_such_skill") is None
+    record("PASS", "skills: get_skill returns None for unknown")
+
+    # ── 36af. get_enabled_skills / get_enabled_skill_names ───────────
+    _skills_mod36.set_enabled("meeting_notes", True)
+    _en_skills = _skills_mod36.get_enabled_skills()
+    _en_names = _skills_mod36.get_enabled_skill_names()
+    assert any(s.name == "meeting_notes" for s in _en_skills), \
+        "meeting_notes should be in enabled list"
+    assert "meeting_notes" in _en_names
+    _skills_mod36.set_enabled("meeting_notes", False)
+    record("PASS", "skills: get_enabled_skills/names")
+
+    # ── 36ag. estimate_tokens with explicit skill names ──────────────
+    _est_names = _skills_mod36.estimate_tokens(["daily_briefing", "deep_research"])
+    assert _est_names > 0, "estimate for 2 skills should be >0"
+    _est_one = _skills_mod36.estimate_tokens(["daily_briefing"])
+    assert _est_one > 0
+    assert _est_names > _est_one, "2 skills should estimate more than 1"
+    record("PASS", "skills: estimate_tokens with explicit names")
+
+    # ── 36ah. Config corruption recovery ─────────────────────────────
+    from skills import CONFIG_PATH as _cp36
+    _backup_cfg = _cp36.read_text(encoding="utf-8") if _cp36.exists() else ""
+    _cp36.write_text("NOT VALID JSON{{{", encoding="utf-8")
+    # _load_config should return empty dict, not crash
+    _fallback = _skills_mod36._load_config()
+    assert isinstance(_fallback, dict), "corrupt config should yield empty dict"
+    assert len(_fallback) == 0
+    # Restore
+    _cp36.write_text(_backup_cfg, encoding="utf-8")
+    record("PASS", "skills: config corruption recovery")
+
+    # ── 36ai. Multiple enable/disable cycles ─────────────────────────
+    for _ in range(5):
+        _skills_mod36.set_enabled("brain_dump", True)
+        assert _skills_mod36.is_enabled("brain_dump")
+        _skills_mod36.set_enabled("brain_dump", False)
+        assert not _skills_mod36.is_enabled("brain_dump")
+    record("PASS", "skills: multiple enable/disable cycles")
+
+    # ── 36aj. Parser with minimal frontmatter (auto-defaults) ────────
+    _min_skill = pathlib.Path(_tmp_dir36) / "MIN.md"
+    _min_skill.write_text(
+        "---\nname: minimal_skill\n---\n\nMinimal instructions.\n",
+        encoding="utf-8",
+    )
+    _min_parsed = _parse_skill_md(_min_skill, source="user")
+    assert _min_parsed is not None
+    assert _min_parsed.display_name == "Minimal Skill"  # auto-generated from name
+    assert _min_parsed.icon == "✨"  # default icon
+    assert _min_parsed.version == "1.0"
+    assert _min_parsed.tools == []
+    assert _min_parsed.tags == []
+    assert _min_parsed.author == "User"
+    record("PASS", "skills: parser auto-defaults for minimal frontmatter")
+
+    # ── 36ak. duplicate_task copies skills_override ──────────────────
+    _dup_src = _src_tasks36[_src_tasks36.index("def duplicate_task"):]
+    _dup_src = _dup_src[:1000]
+    assert "skills_override" in _dup_src, \
+        "duplicate_task should pass skills_override to create_task"
+    record("PASS", "skills: duplicate_task copies skills_override")
+
+    # ── 36al. YAML frontmatter with invalid YAML ─────────────────────
+    _bad_yaml = pathlib.Path(_tmp_dir36) / "BADYAML.md"
+    _bad_yaml.write_text(
+        "---\nname: bad\n  indentation: broken\n---\n\nStuff.\n",
+        encoding="utf-8",
+    )
+    assert _parse_skill_md(_bad_yaml) is None, "invalid YAML → None"
+    record("PASS", "skills: parser rejects invalid YAML")
+
+    # ── 36am. Parser rejects frontmatter that is not a dict ──────────
+    _list_fm = pathlib.Path(_tmp_dir36) / "LISTFM.md"
+    _list_fm.write_text(
+        "---\n- item1\n- item2\n---\n\nInstructions.\n",
+        encoding="utf-8",
+    )
+    assert _parse_skill_md(_list_fm) is None, "list frontmatter → None"
+    record("PASS", "skills: parser rejects list frontmatter")
+
+    # ── 36an. skills.py DATA_DIR / USER_SKILLS_DIR existence ─────────
+    assert _skills_mod36.DATA_DIR.is_dir(), "DATA_DIR should exist"
+    assert _skills_mod36.USER_SKILLS_DIR.is_dir(), "USER_SKILLS_DIR should exist"
+    record("PASS", "skills: DATA_DIR and USER_SKILLS_DIR exist")
+
+    # ── 36ao. load_skills is idempotent ──────────────────────────────
+    _skills_mod36.load_skills()
+    _count1 = len(_skills_mod36.get_all_skills())
+    _skills_mod36.load_skills()
+    _count2 = len(_skills_mod36.get_all_skills())
+    assert _count1 == _count2, f"load_skills not idempotent: {_count1} vs {_count2}"
+    record("PASS", "skills: load_skills is idempotent")
+
+    # ── 36ap. Thread DB skills_override round-trip ──────────────────
+    import sqlite3 as _sql36
+    from threads import (
+        DB_PATH as _threads_db36,
+        get_thread_skills_override,
+        set_thread_skills_override,
+    )
+    _test_tid36 = f"__TEST_skills_{uuid.uuid4().hex[:8]}"
+    _conn36 = _sql36.connect(_threads_db36)
+    _conn36.execute(
+        "INSERT OR IGNORE INTO thread_meta (thread_id, name, created_at, updated_at) "
+        "VALUES (?, ?, datetime('now'), datetime('now'))",
+        (_test_tid36, "Skills Test Thread"),
+    )
+    _conn36.commit()
+    _conn36.close()
+    try:
+        assert get_thread_skills_override(_test_tid36) is None, "default should be None"
+        set_thread_skills_override(_test_tid36, ["daily_briefing", "deep_research"])
+        _got36 = get_thread_skills_override(_test_tid36)
+        assert _got36 == ["daily_briefing", "deep_research"], f"got {_got36}"
+        set_thread_skills_override(_test_tid36, None)
+        assert get_thread_skills_override(_test_tid36) is None, "should be None after clear"
+        record("PASS", "skills: thread DB skills_override round-trip")
+    finally:
+        _conn36 = _sql36.connect(_threads_db36)
+        _conn36.execute("DELETE FROM thread_meta WHERE thread_id = ?", (_test_tid36,))
+        _conn36.commit()
+        _conn36.close()
+
+    # ── 36aq. Task DB skills_override round-trip ─────────────────────
+    from tasks import create_task as _ct36, get_task as _gt36, update_task as _ut36, delete_task as _dt36
+    _task_id36 = _ct36(
+        name="__TEST_skills_task_suite",
+        prompts=["test prompt"],
+        skills_override=["brain_dump", "deep_research"],
+    )
+    try:
+        _task36 = _gt36(_task_id36)
+        assert _task36 is not None
+        assert _task36["skills_override"] == ["brain_dump", "deep_research"], \
+            f"got {_task36['skills_override']}"
+        _ut36(_task_id36, skills_override=["daily_briefing"])
+        _task36b = _gt36(_task_id36)
+        assert _task36b["skills_override"] == ["daily_briefing"]
+        _ut36(_task_id36, skills_override=None)
+        _task36c = _gt36(_task_id36)
+        assert _task36c["skills_override"] is None
+        record("PASS", "skills: task DB skills_override create→update→clear round-trip")
+    finally:
+        _dt36(_task_id36)
+
+    # ── 36ar. duplicate_task copies skills_override (functional) ─────
+    from tasks import duplicate_task as _dup_task36
+    _orig_id36 = _ct36(
+        name="__TEST_skills_dup_orig",
+        prompts=["dup test"],
+        skills_override=["deep_research", "meeting_notes"],
+    )
+    try:
+        _copy_id36 = _dup_task36(_orig_id36)
+        assert _copy_id36 is not None
+        _copy36 = _gt36(_copy_id36)
+        assert _copy36["skills_override"] == ["deep_research", "meeting_notes"], \
+            f"duplicate got {_copy36['skills_override']}"
+        _dt36(_copy_id36)
+        record("PASS", "skills: duplicate_task copies skills_override (functional)")
+    finally:
+        _dt36(_orig_id36)
+
+    # Clean up temp files
+    _shutil36.rmtree(_tmp_dir36, ignore_errors=True)
+
+except Exception as e:
+    record("FAIL", "skills engine tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GROUP 37 – SMOKE REGRESSION  (quick sanity checks across existing features)
+# ═══════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("37. SMOKE REGRESSION")
+print("=" * 70)
+
+try:
+    # ── 37a. Thread DB: create, read, delete ──────────────────────────
+    import sqlite3 as _sql37
+    from threads import DB_PATH as _threads_db37
+    _tid37 = f"__SMOKE_{uuid.uuid4().hex[:8]}"
+    _conn37 = _sql37.connect(_threads_db37)
+    _conn37.execute(
+        "INSERT OR IGNORE INTO thread_meta (thread_id, name, created_at, updated_at) "
+        "VALUES (?, ?, datetime('now'), datetime('now'))",
+        (_tid37, "Smoke Test"),
+    )
+    _conn37.commit()
+    _row37 = _conn37.execute(
+        "SELECT name FROM thread_meta WHERE thread_id = ?", (_tid37,)
+    ).fetchone()
+    assert _row37 and _row37[0] == "Smoke Test"
+    _conn37.execute("DELETE FROM thread_meta WHERE thread_id = ?", (_tid37,))
+    _conn37.commit()
+    _conn37.close()
+    record("PASS", "smoke: thread DB CRUD")
+
+    # ── 37b. Task DB: create, read, delete ────────────────────────────
+    from tasks import create_task as _ct37, get_task as _gt37, delete_task as _dt37
+    _task_id37 = _ct37(name="__SMOKE_task", prompts=["hello"], description="smoke")
+    _task37 = _gt37(_task_id37)
+    assert _task37 is not None and _task37["name"] == "__SMOKE_task"
+    _dt37(_task_id37)
+    assert _gt37(_task_id37) is None
+    record("PASS", "smoke: task DB CRUD")
+
+    # ── 37c. Tool registry populated ──────────────────────────────────
+    from tools.registry import get_all_tools
+    _tools37 = get_all_tools()
+    assert len(_tools37) >= 10, f"expected ≥10 tools, got {len(_tools37)}"
+    record("PASS", f"smoke: tool registry has {len(_tools37)} tools")
+
+    # ── 37d. Prompt builder returns content ───────────────────────────
+    _prompt_src37 = (PROJECT_ROOT / "agent.py").read_text(encoding="utf-8")
+    assert "AGENT_SYSTEM_PROMPT" in _prompt_src37
+    record("PASS", "smoke: agent.py has system prompt logic")
+
+    # ── 37e. Models list available ────────────────────────────────────
+    import models as _models37
+    assert hasattr(_models37, "list_all_models"), \
+        "models.py should have list_all_models"
+    record("PASS", "smoke: models module accessible")
+
+    # ── 37f. Voice module imports ─────────────────────────────────────
+    import voice as _voice37
+    assert hasattr(_voice37, "VoiceService"), "voice module should have VoiceService class"
+    record("PASS", "smoke: voice module imports")
+
+    # ── 37g. TTS module imports ───────────────────────────────────────
+    import tts as _tts37
+    assert hasattr(_tts37, "TTSService"), "tts module should have TTSService class"
+    record("PASS", "smoke: tts module imports")
+
+    # ── 37h. Memory module imports ────────────────────────────────────
+    import memory as _mem37
+    assert hasattr(_mem37, "search_memories"), "memory module should have search_memories"
+    record("PASS", "smoke: memory module imports")
+
+    # ── 37i. Documents module imports ─────────────────────────────────
+    import documents as _docs37
+    record("PASS", "smoke: documents module imports")
+
+    # ── 37j. Notifications module imports ─────────────────────────────
+    import notifications as _notif37
+    record("PASS", "smoke: notifications module imports")
+
+    # ── 37k. Workflows module imports ─────────────────────────────────
+    import workflows as _wf37
+    record("PASS", "smoke: workflows module imports")
+
+    # ── 37l. Channel modules import ───────────────────────────────────
+    from channels import config as _chcfg37
+    from channels import email as _chemail37
+    from channels import telegram as _chtg37
+    record("PASS", "smoke: channel modules import")
+
+    # ── 37m. Data reader imports ──────────────────────────────────────
+    import data_reader as _dr37
+    record("PASS", "smoke: data_reader module imports")
+
+    # ── 37n. Memory extraction imports ────────────────────────────────
+    import memory_extraction as _me37
+    record("PASS", "smoke: memory_extraction module imports")
+
+    # ── 37o. Requirements.txt exists and has content ──────────────────
+    _req37 = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert len(_req37.strip().splitlines()) >= 10, "requirements.txt too short"
+    record("PASS", "smoke: requirements.txt has content")
+
+    # ── 37p. Launcher module imports ──────────────────────────────────
+    assert (PROJECT_ROOT / "launcher.py").exists()
+    import ast as _ast37p
+    _ast37p.parse((PROJECT_ROOT / "launcher.py").read_text(encoding="utf-8"))
+    record("PASS", "smoke: launcher.py parses cleanly")
+
+    # ── 37q. App NiceGUI parses cleanly ───────────────────────────────
+    _ast37p.parse((PROJECT_ROOT / "app_nicegui.py").read_text(encoding="utf-8"))
+    record("PASS", "smoke: app_nicegui.py parses cleanly")
+
+    # ── 37r. Skills module round-trip (quick) ─────────────────────────
+    import skills as _sk37
+    _sk37.load_skills()
+    assert len(_sk37.get_all_skills()) >= 5
+    record("PASS", "smoke: skills load_skills returns ≥5")
+
+except Exception as e:
+    record("FAIL", "smoke regression tests", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
 print("\n" + "=" * 70)
 print("SUMMARY")
 print("=" * 70)

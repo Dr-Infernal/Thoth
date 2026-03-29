@@ -123,7 +123,9 @@ class FileSystemTool(BaseTool):
         return "Use the individual file operations instead."
 
 
-_MAX_READ_CHARS = 80_000  # ~24K tokens — main agent trims further via _pre_model_trim
+def _max_read_chars() -> int:
+    from models import get_tool_budget
+    return get_tool_budget(0.25, floor=30_000, ceiling=300_000)
 
 
 def _normalise_path(file_path: str, root_dir: str) -> str:
@@ -245,21 +247,22 @@ def _wrap_tool_with_path_fix(tool, root_dir: str):
 def _make_pdf_aware_read_tool(root_dir: str):
     """Create a ``read_file`` StructuredTool that can read both text and PDF
     files.  Paths are resolved relative to *root_dir* and validated to stay
-    within the sandbox.  Output is capped at ``_MAX_READ_CHARS`` to prevent
+    within the sandbox.  Output is capped dynamically to prevent
     a single tool result from blowing up the agent context window."""
     import os
     from pathlib import Path
     from langchain_core.tools import StructuredTool
 
     def _cap(text: str, label: str = "") -> str:
-        """Truncate *text* to _MAX_READ_CHARS with a notice if trimmed."""
-        if len(text) <= _MAX_READ_CHARS:
+        """Truncate *text* to the dynamic budget with a notice if trimmed."""
+        limit = _max_read_chars()
+        if len(text) <= limit:
             return text
         suffix = (
-            f"\n\n[Truncated — showing first {_MAX_READ_CHARS:,} characters"
+            f"\n\n[Truncated — showing first {limit:,} characters"
             f"{label}. File is {len(text):,} characters total.]"
         )
-        return text[:_MAX_READ_CHARS] + suffix
+        return text[:limit] + suffix
 
     def read_file(file_path: str) -> str:
         """Read the contents of a file. For PDF files, extracts all text
@@ -292,7 +295,7 @@ def _make_pdf_aware_read_tool(root_dir: str):
         from data_reader import is_data_file, read_data_file
         if is_data_file(resolved.name):
             return read_data_file(resolved, sheet=sheet_name,
-                                  max_chars=_MAX_READ_CHARS)
+                                  max_chars=_max_read_chars())
 
         if resolved.suffix.lower() == ".pdf":
             try:

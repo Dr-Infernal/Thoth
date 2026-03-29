@@ -13,6 +13,7 @@ langchain-openai
 langchain-text-splitters
 langgraph
 langgraph-checkpoint-sqlite
+tiktoken
 
 # ── Vector Store & Embeddings ────────────────────────────────────────────────
 faiss-cpu
@@ -65,6 +66,7 @@ youtube-search
 numpy
 requests
 pydantic
+pyyaml
 
 # ── Wolfram Alpha ───────────────────────────────────────────────────────────
 wolframalpha

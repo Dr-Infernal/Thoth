@@ -1,0 +1,240 @@
+# =============================================================================
+# release.yml — Build, sign, and publish Thoth installers
+#
+# Triggers:
+#   • Push a tag like v3.7.0   → full build + GitHub Release (draft)
+#   • Manual workflow_dispatch  → build only (no release), for testing
+#
+# Jobs:
+#   test           → run test suite
+#   build-windows  → self-contained .exe (Inno Setup)
+#   build-macos    → signed + notarized .pkg
+#   release        → create GitHub Release with both artifacts
+#
+# Required secrets (set in repo Settings → Secrets → Actions):
+#   APPLE_APPLICATION_P12   Base64 of Developer ID Application .p12
+#   APPLE_INSTALLER_P12     Base64 of Developer ID Installer .p12
+#   APPLE_P12_PASSWORD      Password for both .p12 files
+#   APPLE_ID                Apple ID email (for notarization)
+#   APPLE_APP_PASSWORD      App-specific password (appleid.apple.com)
+#   APPLE_TEAM_ID           Apple Developer Team ID
+#
+# Windows signing (Certum) — uncomment when certificate is purchased:
+#   CERTUM_PASSWORD         Certum SimplySign credentials
+# =============================================================================
+
+name: Release — Build & Sign Installers
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version override (leave blank to use tag or default)'
+        required: false
+        default: ''
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEFAULT_VERSION: "3.7.0"
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  #  Run test suite before building
+  # ════════════════════════════════════════════════════════════════════════════
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Ollama
+        run: |
+          brew install ollama
+          ollama serve &
+          sleep 5
+          ollama pull qwen3:1.7b
+
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+
+      - name: Run test suite
+        run: python test_suite.py
+
+  # ════════════════════════════════════════════════════════════════════════════
+  #  Build Windows installer (.exe) — self-contained
+  # ════════════════════════════════════════════════════════════════════════════
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # System Python (used by build script to find tkinter for bundling)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build self-contained installer
+        run: |
+          Write-Host "Building installer (downloads Python, installs packages, compiles)..."
+          .\installer\build_installer.ps1
+
+      # ── Windows code signing (PLACEHOLDER — uncomment after Certum purchase)
+      # - name: Sign installer with Certum
+      #   env:
+      #     CERTUM_PASSWORD: ${{ secrets.CERTUM_PASSWORD }}
+      #   run: |
+      #     # Option A: jsign (cloud-based, works with SimplySign)
+      #     choco install jsign --yes --no-progress
+      #     jsign --storetype DIGICERTONE `
+      #           --storepass "$env:CERTUM_PASSWORD" `
+      #           --alias "Open Source Code Signing" `
+      #           --tsaurl http://time.certum.pl `
+      #           dist\ThothSetup_3.7.0.exe
+      #
+      #     # Option B: signtool (if using USB token / local cert)
+      #     # signtool sign /fd SHA256 /tr http://time.certum.pl /td SHA256 `
+      #     #   /f cert.pfx /p "$env:CERTUM_PASSWORD" dist\ThothSetup_3.7.0.exe
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ThothSetup-Windows
+          path: dist/ThothSetup_*.exe
+          retention-days: 90
+
+  # ════════════════════════════════════════════════════════════════════════════
+  #  Build macOS installer (.pkg) — signed + notarized
+  # ════════════════════════════════════════════════════════════════════════════
+  build-macos:
+    needs: test
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    env:
+      CODESIGN_IDENTITY: "Developer ID Application: Siddharth Sachar (33PQRTZLNW)"
+      PKG_SIGN_IDENTITY: "Developer ID Installer: Siddharth Sachar (33PQRTZLNW)"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Import Apple certificates into a temporary keychain ────────────────
+      - name: Import Apple certificates
+        env:
+          APPLICATION_P12: ${{ secrets.APPLE_APPLICATION_P12 }}
+          INSTALLER_P12: ${{ secrets.APPLE_INSTALLER_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+        run: |
+          # Create a temporary keychain for this build
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import Developer ID Application certificate
+          echo "$APPLICATION_P12" | base64 --decode > "$RUNNER_TEMP/app.p12"
+          security import "$RUNNER_TEMP/app.p12" -k "$KEYCHAIN_PATH" \
+            -P "$P12_PASSWORD" -T /usr/bin/codesign
+
+          # Import Developer ID Installer certificate
+          echo "$INSTALLER_P12" | base64 --decode > "$RUNNER_TEMP/inst.p12"
+          security import "$RUNNER_TEMP/inst.p12" -k "$KEYCHAIN_PATH" \
+            -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+
+          # Import Apple Developer ID intermediate certificate (G2)
+          curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
+               -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH"
+
+          # Allow codesign to access the imported private keys
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add temp keychain to the search list
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security default-keychain -d user | tr -d '"')
+
+          # Clean up .p12 files from disk
+          rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/inst.p12"
+
+      # ── Build the self-contained .app and .pkg ─────────────────────────────
+      - name: Build, sign, and package
+        run: |
+          chmod +x installer/build_mac_app.sh
+          ./installer/build_mac_app.sh "${{ env.DEFAULT_VERSION }}"
+
+      # ── Notarize with Apple ────────────────────────────────────────────────
+      - name: Notarize .pkg
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ARCH="$(uname -m)"
+          PKG_PATH="dist/Thoth-${{ env.DEFAULT_VERSION }}-macOS-${ARCH}.pkg"
+
+          echo "Submitting $PKG_PATH for notarization..."
+          xcrun notarytool submit "$PKG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 30m
+
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "$PKG_PATH"
+
+          echo "Verifying..."
+          spctl --assess --type install "$PKG_PATH"
+          echo "Notarization complete."
+
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Thoth-macOS
+          path: dist/Thoth-*-macOS-*.pkg
+          retention-days: 90
+
+  # ════════════════════════════════════════════════════════════════════════════
+  #  Create GitHub Release (only on tag push)
+  # ════════════════════════════════════════════════════════════════════════════
+  release:
+    needs: [build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Thoth ${{ github.ref_name }}"
+          draft: true
+          generate_release_notes: true
+          files: |
+            release-artifacts/ThothSetup-Windows/*
+            release-artifacts/Thoth-macOS/*

@@ -16,8 +16,14 @@ from pathlib import Path
 import pandas as pd
 
 # ── Tunables ─────────────────────────────────────────────────────────────────
-_PREVIEW_ROWS = 50          # rows to include in the preview table
-_MAX_OUTPUT_CHARS = 80_000  # hard cap (matches filesystem_tool._MAX_READ_CHARS)
+def _preview_rows() -> int:
+    from models import get_context_size
+    return min(500, max(30, get_context_size() // 800))
+
+def _max_output_chars() -> int:
+    from models import get_tool_budget
+    return get_tool_budget(0.25, floor=30_000, ceiling=300_000)
+
 _DATA_EXTENSIONS = {".csv", ".xlsx", ".xls", ".json", ".jsonl", ".tsv"}
 
 
@@ -31,7 +37,7 @@ def read_data_file(
     *,
     name: str = "",
     sheet: str = "",
-    max_chars: int = _MAX_OUTPUT_CHARS,
+    max_chars: int | None = None,
 ) -> str:
     """Read a structured data file and return a human-readable summary.
 
@@ -144,9 +150,11 @@ def _format_dataframe(
     name: str,
     suffix: str,
     extra_info: str,
-    max_chars: int,
+    max_chars: int | None,
 ) -> str:
     """Format a DataFrame as a readable summary string."""
+    if max_chars is None:
+        max_chars = _max_output_chars()
     rows, cols = df.shape
     parts: list[str] = []
 
@@ -179,12 +187,13 @@ def _format_dataframe(
         parts.append("Statistics (numeric columns):\n" + "\n".join(stat_lines))
 
     # ── Preview rows ─────────────────────────────────────────────────────
-    preview = df.head(_PREVIEW_ROWS)
+    n_preview = _preview_rows()
+    preview = df.head(n_preview)
     table_str = preview.to_string(index=False, max_colwidth=80)
-    if rows > _PREVIEW_ROWS:
-        table_str += f"\n... ({rows - _PREVIEW_ROWS:,} more rows)"
+    if rows > n_preview:
+        table_str += f"\n... ({rows - n_preview:,} more rows)"
 
-    parts.append(f"Preview (first {min(rows, _PREVIEW_ROWS)} rows):\n{table_str}")
+    parts.append(f"Preview (first {min(rows, n_preview)} rows):\n{table_str}")
 
     result = "\n\n".join(parts)
 

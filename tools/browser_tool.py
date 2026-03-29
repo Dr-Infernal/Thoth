@@ -66,8 +66,14 @@ _HISTORY_PATH = DATA_DIR / "browser_history.json"
 _IS_WINDOWS = platform.system() == "Windows"
 
 # ── Constants ────────────────────────────────────────────────────────────────
-MAX_SNAPSHOT_CHARS = 25_000  # Truncate snapshot text returned to LLM
-MAX_SNAPSHOT_ELEMENTS = 100  # Soft cap on interactive elements returned to LLM
+def _snapshot_char_budget() -> int:
+    from models import get_tool_budget
+    return get_tool_budget(0.20, floor=15_000, ceiling=150_000)
+
+def _snapshot_element_cap() -> int:
+    from models import get_context_size
+    return min(500, max(80, get_context_size() // 400))
+
 _VIEWPORT = {"width": 1280, "height": 900}
 
 
@@ -124,9 +130,10 @@ def _get_channel() -> str | None:
 # ACCESSIBILITY SNAPSHOT (numbered refs)
 # ═════════════════════════════════════════════════════════════════════════════
 
-_SNAPSHOT_JS = r"""
+def _build_snapshot_js(max_elements: int) -> str:
+    return r"""
 () => {
-    const MAX_ELEMENTS = """ + str(MAX_SNAPSHOT_ELEMENTS) + r""";
+    const MAX_ELEMENTS = """ + str(max_elements) + r""";
     const interactiveSelectors = [
         'a[href]', 'button', 'input', 'textarea', 'select',
         '[role="button"]', '[role="link"]', '[role="tab"]',
@@ -247,7 +254,8 @@ _SNAPSHOT_JS = r"""
 def _take_snapshot(page) -> dict:
     """Execute the snapshot JS on *page* and return the result dict."""
     try:
-        return page.evaluate(_SNAPSHOT_JS)
+        js = _build_snapshot_js(_snapshot_element_cap())
+        return page.evaluate(js)
     except Exception as exc:
         logger.warning("Snapshot failed: %s", exc)
         return {"url": page.url, "title": "", "refs": [], "refCount": 0, "skipped": 0}
@@ -268,8 +276,9 @@ def _format_snapshot(snap: dict) -> str:
     for ref_line in snap.get("refs", []):
         lines.append(f"  {ref_line}")
     text = "\n".join(lines)
-    if len(text) > MAX_SNAPSHOT_CHARS:
-        text = text[:MAX_SNAPSHOT_CHARS] + "\n\n… (snapshot truncated)"
+    budget = _snapshot_char_budget()
+    if len(text) > budget:
+        text = text[:budget] + "\n\n… (snapshot truncated)"
     return text
 
 

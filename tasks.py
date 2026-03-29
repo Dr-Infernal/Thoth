@@ -76,7 +76,8 @@ def _init_db() -> None:
             persistent_thread_id TEXT,                  -- null = fresh thread each run
             delete_after_run    INTEGER DEFAULT 0,      -- 1 = auto-delete after one-shot execution
             allowed_commands    TEXT DEFAULT '[]',      -- JSON list of allowed shell command prefixes for background runs
-            allowed_recipients  TEXT DEFAULT '[]'       -- JSON list of allowed email recipients for background runs
+            allowed_recipients  TEXT DEFAULT '[]',      -- JSON list of allowed email recipients for background runs
+            skills_override     TEXT                    -- JSON list of skill names (null = use global)
         )
     """)
     conn.execute("""
@@ -99,6 +100,7 @@ def _init_db() -> None:
         ("allowed_commands", "TEXT DEFAULT '[]'"),
         ("allowed_recipients", "TEXT DEFAULT '[]'"),
         ("model_override", "TEXT"),
+        ("skills_override", "TEXT"),
     ]:
         try:
             conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {defn}")
@@ -241,6 +243,7 @@ def create_task(
     persistent_thread_id: str | None = None,
     delete_after_run: bool = False,
     delay_minutes: float | None = None,
+    skills_override: list[str] | None = None,
 ) -> str:
     """Create a new task and return its ID.
 
@@ -276,13 +279,14 @@ def create_task(
         "INSERT INTO tasks "
         "(id, name, description, icon, prompts, schedule, at, notify_only, "
         "notify_label, delivery_channel, delivery_target, model_override, "
-        "persistent_thread_id, delete_after_run, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "persistent_thread_id, delete_after_run, created_at, skills_override) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task_id, name, description, icon, json.dumps(prompts),
             schedule, at, int(notify_only), notify_label,
             delivery_channel, delivery_target, model_override,
             persistent_thread_id, int(delete_after_run), now,
+            json.dumps(skills_override) if skills_override else None,
         ),
     )
     conn.commit()
@@ -329,6 +333,7 @@ def update_task(task_id: str, **kwargs) -> None:
         "delivery_channel", "delivery_target", "model_override",
         "persistent_thread_id", "delete_after_run",
         "allowed_commands", "allowed_recipients",
+        "skills_override",
     }
 
     # ── Validate delivery if either field is being changed ───────────
@@ -344,7 +349,7 @@ def update_task(task_id: str, **kwargs) -> None:
     for key, value in kwargs.items():
         if key not in _ALLOWED:
             continue
-        if key in ("prompts", "allowed_commands", "allowed_recipients"):
+        if key in ("prompts", "allowed_commands", "allowed_recipients", "skills_override"):
             value = json.dumps(value)
         if key in ("notify_only", "delete_after_run"):
             value = int(value)
@@ -388,6 +393,7 @@ def duplicate_task(task_id: str) -> str | None:
         delivery_channel=task.get("delivery_channel"),
         delivery_target=task.get("delivery_target"),
         model_override=task.get("model_override"),
+        skills_override=task.get("skills_override"),
     )
 
 
@@ -399,6 +405,8 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["enabled"] = bool(d.get("enabled", 1))
     d["allowed_commands"] = json.loads(d.get("allowed_commands") or "[]")
     d["allowed_recipients"] = json.loads(d.get("allowed_recipients") or "[]")
+    raw_skills = d.get("skills_override")
+    d["skills_override"] = json.loads(raw_skills) if raw_skills else None
     return d
 
 
@@ -725,6 +733,11 @@ def run_task_background(
                 # while the task is still running.
                 from threads import _set_thread_model_override
                 _set_thread_model_override(thread_id, task["model_override"])
+
+            # Skills override — set on thread so the pre-model hook picks it up
+            if task.get("skills_override") is not None:
+                from threads import set_thread_skills_override
+                set_thread_skills_override(thread_id, task["skills_override"])
 
             # Task-scoped permissions — propagate via ContextVars
             # so tools can check them at runtime.

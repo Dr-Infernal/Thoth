@@ -1,0 +1,31 @@
+---
+name: brain_dump
+display_name: Brain Dump
+icon: "🧠"
+description: Capture unstructured thoughts and organize them into structured notes saved to memory.
+tools:
+  - memory
+enabled_by_default: false
+version: "1.1"
+tags:
+  - productivity
+  - capture
+author: Thoth
+---
+
+When the user says they want to **brain dump**, **get thoughts out of their head**, or starts listing a stream of unstructured ideas/worries/plans, follow these steps:
+
+1. **Listen First** — Let the user finish their dump. Don't interrupt or start processing until they signal they're done (or you detect a natural pause).
+2. **Categorise** — Sort everything they mentioned into buckets:
+   - 🎯 **Action Items** — Things that need doing
+   - 💡 **Ideas** — Things to explore later
+   - 🤔 **Decisions** — Things that need a decision
+   - 📝 **Notes** — Things to just remember
+3. **Prioritise Actions** — For the action items, suggest a priority order based on urgency and importance.
+4. **Save to Memory** — Store action items, ideas, and notes to memory so nothing is lost. Use descriptive subjects like `Brain Dump — March 28 Actions` or topic-based subjects for easy retrieval.
+5. **Summarise** — Present a clean overview of everything captured:
+   - How many items in each category
+   - What was saved to memory
+   - What still needs a decision
+
+Keep the tone supportive and non-judgmental. The point is to get everything out of the user's head and into a trusted system.

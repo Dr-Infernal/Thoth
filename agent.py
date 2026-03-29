@@ -1,6 +1,6 @@
 import threading
 
-from models import get_llm, get_llm_for, get_context_size, get_current_model, is_model_local, is_cloud_model, get_model_max_context
+from models import get_llm, get_llm_for, get_context_size, get_current_model, is_model_local, is_cloud_model, get_model_max_context, set_active_model_override
 from api_keys import apply_keys
 from prompts import AGENT_SYSTEM_PROMPT, SUMMARIZE_PROMPT
 from langchain_classic.retrievers import ContextualCompressionRetriever
@@ -80,8 +80,59 @@ from datetime import datetime as _datetime
 
 
 # ── Pre-model hook: trim messages to fit context window ──────────────────────
-_CHARS_PER_TOKEN = 4  # conservative approximation for budget math
-_KEEP_BROWSER_SNAPSHOTS = 2  # keep the N most recent browser results in full
+def _keep_browser_snapshots() -> int:
+    """How many recent browser snapshots to keep in full (rest become stubs)."""
+    return min(8, max(2, get_context_size() // 40_000))
+# Extra tokens to account for content injected by _pre_model_trim that is NOT
+# stored in the checkpoint: skills prompt, date/time line, auto-recalled
+# memories, per-message framing tokens.
+_INJECTION_OVERHEAD_TOKENS = 800
+
+import json as _json
+import tiktoken as _tiktoken
+
+# Lazily-initialised tiktoken encoder (cl100k_base works well as a universal
+# approximation — it slightly over-counts for Llama/Qwen which is *safer*).
+_tiktoken_enc: _tiktoken.Encoding | None = None
+
+
+def _get_encoder() -> _tiktoken.Encoding:
+    global _tiktoken_enc
+    if _tiktoken_enc is None:
+        _tiktoken_enc = _tiktoken.get_encoding("cl100k_base")
+    return _tiktoken_enc
+
+
+def _count_tokens(text: str) -> int:
+    """Count tokens using tiktoken (cl100k_base)."""
+    if not text:
+        return 0
+    return len(_get_encoder().encode(text))
+
+
+def _message_tokens(m) -> int:
+    """Return the token count for a single message including content,
+    tool_calls payloads, and per-message framing overhead (~4 tokens)."""
+    parts: list[str] = []
+    content = getattr(m, "content", "") or ""
+    if content:
+        parts.append(content)
+    tool_calls = getattr(m, "tool_calls", None)
+    if tool_calls:
+        for tc in tool_calls:
+            parts.append(tc.get("name", ""))
+            args = tc.get("args", {})
+            if isinstance(args, str):
+                parts.append(args)
+            elif isinstance(args, dict):
+                parts.append(_json.dumps(args, separators=(",", ":"), default=str))
+    tokens = _count_tokens("\n".join(parts)) if parts else 0
+    return tokens + 4  # role markers / framing overhead per message
+
+
+def _count_message_list_tokens(messages: list) -> int:
+    """Token counter compatible with LangChain's trim_messages."""
+    return sum(_message_tokens(m) for m in messages)
 
 
 def _pre_model_trim(state: dict) -> dict:
@@ -107,8 +158,9 @@ def _pre_model_trim(state: dict) -> dict:
         if m.type == "tool"
         and (getattr(m, "name", "") or "").startswith(_BROWSER_PREFIX)
     ]
-    if len(browser_indices) > _KEEP_BROWSER_SNAPSHOTS:
-        for i in browser_indices[:-_KEEP_BROWSER_SNAPSHOTS]:
+    _n_keep = _keep_browser_snapshots()
+    if len(browser_indices) > _n_keep:
+        for i in browser_indices[:-_n_keep]:
             m = messages[i]
             content = m.content or ""
             # Extract URL and Title from the snapshot header lines
@@ -138,8 +190,9 @@ def _pre_model_trim(state: dict) -> dict:
     # Without this, trim_messages (strategy="last") may drop ALL context
     # when a single huge ToolMessage — or the sum of several — exceeds
     # the token budget.  We leave ~35 % for system prompt, human/AI
-    # messages, and generation headroom.
-    tool_budget_chars = int(max_tokens * 0.65) * _CHARS_PER_TOKEN
+    # messages, and generation headroom.  Budget is in chars (~3 chars/tok)
+    # since the truncation operates on string slicing.
+    tool_budget_chars = int(max_tokens * 0.65) * 3
 
     tool_indices = [
         i for i, m in enumerate(messages)
@@ -192,7 +245,7 @@ def _pre_model_trim(state: dict) -> dict:
     trimmed = trim_messages(
         messages,
         max_tokens=max_tokens,
-        token_counter="approximate",
+        token_counter=_count_message_list_tokens,
         strategy="last",
         start_on="human",
         include_system=True,
@@ -260,6 +313,28 @@ def _pre_model_trim(state: dict) -> dict:
             break
     trimmed.insert(insert_idx, time_msg)
 
+    # ── Inject enabled skill instructions ────────────────────────────
+    # Skills are user-configured workflows (SKILL.md files) whose
+    # instructions are appended as an extra SystemMessage right after the
+    # date/time message.  The prompt text is built from an in-memory
+    # cache, so this adds zero I/O latency.
+    try:
+        from skills import get_skills_prompt
+        from threads import get_thread_skills_override
+
+        _thread_id = _current_thread_id_var.get() or None
+        skills_override = None
+        if _thread_id:
+            skills_override = get_thread_skills_override(_thread_id)
+
+        skills_text = get_skills_prompt(skills_override)
+        if skills_text:
+            skills_msg = SystemMessage(content=skills_text)
+            # Insert right after time_msg (which is at insert_idx)
+            trimmed.insert(insert_idx + 1, skills_msg)
+    except Exception as exc:
+        logger.debug("Skill injection skipped (non-fatal): %s", exc)
+
     # ── Auto-recall: inject relevant memories before the last user msg ───
     # Embed the latest human message and pull the top-5 most relevant
     # memories from the FAISS index, then expand 1 hop in the knowledge
@@ -268,21 +343,33 @@ def _pre_model_trim(state: dict) -> dict:
     #
     if True:  # Always recall — memories enrich every conversation
       try:
-        last_human_text = None
+        # Gather last 2-3 user messages for richer recall context
+        human_texts = []
         last_human_idx = None
         for i in range(len(trimmed) - 1, -1, -1):
             if trimmed[i].type == "human":
-                last_human_text = trimmed[i].content
-                last_human_idx = i
-                break
+                if last_human_idx is None:
+                    last_human_idx = i
+                content = trimmed[i].content
+                if isinstance(content, str) and content.strip():
+                    human_texts.append(content.strip())
+                if len(human_texts) >= 3:
+                    break
 
-        if last_human_text and last_human_idx is not None:
+        if human_texts and last_human_idx is not None:
             from knowledge_graph import graph_enhanced_recall, count_entities
 
             if count_entities() > 0:
-                # Use first 500 chars of user message for embedding
-                query = last_human_text[:500] if isinstance(last_human_text, str) else str(last_human_text)[:500]
-                memories = graph_enhanced_recall(query, top_k=5, threshold=0.35, hops=1)
+                # Build query: latest message first (most important), then
+                # older messages as context.  Truncation drops older text,
+                # preserving the user's most recent intent.
+                query = human_texts[0]  # latest (collected first via reverse scan)
+                for older in human_texts[1:]:
+                    if len(query) + len(older) + 1 > 2000:
+                        break
+                    query = query + " " + older
+                query = query[:2000]
+                memories = graph_enhanced_recall(query, top_k=8, threshold=0.35, hops=1)
                 if memories:
                     lines = []
                     for m in memories:
@@ -366,7 +453,7 @@ def is_background_workflow() -> bool:
     return _background_workflow_var.get()
 
 # ── Context summarization ────────────────────────────────────────────────────
-_SUMMARY_THRESHOLD = 0.80   # trigger summarization at 80 % of context window
+_SUMMARY_THRESHOLD = 0.75   # trigger summarization at 75 % of context window
 _PROTECTED_TURNS = 5         # keep the last N human messages (+ their replies) intact
 _summary_cache: dict[str, dict] = {}  # thread_id → {"summary": str, "msg_count": int}
 
@@ -402,14 +489,14 @@ def _should_summarize(agent, config: dict, user_input: str) -> bool:
         if cached and 0 < cached["msg_count"] < len(msgs):
             old_split = cached["msg_count"]
             # Effective = system prompt + summary text + messages after split
-            sys_chars = len(getattr(msgs[0], "content", "") or "") if msgs[0].type == "system" else 0
-            summary_chars = len(cached["summary"]) + 120  # framing overhead
-            recent_chars = sum(
-                len(getattr(m, "content", "") or "") for m in msgs[old_split:]
+            sys_tokens = _message_tokens(msgs[0]) if msgs[0].type == "system" else 0
+            summary_tokens = _count_tokens(cached["summary"]) + 30  # framing
+            recent_tokens = sum(
+                _message_tokens(m) for m in msgs[old_split:]
             )
-            total_chars = sys_chars + summary_chars + recent_chars
-            total_chars += len(user_input)
-            estimated_tokens = total_chars // _CHARS_PER_TOKEN
+            estimated_tokens = (sys_tokens + summary_tokens + recent_tokens
+                                + _count_tokens(user_input)
+                                + _INJECTION_OVERHEAD_TOKENS)
             if estimated_tokens <= threshold:
                 return False
 
@@ -420,16 +507,15 @@ def _should_summarize(agent, config: dict, user_input: str) -> bool:
             # won't materially help.
             human_indices = [i for i, m in enumerate(msgs) if m.type == "human"]
             new_split = human_indices[-_PROTECTED_TURNS] if len(human_indices) > _PROTECTED_TURNS else old_split
-            gap_chars = sum(
-                len(getattr(m, "content", "") or "") for m in msgs[old_split:new_split]
+            gap_tokens = sum(
+                _message_tokens(m) for m in msgs[old_split:new_split]
             )
-            _MIN_GAP_CHARS = 2000  # don't waste an LLM call for trivial gaps
-            return gap_chars >= _MIN_GAP_CHARS
+            _MIN_GAP_TOKENS = 600  # don't waste an LLM call for trivial gaps
+            return gap_tokens >= _MIN_GAP_TOKENS
         else:
-            total_chars = sum(len(getattr(m, "content", "") or "") for m in msgs)
+            estimated_tokens = sum(_message_tokens(m) for m in msgs)
 
-        total_chars += len(user_input)
-        estimated_tokens = total_chars // _CHARS_PER_TOKEN
+        estimated_tokens += _count_tokens(user_input) + _INJECTION_OVERHEAD_TOKENS
         return estimated_tokens > threshold
     except Exception:
         logger.debug("_should_summarize check failed", exc_info=True)
@@ -657,15 +743,13 @@ def get_token_usage(config: dict | None = None, model_override: str | None = Non
             split = cached["msg_count"]
             if 0 < split < len(msgs):
                 sys_msg = [msgs[0]] if msgs and msgs[0].type == "system" else []
-                summary_chars = len(cached["summary"]) + 120  # overhead
-                recent_chars = sum(
-                    len(getattr(m, "content", "") or "")
-                    for m in msgs[split:]
+                summary_tokens = _count_tokens(cached["summary"]) + 30
+                recent_tokens = sum(
+                    _message_tokens(m) for m in msgs[split:]
                 )
-                total_chars = summary_chars + recent_chars
+                used = summary_tokens + recent_tokens + _INJECTION_OVERHEAD_TOKENS
                 if sys_msg:
-                    total_chars += len(getattr(sys_msg[0], "content", "") or "")
-                used = total_chars // _CHARS_PER_TOKEN
+                    used += _message_tokens(sys_msg[0])
                 return used, max_tokens
 
         # Mirror _pre_model_trim: trim, then count what remains
@@ -673,14 +757,13 @@ def get_token_usage(config: dict | None = None, model_override: str | None = Non
         trimmed = trim_messages(
             msgs,
             max_tokens=budget,
-            token_counter="approximate",
+            token_counter=_count_message_list_tokens,
             strategy="last",
             start_on="human",
             include_system=True,
             allow_partial=False,
         )
-        total_chars = sum(len(getattr(m, "content", "") or "") for m in trimmed)
-        used = total_chars // _CHARS_PER_TOKEN
+        used = _count_message_list_tokens(trimmed) + _INJECTION_OVERHEAD_TOKENS
         return used, max_tokens
     except Exception:
         logger.debug("Token usage estimation failed", exc_info=True)
@@ -815,6 +898,7 @@ def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         (config.get("configurable") or {}).get("thread_id", "")
     )
     _model_override_var.set(_model_ov or "")
+    set_active_model_override(_model_ov or "")
 
     # Summarize if context is above threshold
     if stop_event and stop_event.is_set():
@@ -919,6 +1003,7 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         (config.get("configurable") or {}).get("thread_id", "")
     )
     _model_override_var.set(_model_ov or "")
+    set_active_model_override(_model_ov or "")
 
     # ── Context summarization (runs before the main agent stream) ────
     if _should_summarize(agent, config, user_input):

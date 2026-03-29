@@ -191,6 +191,14 @@ AGENT_SYSTEM_PROMPT = (
     "MEMORY GUIDELINES:\n"
     "- You have a personal knowledge graph — a connected web of memories about\n"
     "  people, preferences, facts, events, places, projects, and their relationships.\n"
+    "- THE 'User' ENTITY: The user is always represented by the entity with\n"
+    "  subject 'User'. When the user tells you their name (e.g. 'My name is\n"
+    "  Alex'), do NOT create a separate entity for the name. Instead, use\n"
+    "  update_memory on the User entity to add the name to its content and\n"
+    "  aliases. Facts about the user themselves (name, job, location, age,\n"
+    "  personal traits) belong on the User entity — not as separate entities.\n"
+    "  Example: for 'My name is Alex and I'm from London', update the User\n"
+    "  entity content and add alias 'Alex', then save London as a place entity.\n"
     "- When the user tells you something worth remembering (e.g. 'My mom's name is\n"
     "  Sarah', 'I prefer dark mode', 'My project deadline is June 1'), save it\n"
     "  using save_memory with an appropriate category.\n"
@@ -257,12 +265,28 @@ AGENT_SYSTEM_PROMPT = (
 
 SUMMARIZE_PROMPT = (
     "Summarize the following conversation between a user and an AI assistant. "
-    "Capture ALL key information: facts discussed, user preferences, decisions "
-    "made, tasks completed, questions asked and their answers, commitments, and "
-    "any ongoing topics.\n\n"
-    "Be comprehensive but concise. Write in third-person narrative form.\n"
-    "Do NOT omit any factual details — the assistant will rely on this summary "
-    "as its only knowledge of the earlier part of the conversation.\n"
+    "The assistant will rely on this summary as its ONLY knowledge of the "
+    "earlier part of the conversation, so accuracy matters more than brevity.\n\n"
+    "PRIORITY ORDER — capture these from most to least important:\n"
+    "1. Decisions & commitments — anything the user decided, agreed to, or asked\n"
+    "   the assistant to do (including tasks created, settings changed, files\n"
+    "   generated).\n"
+    "2. User corrections — if the user corrected a fact mid-conversation, record\n"
+    "   ONLY the corrected version (e.g. 'The user clarified the deadline is\n"
+    "   June 15, not June 1').\n"
+    "3. Facts & preferences — personal info the user shared, preferences stated,\n"
+    "   questions asked and their answers.\n"
+    "4. Tool outcomes — when tools were used (web search, email, calendar, etc.),\n"
+    "   note WHAT was done and the key result in one line. Do NOT reproduce raw\n"
+    "   tool output — the tool results you see are already truncated excerpts.\n"
+    "5. Open threads — topics started but not finished, follow-ups promised,\n"
+    "   questions still unanswered.\n\n"
+    "ROLLING SUMMARIES: If the input starts with '[Previous summary of even\n"
+    "earlier messages]', that block covers an older portion of the conversation.\n"
+    "Merge it with the new messages into ONE cohesive summary. Do not repeat\n"
+    "the previous summary verbatim — integrate, update, and condense.\n\n"
+    "Write in third-person narrative form. Group related facts together rather\n"
+    "than following strict chronological order.\n"
     "Do NOT include any preamble or explanation — output ONLY the summary itself."
 )
 
@@ -315,6 +339,17 @@ IMPORTANT — ALWAYS output relations:
 - If you mention a person is the user's dad → entity for "Dad" + relation
   Dad→father_of→User
 
+CORRECTIONS:
+- If the user corrects a previously stated fact during the conversation
+  (e.g. "Actually my birthday is March 20, not March 15"), extract ONLY
+  the corrected version. Do NOT extract the wrong version.
+- Use the corrected content in the entity (e.g. "User's birthday is March 20").
+
+ALIASES:
+- When a person is referred to by multiple names (e.g. "My mom Sarah",
+  "Robert — we call him Bob"), include all names in the aliases field.
+- Format: "aliases": "Sarah, Mom" or "aliases": "Robert, Bob"
+
 Rules:
 - ONLY extract facts the USER stated or implied about THEMSELVES
 - Do NOT extract facts from tool results, web searches, or AI responses
@@ -331,7 +366,11 @@ Rules:
 - category must be one of: person, preference, fact, event, place, project
 - relation_type should be a snake_case label (e.g. "mother_of", "lives_in")
 - source_subject and target_subject must match an entity's subject exactly
-- confidence is 0.0-1.0 (how certain you are about this relationship)
+- confidence scoring:
+  * 1.0 — explicitly stated with no ambiguity ("My birthday is June 5")
+  * 0.8-0.9 — clearly implied or stated with minor ambiguity ("I work at Acme" in casual context)
+  * 0.5-0.7 — inferred or uncertain ("I think my meeting is on Tuesday")
+  * Below 0.5 — do not extract, too uncertain to be useful
 - If there is NOTHING worth remembering, return an empty array: []
 
 Example — user says "My name is Alex, I live in London, my dad Robert lives in Manchester":

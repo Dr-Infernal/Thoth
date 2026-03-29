@@ -48,9 +48,10 @@ def _read_url(url: str) -> str:
         return "The page was fetched but no readable text content was found."
 
     # Truncate very long pages to avoid overwhelming the LLM context
-    MAX_CHARS = 30_000
-    if len(text) > MAX_CHARS:
-        text = text[:MAX_CHARS] + "\n\n… [content truncated]"
+    from models import get_tool_budget
+    max_chars = get_tool_budget(0.20, floor=15_000, ceiling=150_000)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n\n… [content truncated]"
 
     source = docs[0].metadata.get("source", url)
     return f"SOURCE_URL: {source}\n\n{text}"

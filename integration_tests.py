@@ -2065,6 +2065,287 @@ def section_15_bugfix_verifications():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# SECTION 16 · Skills Engine
+# ═══════════════════════════════════════════════════════════════════════════
+
+def section_16_skills():
+    print("\nSECTION 16 · Skills Engine")
+    print("-" * 40)
+
+    # --- 16a. skills.py imports and load_skills ---
+    try:
+        import skills
+        skills.load_skills()
+        all_skills = skills.get_all_skills()
+        assert len(all_skills) >= 5, f"expected ≥5 skills, got {len(all_skills)}"
+        record("PASS", "skills: module imports and load_skills returns ≥5")
+    except Exception as e:
+        record("FAIL", "skills: module import / load", str(e))
+        return  # can't continue without skills module
+
+    # --- 16b. Full CRUD round-trip ---
+    _created_name = None
+    try:
+        sk = skills.create_skill(
+            name="integ_test_skill",
+            display_name="Integration Test Skill",
+            icon="🧪",
+            description="Created by integration test",
+            instructions="Step 1: Test.\nStep 2: Verify.",
+            tools=["web_search", "memory"],
+            tags=["integration"],
+            enabled=True,
+        )
+        assert sk is not None
+        assert sk.name == "integ_test_skill"
+        _created_name = sk.name
+
+        # Read it back
+        fetched = skills.get_skill("integ_test_skill")
+        assert fetched is not None
+        assert fetched.display_name == "Integration Test Skill"
+        assert fetched.tools == ["web_search", "memory"]
+
+        # Update
+        updated = skills.update_skill("integ_test_skill", icon="✅", description="Updated desc")
+        assert updated is not None
+        assert updated.icon == "✅"
+        assert updated.description == "Updated desc"
+        assert updated.instructions == "Step 1: Test.\nStep 2: Verify."
+
+        # Prompt check
+        prompt = skills.get_skills_prompt(["integ_test_skill"])
+        assert "Integration Test Skill" in prompt
+        assert "Step 1" in prompt
+
+        # Delete
+        assert skills.delete_skill("integ_test_skill") is True
+        assert skills.get_skill("integ_test_skill") is None
+        _created_name = None
+
+        record("PASS", "skills: CRUD create→read→update→prompt→delete round-trip")
+    except Exception as e:
+        record("FAIL", "skills: CRUD round-trip", str(e))
+        if _created_name:
+            try:
+                skills.delete_skill(_created_name)
+            except Exception:
+                pass
+
+    # --- 16c. Enable/disable persistence ---
+    try:
+        skills.load_skills()  # fresh load
+        was_enabled = skills.is_enabled("daily_briefing")
+        skills.set_enabled("daily_briefing", True)
+        assert skills.is_enabled("daily_briefing")
+
+        # Reload from disk and check persistence
+        skills.load_skills()
+        assert skills.is_enabled("daily_briefing"), "enabled state not persisted"
+
+        # Restore
+        skills.set_enabled("daily_briefing", was_enabled)
+        record("PASS", "skills: enable/disable persists across load_skills")
+    except Exception as e:
+        record("FAIL", "skills: enable/disable persistence", str(e))
+
+    # --- 16d. Thread skills override DB round-trip ---
+    try:
+        from threads import (
+            get_thread_skills_override,
+            set_thread_skills_override,
+        )
+        import sqlite3
+        from threads import DB_PATH as _threads_db
+
+        # Create a temporary thread
+        _test_tid = f"__TEST_skills_{uuid.uuid4().hex[:8]}"
+        conn = sqlite3.connect(_threads_db)
+        conn.execute(
+            "INSERT OR IGNORE INTO thread_meta (thread_id, name) VALUES (?, ?)",
+            (_test_tid, "Skills Integration Test"),
+        )
+        conn.commit()
+        conn.close()
+
+        # Initially should be None (global)
+        assert get_thread_skills_override(_test_tid) is None, "default should be None"
+
+        # Set an override
+        set_thread_skills_override(_test_tid, ["daily_briefing", "deep_research"])
+        result = get_thread_skills_override(_test_tid)
+        assert result == ["daily_briefing", "deep_research"], f"got {result}"
+
+        # Clear it
+        set_thread_skills_override(_test_tid, None)
+        assert get_thread_skills_override(_test_tid) is None, "should be None after clear"
+
+        # Clean up
+        conn = sqlite3.connect(_threads_db)
+        conn.execute("DELETE FROM thread_meta WHERE thread_id = ?", (_test_tid,))
+        conn.commit()
+        conn.close()
+
+        record("PASS", "skills: thread skills_override DB round-trip")
+    except Exception as e:
+        record("FAIL", "skills: thread skills_override DB round-trip", str(e))
+
+    # --- 16e. Task skills_override round-trip ---
+    try:
+        from tasks import create_task, get_task, update_task, delete_task
+
+        tid = create_task(
+            name="__TEST_skills_task",
+            prompts=["test prompt"],
+            description="skills test task",
+            skills_override=["brain_dump", "deep_research"],
+        )
+        _cleanup_task_ids.append(tid)
+
+        task = get_task(tid)
+        assert task is not None
+        assert task["skills_override"] == ["brain_dump", "deep_research"], \
+            f"got {task['skills_override']}"
+
+        # Update skills_override
+        update_task(tid, skills_override=["daily_briefing"])
+        task2 = get_task(tid)
+        assert task2["skills_override"] == ["daily_briefing"], \
+            f"after update got {task2['skills_override']}"
+
+        # Clear skills_override
+        update_task(tid, skills_override=None)
+        task3 = get_task(tid)
+        assert task3["skills_override"] is None, \
+            f"after clear got {task3['skills_override']}"
+
+        delete_task(tid)
+        _cleanup_task_ids.remove(tid)
+
+        record("PASS", "skills: task skills_override create→get→update→clear round-trip")
+    except Exception as e:
+        record("FAIL", "skills: task skills_override round-trip", str(e))
+
+    # --- 16f. duplicate_task preserves skills_override ---
+    try:
+        from tasks import create_task, get_task, duplicate_task, delete_task
+
+        tid_orig = create_task(
+            name="__TEST_skills_dup_orig",
+            prompts=["dup test"],
+            skills_override=["deep_research", "meeting_notes"],
+        )
+        _cleanup_task_ids.append(tid_orig)
+
+        tid_copy = duplicate_task(tid_orig)
+        assert tid_copy is not None
+        _cleanup_task_ids.append(tid_copy)
+
+        copy = get_task(tid_copy)
+        assert copy is not None
+        assert copy["skills_override"] == ["deep_research", "meeting_notes"], \
+            f"duplicate got {copy['skills_override']}"
+
+        delete_task(tid_orig)
+        _cleanup_task_ids.remove(tid_orig)
+        delete_task(tid_copy)
+        _cleanup_task_ids.remove(tid_copy)
+
+        record("PASS", "skills: duplicate_task preserves skills_override")
+    except Exception as e:
+        record("FAIL", "skills: duplicate_task preserves skills_override", str(e))
+
+    # --- 16g. Bundled skills have valid structure ---
+    try:
+        import pathlib
+        bundled_dir = pathlib.Path(skills.BUNDLED_SKILLS_DIR)
+        names = set()
+        for child in bundled_dir.iterdir():
+            if child.is_dir() and (child / "SKILL.md").exists():
+                sk = skills._parse_skill_md(child / "SKILL.md", source="bundled")
+                assert sk is not None, f"Failed to parse {child.name}/SKILL.md"
+                assert sk.source == "bundled"
+                assert len(sk.instructions) > 50, f"{sk.name} instructions too short"
+                names.add(sk.name)
+        expected = {
+            "daily_briefing", "deep_research", "meeting_notes", "brain_dump",
+            "task_automation", "humanizer", "self_reflection",
+            "proactive_agent", "web_navigator",
+        }
+        missing = expected - names
+        assert not missing, f"Missing bundled skills: {missing}"
+        record("PASS", f"skills: all {len(names)} bundled skills validated")
+    except Exception as e:
+        record("FAIL", "skills: bundled skills structure", str(e))
+
+    # --- 16h. get_skills_prompt with multiple enabled skills ---
+    try:
+        skills.load_skills()
+        skills.set_enabled("daily_briefing", True)
+        skills.set_enabled("deep_research", True)
+        skills.set_enabled("brain_dump", True)
+
+        prompt = skills.get_skills_prompt()
+        assert "## Skills" in prompt
+        assert "Daily Briefing" in prompt
+        assert "Deep Research" in prompt
+        assert "Brain Dump" in prompt
+        assert "Meeting Notes" not in prompt  # not enabled
+
+        # Token estimate should be consistent
+        est_global = skills.estimate_tokens()
+        est_explicit = skills.estimate_tokens(["daily_briefing", "deep_research", "brain_dump"])
+        assert est_global == est_explicit, \
+            f"global={est_global} vs explicit={est_explicit}"
+
+        skills.set_enabled("daily_briefing", False)
+        skills.set_enabled("deep_research", False)
+        skills.set_enabled("brain_dump", False)
+
+        record("PASS", "skills: multi-skill prompt and token estimate consistency")
+    except Exception as e:
+        record("FAIL", "skills: multi-skill prompt", str(e))
+
+    # --- 16i. Agent injection source verification ---
+    try:
+        import inspect
+        from agent import _pre_model_trim
+        source = inspect.getsource(_pre_model_trim)
+        assert "get_skills_prompt" in source, "_pre_model_trim should call get_skills_prompt"
+        assert "get_thread_skills_override" in source, \
+            "_pre_model_trim should call get_thread_skills_override"
+        assert "skills_text" in source or "skills_msg" in source, \
+            "_pre_model_trim should build skills message"
+        record("PASS", "skills: agent _pre_model_trim injects skills prompt")
+    except Exception as e:
+        record("FAIL", "skills: agent injection verification", str(e))
+
+    # --- 16j. Duplicate skill + delete round-trip ---
+    _dup_name = None
+    try:
+        dup = skills.duplicate_skill("brain_dump", new_name="integ_dup_test")
+        assert dup is not None
+        _dup_name = dup.name
+        assert dup.name == "integ_dup_test"
+        assert dup.source == "user"
+        assert skills.is_enabled("integ_dup_test")
+
+        # Should be deletable
+        assert skills.delete_skill("integ_dup_test") is True
+        _dup_name = None
+        assert skills.get_skill("integ_dup_test") is None
+
+        record("PASS", "skills: duplicate→delete round-trip")
+    except Exception as e:
+        record("FAIL", "skills: duplicate→delete round-trip", str(e))
+        if _dup_name:
+            try:
+                skills.delete_skill(_dup_name)
+            except Exception:
+                pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # MAIN
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -2105,6 +2386,7 @@ def main():
         13: ("Channel Utilities", section_13_channel_utils),
         14: ("Background Permissions", section_14_background_permissions),
         15: ("Bug-fix Verifications", section_15_bugfix_verifications),
+        16: ("Skills Engine", section_16_skills),
     }
 
     # Section 1 is always required

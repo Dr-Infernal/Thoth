@@ -26,6 +26,8 @@ def _init_thread_db():
         cols = {row[1] for row in conn.execute("PRAGMA table_info(thread_meta)").fetchall()}
         if "model_override" not in cols:
             conn.execute("ALTER TABLE thread_meta ADD COLUMN model_override TEXT DEFAULT ''")
+        if "skills_override" not in cols:
+            conn.execute("ALTER TABLE thread_meta ADD COLUMN skills_override TEXT DEFAULT ''")
         conn.commit()
         conn.close()
         logger.debug("Thread database initialised at %s", DB_PATH)
@@ -80,6 +82,36 @@ def _set_thread_model_override(thread_id: str, model_name: str) -> None:
     conn.execute(
         "UPDATE thread_meta SET model_override = ? WHERE thread_id = ?",
         (model_name, thread_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_thread_skills_override(thread_id: str) -> list[str] | None:
+    """Return per-thread skills override as a list of skill names, or None (use global)."""
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT COALESCE(skills_override, '') FROM thread_meta WHERE thread_id = ?",
+        (thread_id,),
+    ).fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return None
+    import json
+    try:
+        return json.loads(row[0])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def set_thread_skills_override(thread_id: str, skill_names: list[str] | None) -> None:
+    """Set or clear the per-thread skills override. Pass None to revert to global."""
+    import json
+    value = json.dumps(skill_names) if skill_names is not None else ""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE thread_meta SET skills_override = ? WHERE thread_id = ?",
+        (value, thread_id),
     )
     conn.commit()
     conn.close()

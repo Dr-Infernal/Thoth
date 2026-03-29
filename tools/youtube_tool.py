@@ -72,9 +72,10 @@ def _get_transcript(url: str, language: str = "en") -> str:
     if not text:
         return "The transcript was empty. The video may not have captions."
 
-    MAX_CHARS = 15_000
-    if len(text) > MAX_CHARS:
-        text = text[:MAX_CHARS] + "\n\n… [transcript truncated]"
+    from models import get_tool_budget
+    max_chars = get_tool_budget(0.12, floor=8_000, ceiling=100_000)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n\n… [transcript truncated]"
 
     source_url = f"https://www.youtube.com/watch?v={video_id}"
     return f"SOURCE_URL: {source_url}\n\n{text}"

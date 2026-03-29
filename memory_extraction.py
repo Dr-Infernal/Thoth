@@ -27,7 +27,7 @@ _DATA_DIR = pathlib.Path(
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 _STATE_FILE = _DATA_DIR / "memory_extraction_state.json"
 
-_INTERVAL_S = 6 * 3600  # 6 hours
+_INTERVAL_S = 2 * 3600  # 2 hours
 
 # Thread IDs to exclude from background extraction (e.g. currently active
 # conversations).  Updated by the UI layer via ``set_active_thread``.
@@ -205,6 +205,17 @@ def _dedup_and_save(extracted: list[dict]) -> int:
         # Check for existing memory with same subject (any category)
         existing = find_by_subject(None, subject)
 
+        # FAISS semantic fallback — catches synonyms (e.g. "Father" vs "Dad")
+        if not existing:
+            try:
+                _hits = kg.semantic_search(
+                    f"{subject}: {content}", top_k=1, threshold=0.80,
+                )
+                if _hits:
+                    existing = _hits[0]
+            except Exception:
+                pass
+
         if existing:
             subject_to_id[kg._normalize_subject(subject)] = existing["id"]
 
@@ -222,15 +233,27 @@ def _dedup_and_save(extracted: list[dict]) -> int:
                     for alias in to_add:
                         subject_to_id[kg._normalize_subject(alias)] = existing["id"]
 
-            # Memory about this subject already exists — only update if
-            # the extracted content is strictly richer than what we have,
-            # or if there are genuinely new aliases to merge.
-            content_is_richer = len(content) > len(existing.get("content", ""))
-            if content_is_richer or update_kwargs:
+            # Memory about this subject already exists — merge content if
+            # the extraction produced genuinely new information.
+            old_content = existing.get("content", "").strip()
+            if content.lower() in old_content.lower():
+                # Extracted content already captured — nothing new
+                merged_content = old_content
+                content_changed = False
+            elif old_content.lower() in content.lower():
+                # Extracted content is a superset — replace
+                merged_content = content
+                content_changed = True
+            else:
+                # Both have unique info — combine
+                merged_content = f"{old_content}. {content}".replace(". . ", ". ")
+                content_changed = True
+
+            if content_changed or update_kwargs:
                 try:
                     update_memory(
                         existing["id"],
-                        content if content_is_richer else existing["content"],
+                        merged_content,
                         source="extraction",
                         **update_kwargs,
                     )
@@ -289,6 +312,30 @@ def _dedup_and_save(extracted: list[dict]) -> int:
             found = find_by_subject(None, rel.get("target_subject", "").strip())
             if found:
                 tgt_id = found["id"]
+
+        # FAISS semantic fallback — high threshold to avoid false matches.
+        # Catches name variants the LLM uses that don't match subjects or aliases
+        # (e.g. "Father" when entity stored as "Dad").
+        if not src_id:
+            try:
+                _hits = kg.semantic_search(
+                    rel.get("source_subject", "").strip(),
+                    top_k=1, threshold=0.80,
+                )
+                if _hits:
+                    src_id = _hits[0]["id"]
+            except Exception:
+                pass
+        if not tgt_id:
+            try:
+                _hits = kg.semantic_search(
+                    rel.get("target_subject", "").strip(),
+                    top_k=1, threshold=0.80,
+                )
+                if _hits:
+                    tgt_id = _hits[0]["id"]
+            except Exception:
+                pass
 
         if src_id and tgt_id:
             try:
@@ -390,6 +437,16 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
             kg.rebuild_index()
         except Exception as exc:
             logger.debug("Post-extraction rebuild_index failed: %s", exc)
+
+    # Repair orphan entities — catch anything that slipped through
+    # without a relation (runs only on entities with zero connections).
+    try:
+        import knowledge_graph as _kg_repair
+        repaired = _kg_repair.repair_orphan_entities()
+        if repaired and on_status:
+            on_status(f"Linked {repaired} orphan memory(s)")
+    except Exception as exc:
+        logger.debug("Orphan repair failed (non-fatal): %s", exc)
 
     state["last_extraction"] = datetime.now().isoformat()
     _save_state(state)

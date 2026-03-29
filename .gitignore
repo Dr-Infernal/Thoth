@@ -12,6 +12,9 @@ installer/build/
 installer/build_mac_release.ps1
 dist/
 
+# Signing keys and CSR (NEVER commit)
+installer/apple_signing/
+
 # User data (created at runtime)
 vector_store/
 *.db
@@ -27,6 +30,9 @@ _*.py
 # Old Streamlit app (replaced by NiceGUI in v3.0.0)
 app.py
 .streamlit/
+
+# Old workflows module (replaced by tasks.py in v3.5.0)
+workflows.py
 
 # Test files
 CLOUD_MODE_TEST_PLAN.md

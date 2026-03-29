@@ -1,13 +1,11 @@
 ; =============================================================================
 ; Thoth v3.7.0 – Inno Setup Script
-; Installer: bundles embedded Python + app source code.
-; Downloads Python packages at install time.  Ollama is optional — Thoth
-; can run entirely on cloud models (OpenAI / OpenRouter) without it.
+; Self-contained installer: bundles embedded Python with all pip packages
+; pre-installed.  No internet downloads at install time.
 ; =============================================================================
 ;
 ; Prerequisites (placed in installer\build\ by build_installer.ps1):
-;   build\python\          – Extracted Python embeddable package
-;   build\get-pip.py       – pip bootstrap script
+;   build\python\          – Embedded Python with all packages pre-installed
 ;
 ; Compile with:  iscc installer\thoth_setup.iss
 
@@ -103,15 +101,16 @@ Source: "..\tools\browser_tool.py";    DestDir: "{app}\app\tools"; Flags: ignore
 Source: "..\tools\shell_tool.py";      DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\youtube_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 
-; ── Embedded Python ──────────────────────────────────────────────────────────
+; ── Bundled Skills ───────────────────────────────────────────────────────────
+Source: "..\bundled_skills\*";         DestDir: "{app}\app\bundled_skills"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\skills.py";                 DestDir: "{app}\app"; Flags: ignoreversion
+
+; ── Embedded Python (with all packages pre-installed) ────────────────────────
 Source: "build\python\*";              DestDir: "{app}\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; ── get-pip.py ───────────────────────────────────────────────────────────────
-Source: "build\get-pip.py";            DestDir: "{app}"; Flags: ignoreversion
-; ── Launcher & helper scripts ────────────────────────────────────────────────
+; ── Launcher scripts ─────────────────────────────────────────────────────────
 Source: "launch_thoth.bat";            DestDir: "{app}"; Flags: ignoreversion
 Source: "launch_thoth.vbs";            DestDir: "{app}"; Flags: ignoreversion
-Source: "install_deps.bat";            DestDir: "{app}"; Flags: ignoreversion deleteafterinstall
 
 [Icons]
 Name: "{group}\{#MyAppName}";                    Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\app\thoth.ico"; Comment: "Launch Thoth"
@@ -119,11 +118,6 @@ Name: "{group}\Uninstall {#MyAppName}";           Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}";               Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\app\thoth.ico"; Tasks: desktopicon
 
 [Run]
-; ── Install Python packages (Ollama downloaded only if user wants local models)
-Filename: "{app}\install_deps.bat";  Parameters: """{app}"""; \
-    StatusMsg: "Setting up Thoth (downloading dependencies — this may take several minutes)..."; \
-    Flags: waituntilterminated
-
 ; ── Launch app after install (optional) ──────────────────────────────────────
 Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; Description: "Launch {#MyAppName}"; \
     Flags: nowait postinstall skipifsilent

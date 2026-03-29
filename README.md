@@ -43,7 +43,8 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **23 tools / 61 sub-tools** — web search, email, calendar, file management, shell access, browser automation, Telegram messaging, vision, memory, scheduled tasks, habit tracking, and more (see [full list below](#-tools-23-tools--61-sub-tools))
 - **Streaming responses** — tokens stream in real-time with a typing indicator
 - **Thinking indicators** — shows when the model is reasoning before responding
-- **Smart context management** — automatic conversation summarization compresses older turns when token usage exceeds 80% of the context window, preserving the 5 most recent turns and a running summary; a hard trim at 85% drops oldest messages as a safety net; oversized tool outputs (e.g. large PDF reads) are proportionally shrunk so multi-tool chains fit within context
+- **Smart context management** — automatic conversation summarization compresses older turns when token usage exceeds 80% of the context window, preserving the 5 most recent turns and a running summary; a hard trim at 85% drops oldest messages as a safety net; oversized tool outputs (e.g. large PDF reads) are proportionally shrunk so multi-tool chains fit within context; accurate token counting via tiktoken (cl100k_base)
+- **Dynamic tool budgets** — the agent automatically adjusts how many tools are exposed to the model based on available context headroom; when context usage is high, lower-priority tools are temporarily hidden to prevent the system prompt from crowding out conversation history
 - **Centralized prompts** — all LLM prompts (system prompt, extraction prompt, summarization prompt) managed in a single `prompts.py` module for easy tuning
 - **Live token counter** — progress bar in the sidebar shows real-time context window usage based on trimmed (model-visible) history
 - **Graceful stop & error recovery** — stop button cleanly halts generation with drain timeout; agent tool loops are caught automatically with a user-friendly error message; orphaned tool calls are repaired
@@ -62,7 +63,10 @@ Thoth doesn't just store isolated facts — it builds a **personal knowledge gra
 - **Link memories** — the agent can create relationships between any two entities — *"Link Mom to Mom's Birthday Party with relation has_event"* — building a richer graph over time
 - **Explore connections** — the agent can traverse the graph outward from any entity, discovering chains of relationships — useful for broad questions like *"Tell me about my family"* or *"What do you know about my work?"*
 - **Interactive memory visualization** — a dedicated **Memory tab** on the home screen renders the entire knowledge graph as an interactive network diagram: search bar, entity-type filters, clickable detail cards, full-graph / ego-graph toggle, and a fit-to-view button; color-coded by category, with relation types shown as edge labels
-- **Graph-enhanced auto-recall** — before every response, the agent retrieves semantically relevant entities via FAISS and then expands one hop in the graph to surface connected neighbors; recalled memories include their relationship context (e.g. "connected via: Dad --> father_of --> User")
+- **Graph-enhanced auto-recall** — before every response, the agent retrieves semantically relevant entities via FAISS and then expands one hop in the graph to surface connected neighbors; recalled memories include their relationship context (e.g. "connected via: Dad --> father_of --> User"); includes FAISS fallback search — if the primary semantic recall returns no results above 0.80 similarity, a broader relaxed search is attempted automatically
+- **Auto-linking on save** — when a new memory is saved, the engine automatically scans existing entities for potential relationships and creates links, building the knowledge graph organically without manual intervention
+- **Background orphan repair** — a periodic background process detects entities with zero relationships and attempts to link them to related entities, keeping the knowledge graph connected
+- **Memory decay** — memories that haven't been recalled recently are gradually deprioritized, ensuring frequently relevant information surfaces first
 - **Triple-based extraction** — the background extraction pipeline produces structured triples (entity + relation + entity) instead of flat facts; a "User" entity convention ensures the user is always a single canonical node with aliases for their names
 - **Automatic memory extraction** — a background process scans past conversations on startup and every 6 hours, extracting entities and relations the agent missed during live conversation; active threads are excluded to avoid race conditions
 - **Deterministic deduplication** — both live saves and background extraction check for existing entities by normalised subject before creating new entries; cross-category matching prevents fragmentation (e.g. a birthday stored as `person` won't be duplicated as `event`); alias resolution ensures "Mom" and "Mother" map to the same entity; richer content is always kept
@@ -190,6 +194,27 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 - **Sound effects** — distinct audio chimes for task completion (two-tone C5→E5) and timer alerts (5-beep A5), played asynchronously
 - **In-app toasts** — transient toast messages appear in the UI with contextual emoji icons
 - **Unified system** — all notification channels (desktop, sound, toast) fire from a single `notify()` call, keeping notification logic consistent across features
+
+### 🧩 Bundled Skills
+
+Skills are reusable instruction packs that shape how the agent thinks and responds. Each skill is a `SKILL.md` file with YAML frontmatter (display name, icon, description, required tools, tags) and freeform instructions injected into the system prompt when enabled. Thoth ships with 9 bundled skills — enable any combination from **⚙️ Settings → Skills**.
+
+| Skill | Description |
+|-------|-------------|
+| **🧠 Brain Dump** | Capture unstructured thoughts and organize them into structured notes saved to memory |
+| **☀️ Daily Briefing** | Compile a morning briefing with weather, calendar, and news headlines |
+| **🔬 Deep Research** | Perform multi-source research on a topic and produce a structured report |
+| **🗣️ Humanizer** | Write in a natural, human tone — no AI-speak, no filler, no corporate fluff |
+| **📋 Meeting Notes** | Structure raw meeting notes into actionable minutes with follow-ups |
+| **🎯 Proactive Agent** | Anticipate user needs, ask clarifying questions, and self-check work at milestones |
+| **🪞 Self-Reflection** | Periodically review memory for contradictions, gaps, and stale information |
+| **⚙️ Task Automation** | Design effective automated workflows using scheduled tasks, prompt chaining, and delivery channels |
+| **🌐 Web Navigator** | Strategic patterns for effective browser automation — research, forms, and data extraction |
+
+- **User skills** — create your own skills in `~/.thoth/skills/<name>/SKILL.md`; user skills with the same name as a bundled skill override it
+- **Enable/disable per-skill** — toggle individual skills from Settings; only enabled skills are injected into the system prompt
+- **Tool-aware** — each skill declares which tools it needs; the agent knows what capabilities are available for each skill
+- **Versioned & tagged** — skills carry version numbers and tags for organization
 
 ---
 
@@ -348,6 +373,8 @@ Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI,
 | **`api_keys.py`** | API key management — tool keys from `~/.thoth/api_keys.json`, cloud LLM provider keys and starred models from `~/.thoth/cloud_config.json` |
 | **`prompts.py`** | Centralized LLM prompts — system prompt (with BUILDING CONNECTIONS, EXPLORING CONNECTIONS, and BACKGROUND TASK PERMISSIONS sections), extraction prompt (triple-based with User entity convention and relation taxonomy), summarization prompt; memory guidelines with dedup and update instructions |
 | **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts entities and relations as structured triples, two-pass dedup (entities with alias merging, then relations with subject-to-ID resolution), User entity pre-population, excludes active threads, runs on startup + every 6 hours |
+| **`skills.py`** | Skills engine — discovers, loads, and caches bundled and user skill definitions from `SKILL.md` files with YAML frontmatter; builds prompt text for enabled skills injected into the system prompt; config persistence in `~/.thoth/skills_config.json` |
+| **`bundled_skills/`** | 9 built-in skill packages (Brain Dump, Daily Briefing, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) — each a directory containing a `SKILL.md` instruction file |
 | **`tasks.py`** | Task engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, sequential prompt execution, background runner with threading, channel delivery (Telegram/Email), per-task model override, run history persistence, task stop/cancel, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
 | **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue; coordinates task completion chimes and timer alerts |
 | **`channels/`** | Messaging channel adapters — Telegram bot (long polling, interrupt approval, corrupt thread recovery, HTML formatting) and Email channel (Gmail polling, interrupt approval, corrupt thread recovery, sender-only filter), with shared config store |
@@ -376,6 +403,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── tasks.db                # Task definitions, schedules, run history & delivery config
 ├── channels_config.json    # Channel settings (Telegram, Email auto-start)
 ├── shell_history.json      # Shell command history per thread
+├── skills_config.json      # Skill enable/disable state
 ├── thoth_app.log           # Application log (structured, timestamped)
 ├── splash.log              # Splash screen diagnostic log
 ├── tracker/
@@ -429,13 +457,13 @@ If you don't plan to run local models, Thoth's requirements drop significantly:
 
 ### Windows
 
-1. Download **[ThothSetup_3.7.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.8.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.7.0-macOS.zip](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.8.0-macOS.zip](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Unzip the file — this creates a `Thoth` folder
 3. Open the `Thoth` folder and double-click **`Start Thoth.command`**
    - If macOS blocks it: right-click → **Open** → click **Open** in the dialog
@@ -582,4 +610,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgements
 
-Built with [NiceGUI](https://nicegui.io/), [LangGraph](https://langchain-ai.github.io/langgraph/), [LangChain](https://python.langchain.com/), [Ollama](https://ollama.com/), [FAISS](https://github.com/facebookresearch/faiss), [Kokoro TTS](https://github.com/thewh1teagle/kokoro-onnx), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and [HuggingFace](https://huggingface.co/).
+Built with [NiceGUI](https://nicegui.io/), [LangGraph](https://langchain-ai.github.io/langgraph/), [LangChain](https://python.langchain.com/), [Ollama](https://ollama.com/), [FAISS](https://github.com/facebookresearch/faiss), [Kokoro TTS](https://github.com/thewh1teagle/kokoro-onnx), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [HuggingFace](https://huggingface.co/), and [tiktoken](https://github.com/openai/tiktoken).

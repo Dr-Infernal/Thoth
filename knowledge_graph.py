@@ -72,6 +72,20 @@ VALID_ENTITY_TYPES = {
 # Keep backward compat alias
 VALID_CATEGORIES = VALID_ENTITY_TYPES
 
+# Category → default relation type when auto-linking a new entity to User.
+_CATEGORY_RELATION_MAP: dict[str, str] = {
+    "person":       "knows",
+    "preference":   "prefers",
+    "fact":         "related_to",
+    "event":        "has_event",
+    "place":        "associated_with",
+    "project":      "works_on",
+    "organisation": "member_of",
+    "skill":        "has_skill",
+    "concept":      "related_to",
+    "media":        "related_to",
+}
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SQLite schema & connection
@@ -492,6 +506,10 @@ def save_entity(
     # Update FAISS (skipped during batch extraction)
     if not _skip_reindex:
         _upsert_index(entity_id)
+        # Auto-link new entity to the User entity (skip for User itself
+        # and during batch extraction, which handles relations in Pass 2).
+        if _normalize_subject(subject) != "user":
+            _auto_link_to_user(entity_id, entity_type)
 
     return entity
 
@@ -684,6 +702,36 @@ def find_by_subject(
                 if _normalize_subject(alias.strip()) == norm:
                     return row
     return None
+
+
+# ── Auto-link helpers ────────────────────────────────────────────────────────
+
+def _ensure_user_entity() -> str:
+    """Return the ID of the canonical 'User' entity, creating it if needed."""
+    existing = find_by_subject(None, "User")
+    if existing:
+        return existing["id"]
+    entity = save_entity("person", "User", "The user of this system")
+    return entity["id"]
+
+
+def _auto_link_to_user(entity_id: str, entity_type: str) -> None:
+    """Create a User → entity relation using the category heuristic.
+
+    Called automatically from ``save_entity`` for live saves.  Silently
+    does nothing if the relation already exists or the entity type has
+    no mapping.
+    """
+    rel_type = _CATEGORY_RELATION_MAP.get(entity_type)
+    if not rel_type:
+        return
+    try:
+        user_id = _ensure_user_entity()
+        if user_id == entity_id:
+            return
+        add_relation(user_id, entity_id, rel_type, source="auto")
+    except Exception as exc:
+        logger.debug("Auto-link to User failed: %s", exc)
 
 
 def semantic_search(
@@ -1300,6 +1348,78 @@ def graph_to_vis_json(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Memory decay & recall reinforcement
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _decay_multiplier(entity: dict) -> float:
+    """Return a decay factor (0.7–1.0) based on recency of access/update.
+
+    Mimics human memory: recently accessed or updated memories stay vivid,
+    while unused ones gradually fade.  Recalling a memory refreshes it
+    (the *testing effect*).
+
+    * Within 7 days  → 1.0 (no decay)
+    * 7–90 days      → linear from 1.0 → 0.7
+    * 90+ days       → 0.7 (floor — never fully forgotten)
+    """
+    props = entity.get("properties", "{}")
+    if isinstance(props, str):
+        try:
+            props = json.loads(props)
+        except (json.JSONDecodeError, TypeError):
+            props = {}
+
+    recalled_at = props.get("recalled_at", "") if isinstance(props, dict) else ""
+    updated_at = entity.get("updated_at", "")
+
+    # Use the most recent of recalled_at and updated_at
+    fresh_ts = max(recalled_at, updated_at) if recalled_at else updated_at
+    if not fresh_ts:
+        return 0.7
+
+    try:
+        fresh_dt = datetime.fromisoformat(fresh_ts)
+        days_old = (datetime.now() - fresh_dt).total_seconds() / 86400
+    except (ValueError, TypeError):
+        return 0.85
+
+    if days_old <= 7:
+        return 1.0
+    if days_old >= 90:
+        return 0.7
+    # Linear decay: 1.0 at day 7 → 0.7 at day 90
+    return 1.0 - 0.3 * (days_old - 7) / 83
+
+
+def _touch_recalled(entity_ids: list[str]) -> None:
+    """Update ``recalled_at`` in properties for entities just recalled.
+
+    This 'refreshes' memories in the decay system — mimicking how human
+    memory strengthens through recall (the *testing effect*).
+    """
+    if not entity_ids:
+        return
+    now = datetime.now().isoformat()
+    conn = _get_conn()
+    for eid in entity_ids:
+        row = conn.execute(
+            "SELECT properties FROM entities WHERE id = ?", (eid,)
+        ).fetchone()
+        if row:
+            try:
+                props = json.loads(row[0] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                props = {}
+            props["recalled_at"] = now
+            conn.execute(
+                "UPDATE entities SET properties = ? WHERE id = ?",
+                (json.dumps(props), eid),
+            )
+    conn.commit()
+    conn.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Graph-enhanced recall (used by agent.py auto-recall)
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -1309,20 +1429,32 @@ def graph_enhanced_recall(
     threshold: float = 0.35,
     hops: int = 1,
 ) -> list[dict]:
-    """Semantic search + 1-hop graph expansion for richer auto-recall.
+    """Semantic search + memory decay + 1-hop graph expansion.
 
-    1. Run FAISS semantic search to get top-k seed entities.
-    2. For each seed, collect 1-hop neighbors from the graph.
-    3. Deduplicate and return seeds + neighbors with relation context.
+    1. FAISS semantic search for top-k seed entities.
+    2. Apply memory decay multiplier (recent/recalled → higher score).
+    3. Expand 1-hop neighbors from the graph.
+    4. Reinforce recalled memories (touch ``recalled_at``).
 
     Each returned entity has extra keys:
-        ``score`` — semantic similarity (seeds only, 0 for graph-expanded)
+        ``score`` — semantic similarity × decay (seeds; 0 for graph-expanded)
         ``via`` — ``'semantic'`` or ``'graph'``
         ``relations`` — list of relations connecting this entity to its seed
     """
     seeds = semantic_search(query, top_k=top_k, threshold=threshold)
     if not seeds:
         return []
+
+    # Apply memory decay — recently accessed memories score higher
+    for seed in seeds:
+        seed["score"] = round(seed.get("score", 0) * _decay_multiplier(seed), 4)
+
+    # Re-filter after decay (some may have dropped below threshold)
+    seeds = [s for s in seeds if s["score"] >= threshold]
+    if not seeds:
+        return []
+
+    seeds.sort(key=lambda s: s["score"], reverse=True)
 
     g = _ensure_graph()
     seen_ids = {s["id"] for s in seeds}
@@ -1361,6 +1493,12 @@ def graph_enhanced_recall(
             nbr["via"] = "graph"
             nbr["relations"] = connecting_rels
             result.append(nbr)
+
+    # Reinforce recalled memories (touch recalled_at timestamp)
+    try:
+        _touch_recalled([m["id"] for m in result])
+    except Exception:
+        pass  # non-critical — don't break recall if touch fails
 
     return result
 
@@ -1507,6 +1645,57 @@ def consolidate_duplicates(threshold: float = 0.90) -> int:
         _load_graph()
 
     return removed
+
+
+def repair_orphan_entities() -> int:
+    """Find entities with zero relations and auto-link them to User.
+
+    Uses the category heuristic (``_CATEGORY_RELATION_MAP``) to create
+    appropriate ``User → entity`` relations.  Skips the User entity itself.
+
+    Designed to be called after extraction / FAISS rebuild to patch up
+    any entities that slipped through without connections.
+
+    Returns the number of new relations created.
+    """
+    conn = _get_conn()
+    orphans = conn.execute("""
+        SELECT e.* FROM entities e
+        WHERE e.id NOT IN (
+            SELECT source_id FROM relations
+            UNION
+            SELECT target_id FROM relations
+        )
+    """).fetchall()
+    conn.close()
+
+    if not orphans:
+        return 0
+
+    user_id = _ensure_user_entity()
+    linked = 0
+
+    for row in orphans:
+        row = dict(row)
+        eid = row["id"]
+        if eid == user_id:
+            continue
+        entity_type = row.get("entity_type", "")
+        rel_type = _CATEGORY_RELATION_MAP.get(entity_type, "related_to")
+        try:
+            result = add_relation(user_id, eid, rel_type, source="auto_repair")
+            if result:
+                linked += 1
+                logger.debug(
+                    "Orphan repair: User --[%s]--> %s",
+                    rel_type, row.get("subject", "?"),
+                )
+        except Exception:
+            pass
+
+    if linked:
+        logger.info("Repaired %d orphan entities with auto-links", linked)
+    return linked
 
 
 # ═════════════════════════════════════════════════════════════════════════════

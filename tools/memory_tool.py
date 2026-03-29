@@ -116,11 +116,23 @@ def _save_memory(category: str, subject: str, content: str, tags: str = "") -> s
         # Deterministic dedup: exact category + normalised subject match
         existing = memory_db.find_by_subject(category, subject)
         if existing:
-            # Same subject already stored — update with richer content
-            new_content = content if len(content) >= len(existing.get("content", "")) else existing["content"]
+            # Same subject already stored — merge content intelligently.
+            old_content = existing.get("content", "").strip()
+            new_content = content.strip()
+
+            if new_content.lower() in old_content.lower():
+                # New content is already captured — keep existing as-is
+                merged = old_content
+            elif old_content.lower() in new_content.lower():
+                # New content is a superset — replace entirely
+                merged = new_content
+            else:
+                # Both have unique info — combine them
+                merged = f"{old_content}. {new_content}".replace(". . ", ". ")
+
             result = memory_db.update_memory(
                 existing["id"],
-                new_content,
+                merged,
                 tags=tags if tags else None,
                 source="live",
             )

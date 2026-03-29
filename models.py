@@ -1,3 +1,4 @@
+import contextvars
 import json
 import logging
 import os
@@ -310,6 +311,20 @@ def set_model(model_name: str):
     _save_settings({"model": _current_model, "context_size": _num_ctx})
 
 
+# Thread-local model override — allows agent.py to propagate the per-thread
+# cloud model override so that get_context_size() (and everything downstream:
+# get_tool_budget, _keep_browser_snapshots, tool budgets) automatically uses
+# the correct context window without every caller needing an explicit argument.
+_active_model_override: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "active_model_override", default=""
+)
+
+
+def set_active_model_override(name: str) -> None:
+    """Set the thread-local model override (called by agent.py before execution)."""
+    _active_model_override.set(name)
+
+
 def get_context_size(model_name: str | None = None) -> int:
     """Return the *effective* context size for the given (or current) model.
 
@@ -318,8 +333,13 @@ def get_context_size(model_name: str | None = None) -> int:
       there is no reason to artificially limit context.
     - **Local (Ollama) models** use ``min(user_setting, model_native_max)``
       because ``num_ctx`` directly controls VRAM usage.
+
+    Resolution order for the model name:
+    1. Explicit *model_name* argument.
+    2. Thread-local ``_active_model_override`` (set by agent.py).
+    3. Global ``_current_model``.
     """
-    name = model_name or _current_model
+    name = model_name or _active_model_override.get() or _current_model
     model_max = get_model_max_context(name)
     if is_cloud_model(name):
         # Cloud: use full native context (fallback via heuristic)
@@ -328,6 +348,18 @@ def get_context_size(model_name: str | None = None) -> int:
     if model_max is not None:
         return min(_num_ctx, model_max)
     return _num_ctx
+
+
+def get_tool_budget(fraction: float, *,
+                    floor: int = 10_000, ceiling: int = 200_000) -> int:
+    """Dynamic char budget for a tool result, scaled to the model's context.
+
+    Returns a *character* limit suitable for string slicing.
+    Assumes ~3 chars per token for the tokens-to-chars conversion.
+    Clamped between *floor* and *ceiling* to prevent extremes.
+    """
+    ctx = get_context_size()
+    return min(ceiling, max(floor, int(ctx * fraction * 3)))
 
 
 def get_user_context_size() -> int:
