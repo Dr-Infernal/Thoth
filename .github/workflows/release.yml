@@ -311,12 +311,17 @@ jobs:
           PKG_PATH="dist/Thoth-${{ env.DEFAULT_VERSION }}-macOS-${ARCH}.pkg"
           NOTARY_JSON="$RUNNER_TEMP/notary_result.json"
 
+          echo "Package size (bytes):"
+          stat -f%z "$PKG_PATH"
+          echo "Package size (human):"
+          du -h "$PKG_PATH"
+
           echo "Submitting $PKG_PATH for notarization..."
           xcrun notarytool submit "$PKG_PATH" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 30m --output-format json > "$NOTARY_JSON"
+            --wait --timeout 90m --output-format json > "$NOTARY_JSON"
 
           SUBMISSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$NOTARY_JSON")"
           STATUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$NOTARY_JSON")"
