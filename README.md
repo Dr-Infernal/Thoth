@@ -214,6 +214,7 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 | **🌐 Web Navigator** | Strategic patterns for effective browser automation — research, forms, and data extraction |
 
 - **User skills** — create your own skills in `~/.thoth/skills/<name>/SKILL.md`; user skills with the same name as a bundled skill override it
+- **In-app skill editor** — create and edit skills directly from Settings → Skills with a visual editor — set the name, icon, description, required tools, and write instructions without touching any files
 - **Enable/disable per-skill** — toggle individual skills from Settings; only enabled skills are injected into the system prompt
 - **Tool-aware** — each skill declares which tools it needs; the agent knows what capabilities are available for each skill
 - **Versioned & tagged** — skills carry version numbers and tags for organization

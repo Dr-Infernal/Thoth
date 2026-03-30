@@ -16,6 +16,7 @@ New `skills.py` engine and `bundled_skills/` directory — a system for packagin
 - **Prompt injection** — enabled skills have their instructions injected into the system prompt before every LLM call
 - **Per-skill enable/disable** — toggle skills from Settings → Skills tab; config persisted in `~/.thoth/skills_config.json`
 - **Tool-aware** — each skill declares the tools it uses (`tools` field in frontmatter)
+- **In-app skill editor** — create and edit user skills from Settings → Skills with a visual form — name, icon, description, tools, and freeform instructions; no need to manually create `SKILL.md` files
 - **Cache & reload** — skills are cached in memory after first load; `load_skills(force_refresh=True)` forces a re-scan
 
 ### 🧠 Memory Intelligence

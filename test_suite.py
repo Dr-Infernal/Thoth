@@ -5207,6 +5207,11 @@ try:
         record("WARN", "skills: bundled_skills/ directory not found")
 
     # ── 36h. load_skills + enable/disable ─────────────────────────────
+    # Back up user's persisted config so we can restore it after tests.
+    _skills_config_backup = (
+        _skills_mod36.CONFIG_PATH.read_text(encoding="utf-8")
+        if _skills_mod36.CONFIG_PATH.exists() else None
+    )
     # Reset persisted config so we test true defaults (manual testing may
     # have enabled skills that persist across runs).
     if _skills_mod36.CONFIG_PATH.exists():
@@ -5675,9 +5680,21 @@ try:
     # Clean up temp files
     _shutil36.rmtree(_tmp_dir36, ignore_errors=True)
 
+    # Restore user's original skills config
+    if _skills_config_backup is not None:
+        _skills_mod36.CONFIG_PATH.write_text(_skills_config_backup, encoding="utf-8")
+    _skills_mod36.load_skills()
+
 except Exception as e:
     record("FAIL", "skills engine tests", f"{type(e).__name__}: {e}")
     traceback.print_exc()
+    # Best-effort restore even on failure
+    try:
+        if _skills_config_backup is not None:  # type: ignore[possibly-undefined]
+            _skills_mod36.CONFIG_PATH.write_text(_skills_config_backup, encoding="utf-8")
+        _skills_mod36.load_skills()
+    except Exception:
+        pass
 
 # ═══════════════════════════════════════════════════════════════════════════
 # GROUP 37 – SMOKE REGRESSION  (quick sanity checks across existing features)

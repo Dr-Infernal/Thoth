@@ -396,6 +396,8 @@ class BrowserSession:
                 "bypass_csp": True,
                 "args": [
                     "--disable-blink-features=AutomationControlled",
+                    "--no-first-run",
+                    "--no-default-browser-check",
                 ],
             }
             if channel:

@@ -426,9 +426,50 @@ class ThothTray:
     def _on_open(self, icon=None, item=None) -> None:   # noqa: ARG002
         """Open (or re-open) the native window."""
         if self._is_window_alive():
-            # Window process is alive but may be hidden behind other apps.
-            # Kill the old window and spawn a fresh one so it comes to front.
-            # The server keeps running — session state is preserved.
+            # Window is running but may be behind other apps.  Try to bring
+            # it to the foreground WITHOUT killing it — killing drops the
+            # WebSocket connection and makes in-flight streams appear failed.
+            _brought = False
+            if sys.platform == "darwin":
+                try:
+                    subprocess.run(
+                        ["osascript", "-e",
+                         "tell application \"System Events\" to set "
+                         "frontmost of every process whose unix id is "
+                         f"{self._window_proc.pid} to true"],
+                        timeout=3, capture_output=True,
+                    )
+                    _brought = True
+                except Exception:
+                    pass
+            elif sys.platform == "win32":
+                try:
+                    import ctypes
+                    hwnd = ctypes.windll.user32.FindWindowW(None, "Thoth")
+                    if hwnd:
+                        SW_RESTORE = 9
+                        ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+                        ctypes.windll.user32.SetForegroundWindow(hwnd)
+                        _brought = True
+                except Exception:
+                    pass
+            else:
+                # Linux / other — try wmctrl
+                try:
+                    subprocess.run(
+                        ["wmctrl", "-a", "Thoth"],
+                        timeout=3, capture_output=True,
+                    )
+                    _brought = True
+                except Exception:
+                    pass
+
+            if _brought:
+                logger.info("Brought existing window to front (pid %s)",
+                            self._window_proc.pid)
+                return  # keep existing WebSocket connection alive
+
+            # Platform trick failed — kill and spawn fresh window.
             try:
                 self._window_proc.terminate()
                 self._window_proc.wait(timeout=3)
