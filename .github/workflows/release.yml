@@ -8,8 +8,11 @@
 # Jobs:
 #   test           → run test suite
 #   build-windows  → self-contained .exe (Inno Setup)
-#   build-macos    → signed + notarized .pkg
-#   release        → create GitHub Release with both artifacts
+#   build-macos    → signed .app/.pkg/.dmg + fire-and-forget notarization submit
+#   release        → create draft GitHub Release with both artifacts
+#
+# Notarization stapling is handled separately by staple-notarization.yml
+# (manual workflow_dispatch) after Apple finishes processing.
 #
 # Required secrets (set in repo Settings → Secrets → Actions):
 #   APPLE_APPLICATION_P12   Base64 of Developer ID Application .p12
@@ -331,135 +334,65 @@ jobs:
           echo "DMG size (human):"
           du -h "$DMG_PATH"
 
-      - name: Upload macOS pending artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Thoth-macOS-pending
-          path: dist/Thoth-*-macOS-*.dmg
-          retention-days: 90
-
-  # ════════════════════════════════════════════════════════════════════════════
-  #  Notarize macOS DMG (release artifact)
-  # ════════════════════════════════════════════════════════════════════════════
-  notarize-macos-dmg:
-    needs: build-macos
-    runs-on: macos-latest
-    timeout-minutes: 420
-
-    steps:
-      - name: Download macOS pending artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: Thoth-macOS-pending
-          path: dist
-
-      - name: Notarize DMG
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-
-          submit_notary_with_retry() {
-            local artifact_path="$1"
-            local output_json="$2"
-            local label="$3"
-            local attempts=0
-            local max_attempts=3
-
-            while true; do
-              attempts=$((attempts + 1))
-              echo "Submitting ${label} for notarization (attempt ${attempts}/${max_attempts}): ${artifact_path}"
-              if perl -e 'alarm 600; exec @ARGV' -- xcrun notarytool submit "$artifact_path" \
-                   --apple-id "$APPLE_ID" \
-                   --password "$APPLE_APP_PASSWORD" \
-                   --team-id "$APPLE_TEAM_ID" \
-                   --output-format json > "$output_json"; then
-                return 0
-              fi
-              if [ "$attempts" -ge "$max_attempts" ]; then
-                echo "::error::${label} notarization failed after ${max_attempts} attempts"
-                return 1
-              fi
-              echo "::warning::${label} notarization attempt ${attempts} failed (possible transient Apple connectivity issue). Retrying in 30s..."
-              sleep 30
-            done
-          }
-
-          wait_notary_status() {
-            local submission_id="$1"
-            local label="$2"
-            local timeout_seconds=21600
-            local sleep_seconds=30
-            local start_time=$(date +%s)
-            local info_json="$RUNNER_TEMP/notary_${label}_info.json"
-            while true; do
-              local elapsed=$(( $(date +%s) - start_time ))
-              if [ "$elapsed" -ge "$timeout_seconds" ]; then
-                break
-              fi
-              if xcrun notarytool info "$submission_id" \
-                   --apple-id "$APPLE_ID" \
-                   --password "$APPLE_APP_PASSWORD" \
-                   --team-id "$APPLE_TEAM_ID" \
-                   --output-format json > "$info_json"; then
-                local status
-                status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$info_json")"
-                echo "${label} notarization status: ${status} (elapsed: ${elapsed}s)"
-                case "$status" in
-                  Accepted) return 0 ;;
-                  Invalid) return 2 ;;
-                esac
-              else
-                echo "::warning::${label} notary status check failed (transient network/API issue); retrying..."
-              fi
-              sleep "$sleep_seconds"
-            done
-            return 1
-          }
-
-          DMG_PATH="$(ls dist/Thoth-*-macOS-*.dmg | head -n1)"
-          DMG_NOTARY_JSON="$RUNNER_TEMP/notary_dmg_result.json"
-
-          submit_notary_with_retry "$DMG_PATH" "$DMG_NOTARY_JSON" "DMG"
-          DMG_SUBMISSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$DMG_NOTARY_JSON")"
-          echo "DMG notarization submission id: $DMG_SUBMISSION_ID"
-
-          set +e
-          wait_notary_status "$DMG_SUBMISSION_ID" "DMG"
-          DMG_WAIT_RC=$?
-          set -e
-
-          if [ "$DMG_WAIT_RC" -eq 2 ]; then
-            echo "::error::DMG notarization invalid. Fetching Apple notary log..."
-            xcrun notarytool log "$DMG_SUBMISSION_ID" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_APP_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" || true
-            exit 1
-          elif [ "$DMG_WAIT_RC" -ne 0 ]; then
-            echo "::error::DMG notarization timed out waiting for Apple processing"
-            exit 1
-          fi
-
-          echo "Stapling DMG notarization ticket..."
-          xcrun stapler staple "$DMG_PATH"
-          echo "Verifying DMG Gatekeeper assessment..."
-          spctl --assess -v --type open "$DMG_PATH" || echo "::warning::spctl assessment returned non-zero (may be expected on GHA runners)"
-
-      - name: Upload notarized macOS installer
+      - name: Upload signed macOS DMG
         uses: actions/upload-artifact@v4
         with:
           name: Thoth-macOS
           path: dist/Thoth-*-macOS-*.dmg
           retention-days: 90
 
+      # Fire-and-forget: submit to Apple notarization but don't wait.
+      # Use the separate staple-notarization.yml workflow to poll + staple later.
+      - name: Submit DMG for notarization (fire and forget)
+        continue-on-error: true
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          DMG_PATH="$(ls dist/Thoth-*-macOS-*.dmg | head -n1)"
+          echo "Submitting DMG for notarization (fire-and-forget): $DMG_PATH"
+
+          NOTARY_JSON="$RUNNER_TEMP/notary_submit.json"
+          attempts=0
+          max_attempts=3
+          submitted=false
+
+          while [ "$attempts" -lt "$max_attempts" ]; do
+            attempts=$((attempts + 1))
+            echo "Submit attempt ${attempts}/${max_attempts}..."
+            if perl -e 'alarm 600; exec @ARGV' -- xcrun notarytool submit "$DMG_PATH" \
+                 --apple-id "$APPLE_ID" \
+                 --password "$APPLE_APP_PASSWORD" \
+                 --team-id "$APPLE_TEAM_ID" \
+                 --output-format json > "$NOTARY_JSON" 2>&1; then
+              submitted=true
+              break
+            fi
+            echo "::warning::Submit attempt ${attempts} failed. Retrying in 30s..."
+            sleep 30
+          done
+
+          if [ "$submitted" = true ]; then
+            SUBMISSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$NOTARY_JSON")"
+            echo "══════════════════════════════════════════════════════════════"
+            echo "  NOTARIZATION SUBMITTED SUCCESSFULLY"
+            echo "  Submission ID: $SUBMISSION_ID"
+            echo "  Run ID:        ${{ github.run_id }}"
+            echo ""
+            echo "  Use these values in the 'Staple Notarization' workflow"
+            echo "  to poll Apple and produce a stapled DMG."
+            echo "══════════════════════════════════════════════════════════════"
+          else
+            echo "::warning::Notarization submit failed after ${max_attempts} attempts. DMG is still signed and usable — submit manually or re-run staple workflow."
+          fi
+
   # ════════════════════════════════════════════════════════════════════════════
   #  Create GitHub Release (only on tag push)
   # ════════════════════════════════════════════════════════════════════════════
   release:
-    needs: [build-windows, notarize-macos-dmg]
+    needs: [build-windows, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

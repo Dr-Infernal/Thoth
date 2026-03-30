@@ -1,0 +1,135 @@
+# =============================================================================
+# staple-notarization.yml — Poll Apple notarization + staple DMG
+#
+# Triggered manually after the main release workflow submits notarization.
+# Polls Apple until the submission is accepted, staples the ticket into
+# the DMG, and uploads it as a downloadable artifact.
+#
+# You can then download the stapled DMG, verify it locally, and replace
+# the unsigned DMG in the GitHub Release when ready.
+#
+# Inputs (from the build-macos job log):
+#   submission_id  — Apple notarization submission UUID
+#   build_run_id   — GitHub Actions run ID that produced the DMG artifact
+# =============================================================================
+
+name: Staple Notarization
+
+on:
+  workflow_dispatch:
+    inputs:
+      submission_id:
+        description: 'Notarization submission ID (UUID from build-macos log)'
+        required: true
+      build_run_id:
+        description: 'GitHub Actions run ID that produced the DMG artifact'
+        required: true
+
+jobs:
+  staple:
+    runs-on: macos-latest
+    timeout-minutes: 420
+
+    steps:
+      - name: Download signed DMG from build run
+        uses: actions/download-artifact@v4
+        with:
+          name: Thoth-macOS
+          path: dist
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Poll notarization status and staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SUBMISSION_ID: ${{ inputs.submission_id }}
+        run: |
+          set -euo pipefail
+
+          DMG_PATH="$(ls dist/Thoth-*-macOS-*.dmg | head -n1)"
+          echo "DMG: $DMG_PATH"
+          echo "Submission ID: $SUBMISSION_ID"
+          echo ""
+
+          # ── First, check current status (might already be done) ──
+          check_status() {
+            local info_json="$RUNNER_TEMP/notary_info.json"
+            if xcrun notarytool info "$SUBMISSION_ID" \
+                 --apple-id "$APPLE_ID" \
+                 --password "$APPLE_APP_PASSWORD" \
+                 --team-id "$APPLE_TEAM_ID" \
+                 --output-format json > "$info_json" 2>&1; then
+              python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status","Unknown"))' "$info_json"
+            else
+              echo "CheckFailed"
+            fi
+          }
+
+          # ── Poll loop: 5 min intervals, up to 6 hours ──
+          timeout_seconds=21600
+          poll_interval=300
+          start_time=$(date +%s)
+
+          echo "Polling Apple notarization status (up to 6 hours, every 5 minutes)..."
+          echo ""
+
+          while true; do
+            elapsed=$(( $(date +%s) - start_time ))
+            status=$(check_status)
+
+            echo "[$(date '+%H:%M:%S')] Status: ${status} (elapsed: ${elapsed}s / ${timeout_seconds}s)"
+
+            case "$status" in
+              Accepted)
+                echo ""
+                echo "Notarization ACCEPTED! Stapling ticket into DMG..."
+                xcrun stapler staple "$DMG_PATH"
+                echo "Verifying staple..."
+                xcrun stapler validate "$DMG_PATH"
+                echo ""
+                echo "══════════════════════════════════════════════════════════════"
+                echo "  STAPLED DMG READY"
+                echo "  Download the 'Thoth-macOS-stapled' artifact from this run,"
+                echo "  verify locally, then replace the DMG in the GitHub Release."
+                echo "══════════════════════════════════════════════════════════════"
+                exit 0
+                ;;
+              Invalid)
+                echo ""
+                echo "::error::Notarization REJECTED by Apple. Fetching log..."
+                xcrun notarytool log "$SUBMISSION_ID" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_APP_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" || true
+                exit 1
+                ;;
+              "In Progress")
+                # Still processing, continue polling
+                ;;
+              CheckFailed)
+                echo "::warning::Status check failed (transient API issue), will retry..."
+                ;;
+              *)
+                echo "::warning::Unexpected status: ${status}"
+                ;;
+            esac
+
+            if [ "$elapsed" -ge "$timeout_seconds" ]; then
+              echo ""
+              echo "::error::Timed out after ${timeout_seconds}s. Apple is still processing."
+              echo "Re-run this workflow to continue polling — it will pick up where Apple left off."
+              exit 1
+            fi
+
+            sleep "$poll_interval"
+          done
+
+      - name: Upload stapled DMG
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Thoth-macOS-stapled
+          path: dist/Thoth-*-macOS-*.dmg
+          retention-days: 90
