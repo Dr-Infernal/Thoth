@@ -79,6 +79,74 @@ from langgraph.prebuilt import create_react_agent
 from datetime import datetime as _datetime
 
 
+# ── Content normalisation helpers ────────────────────────────────────────────
+
+# Recursion limits: how many LangGraph node executions (LLM call + tool call
+# = 2 steps).  50 ≈ 25 tool invocations for interactive; 100 ≈ 50 for tasks.
+RECURSION_LIMIT_CHAT = 50
+RECURSION_LIMIT_TASK = 100
+
+def _content_to_str(content) -> str:
+    """Normalise ``AIMessage.content`` to a plain string.
+
+    Newer models (e.g. gpt-5.4 via OpenAI Responses API) may return content as
+    a *list* of typed dicts instead of a plain string.  This extracts all
+    ``{"type": "text"}`` blocks and joins them; non-text blocks (reasoning,
+    function_call) are discarded.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(parts)
+    return str(content) if content else ""
+
+
+def _friendly_api_error(exc_str: str) -> str:
+    """Return a user-friendly description for an API / provider error."""
+    s = exc_str.lower()
+    if "recursion" in s or "recursion limit" in s:
+        return "⚠️ I got stuck in a tool loop and had to stop. Try rephrasing your request or starting a new conversation."
+    if "insufficient_quota" in s or "exceeded your current quota" in s:
+        return "⚠️ API quota exceeded — please check your billing dashboard."
+    if "rate_limit" in s or "rate limit" in s or "429" in s:
+        return "⚠️ Rate limit reached — please wait a moment and try again."
+    if "invalid_api_key" in s or "incorrect api key" in s or "authentication" in s or "unauthorized" in s:
+        return "⚠️ Authentication failed — please verify your API key in Settings → API Keys."
+    if "billing" in s:
+        return "⚠️ Billing limit reached — please review your plan at the provider dashboard."
+    if "context_length_exceeded" in s or "context length" in s or "maximum context" in s:
+        return "⚠️ Context too long — try starting a new conversation or a model with a larger context window."
+    if "server_error" in s or "internal server error" in s or "status code: 500" in s:
+        return "⚠️ The AI provider had a server error — please try again shortly."
+    if "bad gateway" in s or "status code: 502" in s:
+        return "⚠️ The AI provider is temporarily unavailable (502) — please try again shortly."
+    if "service unavailable" in s or "status code: 503" in s:
+        return "⚠️ The AI provider is temporarily unavailable (503) — please try again shortly."
+    if "timeout" in s or "timed out" in s:
+        return "⚠️ Request timed out — please try again."
+    if "does not support tools" in s or "status code: 400" in s:
+        return f"⚠️ {get_current_model()} does not support tool calling — switch to a compatible model in Settings → Models."
+    # Fallback — expose the raw error so nothing is silently swallowed
+    return f"⚠️ API error: {exc_str}"
+
+
+def _notify_api_error(friendly_msg: str) -> None:
+    """Fire a persistent desktop notification for an API error."""
+    try:
+        from notifications import notify
+        notify("Thoth – API Error", friendly_msg, sound="error", icon="⚠️",
+               toast_type="negative")
+    except Exception:
+        pass
+
+
 # ── Pre-model hook: trim messages to fit context window ──────────────────────
 def _keep_browser_snapshots() -> int:
     """How many recent browser snapshots to keep in full (rest become stubs)."""
@@ -114,7 +182,7 @@ def _message_tokens(m) -> int:
     """Return the token count for a single message including content,
     tool_calls payloads, and per-message framing overhead (~4 tokens)."""
     parts: list[str] = []
-    content = getattr(m, "content", "") or ""
+    content = _content_to_str(getattr(m, "content", ""))
     if content:
         parts.append(content)
     tool_calls = getattr(m, "tool_calls", None)
@@ -162,7 +230,7 @@ def _pre_model_trim(state: dict) -> dict:
     if len(browser_indices) > _n_keep:
         for i in browser_indices[:-_n_keep]:
             m = messages[i]
-            content = m.content or ""
+            content = _content_to_str(m.content)
             # Extract URL and Title from the snapshot header lines
             url = ""
             title = ""
@@ -196,16 +264,16 @@ def _pre_model_trim(state: dict) -> dict:
 
     tool_indices = [
         i for i, m in enumerate(messages)
-        if m.type == "tool" and len(getattr(m, "content", "") or "") > 0
+        if m.type == "tool" and len(_content_to_str(getattr(m, "content", ""))) > 0
     ]
     if tool_indices:
         total_tool_chars = sum(
-            len(messages[i].content or "") for i in tool_indices
+            len(_content_to_str(messages[i].content)) for i in tool_indices
         )
         if total_tool_chars > tool_budget_chars:
             for i in tool_indices:
                 m = messages[i]
-                content = m.content or ""
+                content = _content_to_str(m.content)
                 # Each tool gets a share proportional to its original size
                 share = len(content) / total_tool_chars
                 cap = max(2_000, int(tool_budget_chars * share))
@@ -403,6 +471,47 @@ def _pre_model_trim(state: dict) -> dict:
       except Exception as exc:
         logger.debug("Auto-recall failed (non-fatal): %s", exc)
 
+    # ── Wind-down warning near recursion limit ───────────────────────
+    # Count steps (ai + tool messages) since the last human message in
+    # the ORIGINAL state — this approximates how many LangGraph node
+    # executions have occurred in the current invoke/stream call.
+    # At 75% of the limit, inject a system message asking the model to
+    # wrap up.  This gives the model a chance to produce a final answer
+    # instead of hitting the hard wall and crashing.
+    try:
+        _orig_msgs = state["messages"]
+        _last_human = -1
+        for _i in range(len(_orig_msgs) - 1, -1, -1):
+            if _orig_msgs[_i].type == "human":
+                _last_human = _i
+                break
+        if _last_human >= 0:
+            _steps = sum(1 for _m in _orig_msgs[_last_human + 1:]
+                         if _m.type in ("ai", "tool"))
+            # Use the task limit when running in a background workflow,
+            # chat limit otherwise.  is_background_workflow() is the
+            # public API for checking the background flag.
+            try:
+                _is_bg = is_background_workflow()
+            except Exception:
+                _is_bg = False
+            _limit = RECURSION_LIMIT_TASK if _is_bg else RECURSION_LIMIT_CHAT
+            _threshold = int(_limit * 0.75)
+            if _steps >= _threshold:
+                from langchain_core.messages import SystemMessage as _WDMsg
+                _wind_down = _WDMsg(
+                    content=(
+                        "[IMPORTANT: You are approaching the tool call limit "
+                        f"({_steps} of {_limit} steps used). "
+                        "Wrap up your current task NOW and provide a final "
+                        "answer with what you have so far. Do NOT start new "
+                        "tool calls unless absolutely critical.]"
+                    )
+                )
+                trimmed.append(_wind_down)
+    except Exception:
+        pass  # Non-fatal — don't break the agent if this fails
+
     return {"llm_input_messages": trimmed}
 
 # Cache compiled agent graphs keyed by frozenset of enabled tool names
@@ -570,7 +679,7 @@ def _do_summarize(agent, config: dict, model_override: str | None = None) -> Non
 
         for m in old_msgs:
             role = m.type.upper()
-            content = getattr(m, "content", "") or ""
+            content = _content_to_str(getattr(m, "content", ""))
             if not content:
                 continue
             # Cap individual messages so the summarizer prompt stays manageable
@@ -594,7 +703,7 @@ def _do_summarize(agent, config: dict, model_override: str | None = None) -> Non
             {"role": "human", "content": conversation_text},
         ])
 
-        summary_text = (summary_response.content or "").strip()
+        summary_text = _content_to_str(summary_response.content).strip()
         # Strip <think>…</think> blocks from thinking / reasoning models
         summary_text = _re.sub(r"<think>.*?</think>", "", summary_text, flags=_re.DOTALL)
         summary_text = _re.sub(r"</?think>", "", summary_text).strip()
@@ -910,6 +1019,9 @@ def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict,
 
     # Use node-level streaming so we can check stop_event between nodes
     if stop_event is not None:
+        import hashlib as _ia_hashlib
+        _ia_recent_sigs: list[str] = []
+        _ia_loop = False
         try:
             for _event in agent.stream(
                 {"messages": [("human", user_input)]},
@@ -918,6 +1030,26 @@ def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict,
             ):
                 if stop_event.is_set():
                     raise TaskStoppedError("Task stopped during execution")
+                # Loop detection — inspect tool calls in update events
+                if isinstance(_event, dict):
+                    for _node, _ndata in _event.items():
+                        if not isinstance(_ndata, dict):
+                            continue
+                        for _m in _ndata.get("messages", []):
+                            for _tc in getattr(_m, "tool_calls", []):
+                                _a = _tc.get("args", {})
+                                _sig = _tc["name"] + ":" + _ia_hashlib.md5(
+                                    _json.dumps(_a, sort_keys=True, default=str).encode()
+                                ).hexdigest()
+                                if _ia_recent_sigs and _ia_recent_sigs[-1] == _sig:
+                                    _ia_recent_sigs.append(_sig)
+                                else:
+                                    _ia_recent_sigs.clear()
+                                    _ia_recent_sigs.append(_sig)
+                                if len(_ia_recent_sigs) >= 4:
+                                    _ia_loop = True
+                if _ia_loop:
+                    break
         except TaskStoppedError:
             raise
         except Exception as exc:
@@ -935,14 +1067,31 @@ def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict,
                     if stop_event.is_set():
                         raise TaskStoppedError("Task stopped during retry")
             else:
-                raise
+                _err_msg = _friendly_api_error(exc_str)
+                logger.error("invoke_agent API error: %s", exc_str)
+                _notify_api_error(_err_msg)
+                return _err_msg
+
+        # Handle loop detection in task mode
+        if _ia_loop:
+            logger.warning("invoke_agent: loop detected — same tool+args called 4 times consecutively")
+            try:
+                repair_orphaned_tool_calls(config=config, agent_graph=agent)
+            except Exception:
+                pass
+            _loop_msg = ("⚠️ I noticed I was repeating the same action without making progress, "
+                         "so I stopped to avoid wasting resources.")
+            _notify_api_error(_loop_msg)
+            return _loop_msg
 
         # Read final state from checkpoint
         state = agent.get_state(config)
         if state and state.values:
             for msg in reversed(state.values.get("messages", [])):
                 if hasattr(msg, "type") and msg.type == "ai" and msg.content:
-                    return msg.content
+                    text = _content_to_str(msg.content)
+                    if text.strip():
+                        return text
         return "I wasn't able to generate a response."
 
     # Original path (no stop_event) — simple invoke
@@ -954,7 +1103,9 @@ def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict,
     messages = result.get("messages", [])
     for msg in reversed(messages):
         if hasattr(msg, "type") and msg.type == "ai" and msg.content:
-            return msg.content
+            text = _content_to_str(msg.content)
+            if text.strip():
+                return text
     return "I wasn't able to generate a response."
 
 
@@ -1088,6 +1239,14 @@ def _stream_graph(agent, input_data, config: dict,
     _in_think = False           # True while inside a <think>…</think> block
     _seen_tool_calls: set[str] = set()
 
+    # Loop detection: track consecutive identical tool call signatures.
+    # If the same (name, args_hash) appears 4 times in a row, the model
+    # is stuck — break early instead of burning through the recursion limit.
+    import hashlib as _hashlib
+    _LOOP_THRESHOLD = 4
+    _recent_tool_sigs: list[str] = []   # last N signatures
+    _loop_detected = False
+
     try:
         stream_iter = agent.stream(
             input_data,
@@ -1143,6 +1302,20 @@ def _stream_graph(agent, input_data, config: dict,
                             if tc_id not in _seen_tool_calls:
                                 _seen_tool_calls.add(tc_id)
                                 yield ("tool_call", _resolve_tool_display_name(tc["name"]))
+
+                            # Loop detection: hash (name, args) as signature
+                            _args = tc.get("args", {})
+                            _sig = tc["name"] + ":" + _hashlib.md5(
+                                _json.dumps(_args, sort_keys=True, default=str).encode()
+                            ).hexdigest()
+                            if _recent_tool_sigs and _recent_tool_sigs[-1] == _sig:
+                                _recent_tool_sigs.append(_sig)
+                            else:
+                                _recent_tool_sigs.clear()
+                                _recent_tool_sigs.append(_sig)
+                            if len(_recent_tool_sigs) >= _LOOP_THRESHOLD:
+                                _loop_detected = True
+
                     # Tool result returned
                     if m.type == "tool":
                         yield ("tool_done", {
@@ -1150,6 +1323,9 @@ def _stream_graph(agent, input_data, config: dict,
                             "raw_name": m.name,
                             "content": getattr(m, "content", ""),
                         })
+
+            if _loop_detected:
+                break
 
         # ── messages: token-level streaming ──────────────────────────────────
         elif mode == "messages":
@@ -1167,7 +1343,7 @@ def _stream_graph(agent, input_data, config: dict,
             if getattr(msg, "tool_calls", []) or getattr(msg, "tool_call_chunks", []):
                 continue
 
-            content = msg.content
+            content = _content_to_str(msg.content)
             if not content:
                 # Empty content = thinking phase for reasoning models
                 if not thinking_signalled:
@@ -1267,7 +1443,7 @@ def _stream_graph(agent, input_data, config: dict,
                             continue
                         if getattr(msg, "tool_calls", []) or getattr(msg, "tool_call_chunks", []):
                             continue
-                        content = msg.content
+                        content = _content_to_str(msg.content)
                         if content:
                             content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL)
                             content = _re.sub(r"</?think>", "", content)
@@ -1275,13 +1451,35 @@ def _stream_graph(agent, input_data, config: dict,
                                 full_answer.append(content)
                                 yield ("token", content)
             except Exception as retry_exc:
-                yield ("error", str(retry_exc))
+                _rmsg = _friendly_api_error(str(retry_exc))
+                _notify_api_error(_rmsg)
+                yield ("error", _rmsg)
                 return
         elif "does not support tools" in exc_str or "status code: 400" in exc_str:
-            yield ("error", f"{get_current_model()} does not support tool calling. "
-                   "Please switch to a compatible model in Settings → Models.")
+            _err = _friendly_api_error(exc_str)
+            _notify_api_error(_err)
+            yield ("error", _err)
         else:
-            yield ("error", exc_str)
+            _err = _friendly_api_error(exc_str)
+            logger.error("_stream_graph API error: %s", exc_str)
+            _notify_api_error(_err)
+            yield ("error", _err)
+        return
+
+    # Handle loop detection — repair orphans and yield friendly error
+    if _loop_detected:
+        logger.warning("Loop detected: same tool+args called %d times consecutively", _LOOP_THRESHOLD)
+        try:
+            repair_orphaned_tool_calls(config=config, agent_graph=agent)
+        except Exception:
+            pass
+        _loop_msg = ("⚠️ I noticed I was repeating the same action without making progress, "
+                     "so I stopped. Here's what I have so far:")
+        _notify_api_error(_loop_msg)
+        if full_answer:
+            yield ("done", "".join(full_answer) + "\n\n" + _loop_msg)
+        else:
+            yield ("error", _loop_msg)
         return
 
     # Check if the graph paused due to an interrupt (destructive tool gate)

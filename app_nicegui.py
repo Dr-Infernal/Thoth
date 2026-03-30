@@ -71,6 +71,7 @@ from channels import config as _ch_config
 
 # ── Backend imports (shared with Streamlit frontend) ─────────────────────────
 from threads import _list_threads, _save_thread_meta, _delete_thread, get_thread_skills_override, set_thread_skills_override
+from langchain_core.messages import AIMessage
 from agent import (
     get_agent_graph, stream_agent, resume_stream_agent,
     clear_agent_cache, repair_orphaned_tool_calls, get_token_usage,
@@ -428,7 +429,18 @@ def load_thread_messages(thread_id: str) -> list[dict]:
                         msg_dict["images"] = user_images
                     msgs.append(msg_dict)
                 elif m.type == "ai" and m.content:
-                    msg_dict = {"role": "assistant", "content": m.content}
+                    ai_content = m.content
+                    if isinstance(ai_content, list):
+                        text_parts = []
+                        for block in ai_content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                text_parts.append(block.get("text", ""))
+                            elif isinstance(block, str):
+                                text_parts.append(block)
+                        ai_content = "\n".join(text_parts)
+                    if not isinstance(ai_content, str) or not ai_content.strip():
+                        continue
+                    msg_dict = {"role": "assistant", "content": ai_content}
                     if pending_tool_results:
                         msg_dict["tool_results"] = list(pending_tool_results)
                         pending_tool_results = []
@@ -436,6 +448,15 @@ def load_thread_messages(thread_id: str) -> list[dict]:
                         msg_dict["charts"] = list(pending_charts)
                         pending_charts = []
                     msgs.append(msg_dict)
+
+            # Flush orphaned tool results that were never attached to a
+            # final AI message (e.g. recursion limit hit mid-tool-loop).
+            if pending_tool_results:
+                msgs.append({
+                    "role": "assistant",
+                    "content": "⚠️ The assistant was interrupted before it could finish (tool limit reached). Here's what it was working on:",
+                    "tool_results": list(pending_tool_results),
+                })
             return msgs
     except Exception:
         pass
@@ -1364,6 +1385,10 @@ async def index():
 
         # Main text with inline YouTube embeds
         text = msg.get("content", "")
+        if isinstance(text, list):
+            text = " ".join(str(t) for t in text)
+        if not isinstance(text, str):
+            text = str(text) if text else ""
         if text:
             _render_text_with_embeds(text)
 
@@ -1519,19 +1544,30 @@ async def index():
             if event_type == "error":
                 gen.status = "error"
                 gen.error = payload
+                gen.accumulated = f"\u26a0\ufe0f An error occurred: {payload}"
                 if not gen.detached:
                     try:
                         if gen.thinking_label:
                             gen.thinking_label.delete()
                         if gen.assistant_md:
                             gen.assistant_md.set_visibility(True)
-                            gen.assistant_md.set_content(f"\u26a0\ufe0f An error occurred: {payload}")
+                            gen.assistant_md.set_content(gen.accumulated)
                     except Exception:
                         pass
                 try:
                     repair_orphaned_tool_calls(gen.enabled_tools, gen.config)
                 except Exception:
                     pass
+                # Persist the error message to the LangGraph checkpoint so it
+                # survives thread refresh / reload.
+                try:
+                    _agent = get_agent_graph()
+                    _agent.update_state(
+                        gen.config,
+                        {"messages": [AIMessage(content=gen.accumulated)]},
+                    )
+                except Exception:
+                    logger.debug("Failed to persist error to checkpoint", exc_info=True)
                 _break_loop = True
 
             elif event_type == "tool_call":
@@ -1659,7 +1695,9 @@ async def index():
                         _bsm = _get_bsm()
                         if _bsm.has_active_session():
                             _bs = _bsm.get_session()
-                            _screenshot_bytes = _bs.take_screenshot()
+                            _screenshot_bytes = _bs.take_screenshot(
+                                thread_id=gen.thread_id
+                            )
                             if _screenshot_bytes:
                                 _b64_ss = _b64.b64encode(_screenshot_bytes).decode("ascii")
                                 if gen.tool_col:
@@ -1902,12 +1940,13 @@ async def index():
 
         # ── Build config ─────────────────────────────────────────────────
         _thread_mo = state.thread_model_override or ""
+        from agent import RECURSION_LIMIT_CHAT
         config = {
             "configurable": {
                 "thread_id": gen_thread_id,
                 **({"model_override": _thread_mo} if _thread_mo else {}),
             },
-            "recursion_limit": 25,
+            "recursion_limit": RECURSION_LIMIT_CHAT,
         }
         enabled_tools = [t.name for t in tool_registry.get_enabled_tools()]
 
@@ -1999,12 +2038,13 @@ async def index():
         gen_thread_id = state.thread_id
 
         _thread_mo2 = state.thread_model_override or ""
+        from agent import RECURSION_LIMIT_CHAT
         config = {
             "configurable": {
                 "thread_id": gen_thread_id,
                 **({"model_override": _thread_mo2} if _thread_mo2 else {}),
             },
-            "recursion_limit": 25,
+            "recursion_limit": RECURSION_LIMIT_CHAT,
         }
         enabled_tools = [t.name for t in tool_registry.get_enabled_tools()]
 
@@ -6269,7 +6309,13 @@ async def index():
 
     def _poll_notifications() -> None:
         for t in drain_toasts():
-            ui.notify(t["message"], type="positive", position="top-right", timeout=5000)
+            _ttype = t.get("toast_type", "positive")
+            _tkw: dict = {"type": _ttype, "position": "top-right"}
+            if _ttype == "negative":
+                _tkw.update(timeout=0, close_button=True)
+            else:
+                _tkw["timeout"] = 5000
+            ui.notify(t["message"], **_tkw)
             _rebuild_thread_list()
 
     def _poll_voice() -> None:

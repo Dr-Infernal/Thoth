@@ -8,7 +8,7 @@
   <a href="https://github.com/siddsachar/Thoth/releases"><img src="https://img.shields.io/github/v/release/siddsachar/Thoth?style=flat&label=release&color=c9a227" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/siddsachar/Thoth?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-c9a227?style=flat" alt="Platform">
-  <img src="https://img.shields.io/badge/tests-passing-brightgreen?style=flat" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-842%20unit%20%7C%20155%20integration-brightgreen?style=flat" alt="Tests">
 </p>
 
 Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 23 integrated tools (61 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory with a personal knowledge graph, scheduled tasks, habit tracking, and more — plus Telegram and Email messaging channels. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
@@ -47,7 +47,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 - **Dynamic tool budgets** — the agent automatically adjusts how many tools are exposed to the model based on available context headroom; when context usage is high, lower-priority tools are temporarily hidden to prevent the system prompt from crowding out conversation history
 - **Centralized prompts** — all LLM prompts (system prompt, extraction prompt, summarization prompt) managed in a single `prompts.py` module for easy tuning
 - **Live token counter** — progress bar in the sidebar shows real-time context window usage based on trimmed (model-visible) history
-- **Graceful stop & error recovery** — stop button cleanly halts generation with drain timeout; agent tool loops are caught automatically with a user-friendly error message; orphaned tool calls are repaired
+- **Graceful stop & error recovery** — stop button cleanly halts generation with drain timeout; agent tool loops are caught automatically (50-step limit for chat, 100 for tasks) with a wind-down warning at 75% and 4× loop detection; orphaned tool calls are repaired; API errors are surfaced as persistent red toasts and saved to the conversation checkpoint so they survive thread refresh
 - **Task cancellation** — running background tasks can be stopped from the chat header, activity panel, or task card; cancellation is checked between every LangGraph node for clean shutdown
 - **Displaced tool-call auto-repair** — if context trimming displaces tool-call/response pairs, the agent automatically detects and repairs the ordering before the next LLM call; orphaned tool calls trigger an automatic retry
 - **Date/time awareness** — current date and time is injected into every LLM call so the model always knows "today"
@@ -125,8 +125,9 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 - **Smart snapshot filtering** — deduplicates links, drops hidden elements, and soft-caps at 100 interactive elements to stay within context limits
 - **Browser snapshot compression** — older browser snapshots are automatically compressed to one-line stubs (URL + title) while keeping the last 2 in full, preventing context window overflow during long browsing sessions
 - **7 sub-tools** — `browser_navigate`, `browser_click`, `browser_type`, `browser_scroll`, `browser_snapshot`, `browser_back`, `browser_tab`
+- **Per-thread tab isolation** — each agent thread (interactive chat or background task) gets its own browser tab; tabs are cleaned up when a thread is deleted or a task completes; the agent never hijacks tabs belonging to other threads
 - **Automatic browser detection** — detects installed Chrome, then Edge (Windows), then falls back to Playwright's bundled Chromium
-- **Background task blocking** — browser actions are blocked when running inside a background task
+- **Crash recovery** — if the browser is closed externally, the agent detects the disconnection, clears stale state, and automatically relaunches on the next browser action
 
 ### 👁️ Vision
 - **Camera analysis** — capture and analyze images from your webcam in real-time
@@ -139,7 +140,7 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 ### ⚡ Tasks & Scheduling
 - **Unified task engine** — create named, multi-step tasks that run sequentially in a fresh thread, powered by APScheduler
 - **7 schedule types** — `daily`, `weekly`, `weekdays`, `weekends`, `interval` (minutes), `cron` (full cron expression), `delay_minutes` (one-shot quick timer with notification)
-- **Template variables** — use `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}` in prompts — replaced at runtime
+- **Template variables** — use `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}`, `{{task_id}}` in prompts — replaced at runtime; `{{task_id}}` lets prompts reference their own task for self-management (e.g. self-disable after a condition is met)
 - **Channel delivery** — tasks can deliver their output to Telegram or Email after execution; per-task `delivery_channel` and `delivery_target` configuration
 - **Per-task model override** — each task can specify a different LLM; the engine loads the override, runs the task, then restores the default
 - **Prompt chaining** — each step sees the output of the previous step, enabling research → summarise → action pipelines
@@ -148,6 +149,7 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 - **Pre-built templates** — ships with 5 starter tasks (Daily Briefing, Research Summary, Email Digest, Weekly Review, Quick Reminder)
 - **Home screen dashboard** — manage tasks from the home screen with a tabbed layout: ⚡ Tasks (tiles with edit/run/delete) and 📋 Activity (monitoring panel with upcoming runs, recent history, channel status)
 - **Persistent run history** — task execution history survives task deletion; displayed in the Activity tab with ✅/❌/⏳ status icons
+- **Monitoring / polling** — use interval schedules with conditional prompts to monitor conditions (stock availability, price drops, new releases); the agent checks periodically, reports when the condition is met, and self-disables the task via `{{task_id}}` — no manual intervention needed
 - **Task stop / cancel** — stop a running task from the chat header, activity panel, or task card; stopped tasks skip delivery and auto-delete, and are recorded in run history
 
 ### 📬 Messaging Channels
@@ -192,8 +194,8 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 ### 🔔 Notifications
 - **Desktop notifications** — task completions and timer expirations trigger a desktop notification with timestamp
 - **Sound effects** — distinct audio chimes for task completion (two-tone C5→E5) and timer alerts (5-beep A5), played asynchronously
-- **In-app toasts** — transient toast messages appear in the UI with contextual emoji icons
-- **Unified system** — all notification channels (desktop, sound, toast) fire from a single `notify()` call, keeping notification logic consistent across features
+- **In-app toasts** — toast messages appear in the UI with contextual emoji icons; success/info toasts auto-dismiss after 5 seconds, while error toasts (e.g. API errors) are persistent red banners with a close button
+- **Unified system** — all notification channels (desktop, sound, toast) fire from a single `notify()` call with a `toast_type` parameter, keeping notification logic consistent across features
 
 ### 🧩 Bundled Skills
 
@@ -265,7 +267,7 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 - **Destructive operations require confirmation**: `workspace_file_delete`, `workspace_move_file`, `run_command` (moderate-risk), `send_gmail_message`, `move_calendar_event`, `delete_calendar_event`, `delete_memory`, `tracker_delete`, `task_delete`
 - **Filesystem is sandboxed**: only the configured workspace folder is accessible (defaults to `~/Documents/Thoth`, auto-created on first use)
 - **Shell commands are safety-classified**: safe (auto), moderate (confirm), blocked (rejected); high-risk commands like `shutdown`, `reboot`, `mkfs` are blocked outright; moderate commands in background tasks require per-task command prefix allowlists
-- **Browser actions are blocked in background tasks**: browser automation is disabled during unattended task runs
+- **Browser tabs are isolated per thread**: each chat or background task gets its own browser tab; the agent cannot access or interfere with tabs belonging to other threads; tabs are cleaned up on task completion or thread deletion
 - **Background task permissions are configurable per-task**: shell command prefixes and email recipients can be allowlisted in the task editor; if no allowlist is configured, the operation fails with a user-friendly message
 - **Gmail/Calendar operations are tiered**: read, compose/write, and destructive tiers can be toggled independently
 - **Tools can be individually disabled** from Settings to reduce model decision complexity
@@ -376,7 +378,7 @@ Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI,
 | **`skills.py`** | Skills engine — discovers, loads, and caches bundled and user skill definitions from `SKILL.md` files with YAML frontmatter; builds prompt text for enabled skills injected into the system prompt; config persistence in `~/.thoth/skills_config.json` |
 | **`bundled_skills/`** | 9 built-in skill packages (Brain Dump, Daily Briefing, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) — each a directory containing a `SKILL.md` instruction file |
 | **`tasks.py`** | Task engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, sequential prompt execution, background runner with threading, channel delivery (Telegram/Email), per-task model override, run history persistence, task stop/cancel, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
-| **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue; coordinates task completion chimes and timer alerts |
+| **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue with `toast_type` support (positive/negative); error toasts render as persistent red banners; coordinates task completion chimes and timer alerts |
 | **`channels/`** | Messaging channel adapters — Telegram bot (long polling, interrupt approval, corrupt thread recovery, HTML formatting) and Email channel (Gmail polling, interrupt approval, corrupt thread recovery, sender-only filter), with shared config store |
 | **`tools/`** | 23 self-registering tool modules + base class + registry |
 | **`static/`** | Bundled JS libraries — `vis-network.min.js` for knowledge graph visualization |

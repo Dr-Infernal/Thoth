@@ -1561,7 +1561,7 @@ try:
         BrowserTool, BrowserSession, BrowserSessionManager,
         get_session_manager as get_browser_session_manager,
         get_browser_history, append_browser_history, clear_browser_history,
-        _block_if_background, _get_thread_id, _detect_channel,
+        _get_thread_id, _detect_channel,
         _format_snapshot, _PROFILE_DIR, _HISTORY_PATH, _build_snapshot_js,
         _snapshot_char_budget,
         _NavigateInput, _ClickInput, _TypeInput, _ScrollInput, _TabInput,
@@ -1626,8 +1626,8 @@ try:
     _bs3 = _bsm.get_session("test_thread_2")
     assert _bs1 is _bs3, "Different threads should return same shared session"
     assert _bsm.has_active_session(), "Session should exist after get_session"
-    _bsm.kill_session("test_thread_1")  # no-op for shared session
-    assert _bsm.has_active_session(), "kill_session is no-op on shared browser"
+    _bsm.kill_session("test_thread_1")  # releases thread's tab (no browser launched, safe)
+    assert _bsm.has_active_session(), "kill_session releases tab, not session"
     _bsm.kill_all()
     assert not _bsm.has_active_session(), "kill_all should clear shared session"
     record("PASS", "browser: shared session manager works")
@@ -1647,10 +1647,15 @@ try:
     assert len(_bhist2) == 0, f"Expected 0 entries after clear, got {len(_bhist2)}"
     record("PASS", "browser: history persistence works")
 
-    # 19g. _block_if_background returns None normally
-    _block_result = _block_if_background("navigate")
-    assert _block_result is None, f"Expected None, got: {_block_result}"
-    record("PASS", "browser: background check passes normally")
+    # 19g. Per-thread tab isolation (no browser launched — tests data structures)
+    _bs_g = BrowserSession()
+    assert isinstance(_bs_g._thread_pages, dict), "_thread_pages should be a dict"
+    assert len(_bs_g._thread_pages) == 0, "No pages before launch"
+    assert hasattr(_bs_g, '_get_page_for_thread'), "Must expose _get_page_for_thread"
+    assert hasattr(_bs_g, 'release_thread'), "Must expose release_thread"
+    # release_thread on un-launched session should not crash
+    _bs_g.release_thread("some_thread")
+    record("PASS", "browser: per-thread tab isolation structures valid")
 
     # 19h. _format_snapshot
     _test_snap = {
@@ -1667,14 +1672,17 @@ try:
     record("PASS", "browser: _format_snapshot works")
 
     # 19i. _format_snapshot truncation
+    # Scale ref count to exceed the context-aware budget (cloud models
+    # have much larger budgets than local models).
+    _budget = _snapshot_char_budget()
+    _n_refs = _budget // 15 + 500  # each ref ≈15-25 chars; ensure we exceed _budget
     _long_snap = {
         "url": "https://example.com",
         "title": "Test",
-        "refs": [f"[{i}] button \"btn{i}\"" for i in range(1, 2000)],
-        "refCount": 1999,
+        "refs": [f"[{i}] button \"btn{i}\"" for i in range(1, _n_refs + 1)],
+        "refCount": _n_refs,
     }
     _long_text = _format_snapshot(_long_snap)
-    _budget = _snapshot_char_budget()
     assert len(_long_text) <= _budget + 100  # budget + some fuzz
     assert "truncated" in _long_text
     record("PASS", "browser: snapshot truncation works")
@@ -1772,9 +1780,14 @@ try:
             "id": tool_call_id, "name": name, "args": {}
         }])
 
-    # 20a. With 5 browser messages, only last 2 stay full (keep=2)
+    # 20a. Compression: oldest browser messages become stubs, newest _n_keep stay full.
+    # Scale message count based on _keep_browser_snapshots() so this works
+    # with both small-context local models and large-context cloud models.
+    _n_keep = _agent_mod._keep_browser_snapshots()
+    _n_extra = 3  # how many messages beyond _n_keep to create (→ these become stubs)
+    _n_total = _n_keep + _n_extra
     _snap_msgs = []
-    for idx in range(5):
+    for idx in range(_n_total):
         tc_id = f"tc_{idx}"
         _snap_msgs.append(_make_ai_tool_call(tc_id, "browser_navigate"))
         _snap_msgs.append(_make_browser_tool_msg(
@@ -1784,17 +1797,14 @@ try:
             tool_call_id=tc_id,
         ))
 
-    # Inject into a minimal state dict
-    _state_a = {"messages": _snap_msgs}
     # Simulate just the compression logic directly (avoid full _pre_model_trim
     # which needs model context_size, summary cache, etc.)
-    _msgs_copy = list(_state_a["messages"])
+    _msgs_copy = list(_snap_msgs)
     _b_indices = [
         i for i, m in enumerate(_msgs_copy)
         if m.type == "tool" and (getattr(m, "name", "") or "").startswith("browser_")
     ]
-    assert len(_b_indices) == 5, f"Expected 5 browser tool msgs, got {len(_b_indices)}"
-    _n_keep = _agent_mod._keep_browser_snapshots()
+    assert len(_b_indices) == _n_total, f"Expected {_n_total} browser tool msgs, got {len(_b_indices)}"
     if len(_b_indices) > _n_keep:
         for i in _b_indices[:-_n_keep]:
             m = _msgs_copy[i]
@@ -1817,14 +1827,14 @@ try:
             )
             _msgs_copy[i] = _TM(content=stub, name=m.name, tool_call_id=m.tool_call_id)
 
-    # First 3 should be stubs, last 2 should be full
-    for idx, bi in enumerate(_b_indices[:3]):
+    # First _n_extra should be stubs, last _n_keep should be full
+    for idx, bi in enumerate(_b_indices[:_n_extra]):
         assert "[Prior browser" in _msgs_copy[bi].content, \
             f"Msg {idx} should be a stub, got: {_msgs_copy[bi].content[:80]}"
-    for idx, bi in enumerate(_b_indices[3:]):
+    for idx, bi in enumerate(_b_indices[_n_extra:]):
         assert "Interactive elements" in _msgs_copy[bi].content, \
-            f"Msg {idx+3} should be full, got: {_msgs_copy[bi].content[:80]}"
-    record("PASS", "browser compression: 5 msgs → stubs for first 3, full for last 2")
+            f"Msg {idx+_n_extra} should be full, got: {_msgs_copy[bi].content[:80]}"
+    record("PASS", f"browser compression: {_n_total} msgs → stubs for first {_n_extra}, full for last {_n_keep}")
 
     # 20b. Stubs contain correct URL and title
     _stub0 = _msgs_copy[_b_indices[0]].content
@@ -1840,11 +1850,12 @@ try:
     record("PASS", "browser compression: stubs preserve name and tool_call_id")
 
     # 20d. Non-browser ToolMessages are NOT compressed
+    # Use _n_keep + 1 browser msgs to guarantee compression fires
     _mixed = [
         _make_ai_tool_call("tc_ws", "web_search"),
         _TM(content="Search results for Python...", name="web_search", tool_call_id="tc_ws"),
     ]
-    for idx in range(4):
+    for idx in range(_n_keep + 1):
         tc_id = f"tc_b{idx}"
         _mixed.append(_make_ai_tool_call(tc_id, "browser_click"))
         _mixed.append(_make_browser_tool_msg("browser_click", f"https://x.com/{idx}",
@@ -1855,27 +1866,27 @@ try:
         i for i, m in enumerate(_mixed_copy)
         if m.type == "tool" and (getattr(m, "name", "") or "").startswith("browser_")
     ]
-    if len(_b_mixed) > _n_keep:
-        for i in _b_mixed[:-_n_keep]:
-            m = _mixed_copy[i]
-            content = m.content or ""
-            url = ""
-            title = ""
-            for line in content.split("\n"):
-                if line.startswith("URL: ") and not url:
-                    url = line[5:].strip()
-                elif line.startswith("Title: ") and not title:
-                    title = line[7:].strip()
-                if url and title:
-                    break
-            action = (m.name or "browser").replace("browser_", "", 1)
-            stub = (
-                f"[Prior browser {action} — "
-                f"URL: {url or '(unknown)'}, "
-                f"Title: {title or '(none)'}. "
-                f"Full snapshot omitted to save context.]"
-            )
-            _mixed_copy[i] = _TM(content=stub, name=m.name, tool_call_id=m.tool_call_id)
+    assert len(_b_mixed) > _n_keep, "Need more browser msgs than _n_keep for this test"
+    for i in _b_mixed[:-_n_keep]:
+        m = _mixed_copy[i]
+        content = m.content or ""
+        url = ""
+        title = ""
+        for line in content.split("\n"):
+            if line.startswith("URL: ") and not url:
+                url = line[5:].strip()
+            elif line.startswith("Title: ") and not title:
+                title = line[7:].strip()
+            if url and title:
+                break
+        action = (m.name or "browser").replace("browser_", "", 1)
+        stub = (
+            f"[Prior browser {action} — "
+            f"URL: {url or '(unknown)'}, "
+            f"Title: {title or '(none)'}. "
+            f"Full snapshot omitted to save context.]"
+        )
+        _mixed_copy[i] = _TM(content=stub, name=m.name, tool_call_id=m.tool_call_id)
     # web_search result should be untouched
     assert _mixed_copy[1].content == "Search results for Python..."
     assert _mixed_copy[1].name == "web_search"
@@ -2460,7 +2471,15 @@ try:
     else:
         record("FAIL", "task-engine: expand_template_vars passthrough", _no_vars)
 
-    # ── 24k. _build_trigger daily → CronTrigger ─────────────────────
+    # ── 24j2. expand_template_vars {{task_id}} ───────────────────────
+    _tid_expanded = expand_template_vars(
+        "task_update(task_id='{{task_id}}', enabled=false)", task_id="abc-123"
+    )
+    assert "abc-123" in _tid_expanded, f"task_id not expanded: {_tid_expanded}"
+    assert "{{task_id}}" not in _tid_expanded, "{{task_id}} should be replaced"
+    _tid_no_id = expand_template_vars("keep {{task_id}} as-is")
+    assert "{{task_id}}" in _tid_no_id, "Without task_id param, placeholder stays"
+    record("PASS", "task-engine: expand_template_vars {{task_id}}")
     from apscheduler.triggers.cron import CronTrigger
     from apscheduler.triggers.interval import IntervalTrigger
     from apscheduler.triggers.date import DateTrigger
@@ -4175,15 +4194,16 @@ try:
         "workflows.py must set _background_workflow_var to True"
     record("PASS", "v3.6: workflows.py sets ContextVar for background")
 
-    # ── 32g. All runtime tool gates use is_background_workflow() ─────
-    # Shell tool, gmail tool, browser tool should all call is_background_workflow()
+    # ── 32g. Runtime tool gates ────────────────────────────────────
+    # Shell tool and gmail tool use is_background_workflow() for gating.
+    # Browser tool uses per-thread tab isolation instead (no blocking).
     assert "is_background_workflow" in _src_shell32, \
         "shell_tool must call is_background_workflow()"
     assert "is_background_workflow" in _src_gmail32, \
         "gmail_tool must call is_background_workflow()"
-    assert "is_background_workflow" in _src_browser32, \
-        "browser_tool must call is_background_workflow()"
-    record("PASS", "v3.6: all self-gating tools use is_background_workflow()")
+    assert "_thread_pages" in _src_browser32, \
+        "browser_tool must use per-thread tab isolation (_thread_pages)"
+    record("PASS", "v3.6: shell/gmail gate + browser per-thread isolation")
 
     # ── 32h. ContextVar propagation test ─────────────────────────────
     # Verify that ContextVar propagates to child threads (executor-like)

@@ -210,7 +210,7 @@ _migrate_from_workflows()
 
 # ── Template Variables ───────────────────────────────────────────────────────
 
-def expand_template_vars(prompt: str) -> str:
+def expand_template_vars(prompt: str, task_id: str | None = None) -> str:
     """Replace ``{{variable}}`` placeholders with current values."""
     now = datetime.now()
     replacements = {
@@ -220,6 +220,8 @@ def expand_template_vars(prompt: str) -> str:
         "month": now.strftime("%B"),
         "year": str(now.year),
     }
+    if task_id:
+        replacements["task_id"] = task_id
     result = prompt
     for key, value in replacements.items():
         result = result.replace("{{" + key + "}}", value)
@@ -721,9 +723,10 @@ def run_task_background(
             from agent import _background_workflow_var
             _background_workflow_var.set(True)
 
+            from agent import RECURSION_LIMIT_TASK
             config = {
                 "configurable": {"thread_id": thread_id},
-                "recursion_limit": 25,
+                "recursion_limit": RECURSION_LIMIT_TASK,
             }
 
             # Model override
@@ -763,7 +766,7 @@ def run_task_background(
                 with _active_lock:
                     _active_runs[thread_id]["step"] = i
 
-                prompt = expand_template_vars(prompts[i])
+                prompt = expand_template_vars(prompts[i], task_id=task_id)
 
                 try:
                     result = invoke_agent(prompt, enabled_tool_names, config,
@@ -889,6 +892,12 @@ def run_task_background(
         finally:
             with _active_lock:
                 _active_runs.pop(thread_id, None)
+            # Release the browser tab owned by this thread (if any)
+            try:
+                from tools.browser_tool import get_session_manager as _get_bsm
+                _get_bsm().kill_session(thread_id)
+            except Exception:
+                pass
 
     t = threading.Thread(target=_run, daemon=True, name=f"task-{task_id}")
     t.start()

@@ -11,11 +11,11 @@ Design
   the agent is doing and intervene (e.g. type passwords, solve CAPTCHAs).
 * **Persistent profile** — ``launch_persistent_context()`` stores state in
   ``~/.thoth/browser_profile/`` so sites stay logged-in across restarts.
+* **Per-thread tab isolation** — each agent thread (interactive chat or
+  background task) gets its own tab within the single browser window.
 * **Accessibility-tree snapshots** — after every action the tool takes a
   DOM snapshot and assigns numbered references ([1], [2], …) to
   interactive elements so the LLM can click/type by number.
-* **Background workflow blocking** — browser actions are blocked when
-  running inside a background workflow.
 * **Channel detection** — prefers installed Chrome, then Edge (Windows),
   then falls back to Playwright's bundled Chromium.
 
@@ -342,10 +342,16 @@ def _type_ref(page, ref: int, text: str, submit: bool = False) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 class BrowserSession:
-    """Wraps a Playwright persistent browser context (one per thread).
+    """Wraps a Playwright persistent browser context shared by all threads.
 
     The browser window is visible (``headless=False``) and uses a shared
     profile directory so cookies/logins persist.
+
+    **Per-thread tab isolation**: Each agent thread (interactive chat or
+    background task) gets its own tab within the single browser window.
+    Operations target only the calling thread's tab, preventing cross-thread
+    page flipping.  Tabs are auto-created on first use and cleaned up when
+    a thread is deleted or a task run finishes.
 
     **Threading model**: Playwright's sync API is bound to the OS thread
     that called ``sync_playwright().start()``.  Since the agent dispatches
@@ -360,7 +366,7 @@ class BrowserSession:
         self._context = None     # BrowserContext  (owned by _pw_thread)
         self._launched = False
         self._closed = False
-        self._active_page = None  # Explicitly tracked active page
+        self._thread_pages: dict[str, Any] = {}  # thread_id → Page
         self._browser_pid: int | None = None  # PID of the browser process
         self._launch_error: Exception | None = None  # Set if _pw_loop fails
 
@@ -403,6 +409,22 @@ class BrowserSession:
                 self._browser_pid = self._context.browser.process.pid
             except Exception:
                 self._browser_pid = None
+
+            # Detect external browser close (user closes the window)
+            def _on_close():
+                logger.warning("Browser closed externally — marking session dead")
+                self._launched = False
+                self._thread_pages.clear()
+                # Push a sentinel so the work-queue loop exits cleanly
+                try:
+                    self._work_q.put(None)
+                except Exception:
+                    pass
+
+            try:
+                self._context.browser.on("disconnected", _on_close)
+            except Exception:
+                pass
 
             logger.info("Browser session launched (channel=%s, pid=%s)",
                         channel or "chromium", self._browser_pid)
@@ -449,6 +471,18 @@ class BrowserSession:
         self._launched = False
         self._browser_pid = None
 
+        # Fail any remaining queued work items so callers don't hang
+        while True:
+            try:
+                item = self._work_q.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                continue
+            _, future = item
+            if not future.done():
+                future.set_exception(RuntimeError("Browser session ended"))
+
     def _kill_orphaned_browser(self) -> None:
         """Kill only the browser process Playwright launched (PID-scoped).
 
@@ -488,6 +522,7 @@ class BrowserSession:
         if self._pw_thread is None or not self._pw_thread.is_alive():
             was_previous_crash = (self._pw_thread is not None
                                   and not self._launched)
+            self._thread_pages.clear()  # stale after crash/restart
             for attempt in range(_MAX_RETRIES + 1):
                 if attempt > 0 or was_previous_crash:
                     logger.warning(
@@ -541,38 +576,139 @@ class BrowserSession:
 
         future: concurrent.futures.Future = concurrent.futures.Future()
         self._work_q.put((fn, future))
-        return future.result(timeout=120)
+        try:
+            return future.result(timeout=120)
+        except Exception as exc:
+            # If browser was closed externally, the _on_close handler sets
+            # _launched=False and pushes a sentinel.  Detect this and retry
+            # once — the top of this method will see the dead PW thread and
+            # enter the recovery path.
+            _msg = str(exc).lower()
+            if ("has been closed" in _msg or "target page" in _msg
+                    or "browser has been closed" in _msg):
+                logger.warning("Browser closed mid-operation — will restart")
+                self._launched = False
+                self._closed = False  # allow re-launch
+                self._thread_pages.clear()
+                # Wait for PW thread to exit (sentinel was already pushed)
+                if self._pw_thread and self._pw_thread.is_alive():
+                    self._pw_thread.join(timeout=10)
+                return self._run_on_pw_thread(fn)  # retry once
+            raise
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
-    @property
-    def page(self):
-        """Return the explicitly-tracked active page.
+    _BLANK_URLS = frozenset({"", "about:blank", "chrome://newtab/",
+                              "edge://newtab/"})
 
-        Falls back to the last page in the context if the tracked page is
-        closed or was never set.  MUST be called from the PW thread
-        (i.e. inside a lambda passed to ``_run_on_pw_thread``).
+    def _get_page_for_thread(self, thread_id: str):
+        """Return the page owned by *thread_id*, creating one if needed.
+
+        MUST be called from the PW thread (i.e. inside a lambda passed to
+        ``_run_on_pw_thread``).  On first call for a thread, reuses the
+        initial blank tab if unowned, otherwise opens a new tab.  Only
+        blank tabs are eligible for claiming — pages that already have
+        content belong to another context and should not be reused.
+
+        Does NOT call ``bring_to_front()`` — callers that need the tab
+        visible (e.g. ``navigate``) should do that explicitly.
         """
-        # Prefer the explicitly tracked page if still valid
-        if self._active_page is not None:
+        # Check if thread already has a live page
+        page = self._thread_pages.get(thread_id)
+        if page is not None:
             try:
-                if not self._active_page.is_closed():
-                    return self._active_page
+                if not page.is_closed():
+                    return page
             except Exception:
                 pass
-            self._active_page = None
+            # Page was closed externally — remove stale entry
+            self._thread_pages.pop(thread_id, None)
 
-        pages = self._context.pages
-        if not pages:
-            pg = self._context.new_page()
-            self._active_page = pg
-            return pg
-        self._active_page = pages[-1]
-        return pages[-1]
+        # Claim an unowned *blank* page if available
+        owned_pages = set(self._thread_pages.values())
+        for p in self._context.pages:
+            try:
+                if (p not in owned_pages and not p.is_closed()
+                        and p.url in self._BLANK_URLS):
+                    self._thread_pages[thread_id] = p
+                    return p
+            except Exception:
+                continue
+
+        # No blank unowned pages — open a new tab
+        new_page = self._context.new_page()
+        self._thread_pages[thread_id] = new_page
+        return new_page
+
+    @property
+    def page(self):
+        """Return a page for the 'default' thread (backward compat).
+
+        Used by ``take_screenshot`` and any legacy code that doesn't pass
+        a thread_id.  MUST be called from the PW thread.
+        """
+        return self._get_page_for_thread("default")
+
+    def get_page_for_screenshot(self, thread_id: str | None = None):
+        """Return an existing page for screenshots — never creates a tab.
+
+        Prefers the page owned by *thread_id* if given, otherwise returns
+        the most recently created owned page, or the first open page.
+        Returns ``None`` only if no pages exist at all.
+        MUST be called from the PW thread.
+        """
+        if thread_id:
+            page = self._thread_pages.get(thread_id)
+            if page and not page.is_closed():
+                return page
+        # Fall back to any owned page (most recently added)
+        for pg in reversed(list(self._thread_pages.values())):
+            try:
+                if not pg.is_closed():
+                    return pg
+            except Exception:
+                continue
+        # Last resort — any open page in the context
+        for pg in self._context.pages:
+            try:
+                if not pg.is_closed():
+                    return pg
+            except Exception:
+                continue
+        return None
+
+    def release_thread(self, thread_id: str) -> None:
+        """Close the tab owned by *thread_id* (if any).
+
+        Safe to call from any thread — the close runs on the PW thread.
+        Does nothing if the thread has no tab or if it's the last tab
+        (Playwright requires at least one page in the context).
+        """
+        if not self._launched or self._closed:
+            return
+        try:
+            def _do():
+                page = self._thread_pages.pop(thread_id, None)
+                if page is None:
+                    return
+                try:
+                    if page.is_closed():
+                        return
+                    # Don't close the last tab
+                    if len(self._context.pages) <= 1:
+                        return
+                    page.close()
+                except Exception:
+                    pass
+            self._run_on_pw_thread(_do)
+        except Exception:
+            # Browser may be crashed / closed — just drop the mapping
+            self._thread_pages.pop(thread_id, None)
 
     def close(self) -> None:
         """Shut down the browser and Playwright thread."""
         self._closed = True
+        self._thread_pages.clear()
         try:
             self._work_q.put(None)  # sentinel to exit _pw_loop
         except Exception:
@@ -582,13 +718,13 @@ class BrowserSession:
 
     # ── Actions (called from any thread) ─────────────────────────────
 
-    def navigate(self, url: str) -> str:
+    def navigate(self, url: str, thread_id: str = "default") -> str:
         """Navigate to *url* and return snapshot."""
         def _do():
-            page = self.page
+            page = self._get_page_for_thread(thread_id)
+            page.bring_to_front()
             try:
                 page.goto(url, wait_until="load", timeout=30000)
-                # Best-effort wait for network to settle (catches JS redirects)
                 try:
                     page.wait_for_load_state("networkidle", timeout=5000)
                 except Exception:
@@ -599,28 +735,30 @@ class BrowserSession:
             return _format_snapshot(snap)
         return self._run_on_pw_thread(_do)
 
-    def click(self, ref: int) -> str:
+    def click(self, ref: int, thread_id: str = "default") -> str:
         """Click element by ref and return snapshot."""
         def _do():
-            page = self.page
+            page = self._get_page_for_thread(thread_id)
             result = _click_ref(page, ref)
             snap = _take_snapshot(page)
             return f"{result}\n\n{_format_snapshot(snap)}"
         return self._run_on_pw_thread(_do)
 
-    def type_text(self, ref: int, text: str, submit: bool = False) -> str:
+    def type_text(self, ref: int, text: str, submit: bool = False,
+                  thread_id: str = "default") -> str:
         """Type into element by ref and return snapshot."""
         def _do():
-            page = self.page
+            page = self._get_page_for_thread(thread_id)
             result = _type_ref(page, ref, text, submit)
             snap = _take_snapshot(page)
             return f"{result}\n\n{_format_snapshot(snap)}"
         return self._run_on_pw_thread(_do)
 
-    def scroll(self, direction: str = "down", amount: int = 3) -> str:
+    def scroll(self, direction: str = "down", amount: int = 3,
+               thread_id: str = "default") -> str:
         """Scroll the page and return snapshot."""
         def _do():
-            page = self.page
+            page = self._get_page_for_thread(thread_id)
             delta = amount * 400
             if direction == "up":
                 delta = -delta
@@ -633,18 +771,18 @@ class BrowserSession:
             return _format_snapshot(snap)
         return self._run_on_pw_thread(_do)
 
-    def snapshot(self) -> str:
+    def snapshot(self, thread_id: str = "default") -> str:
         """Take a fresh snapshot of the current page."""
         def _do():
-            page = self.page
+            page = self._get_page_for_thread(thread_id)
             snap = _take_snapshot(page)
             return _format_snapshot(snap)
         return self._run_on_pw_thread(_do)
 
-    def go_back(self) -> str:
+    def go_back(self, thread_id: str = "default") -> str:
         """Go back one page and return snapshot."""
         def _do():
-            page = self.page
+            page = self._get_page_for_thread(thread_id)
             try:
                 page.go_back(wait_until="load", timeout=10000)
                 try:
@@ -658,29 +796,30 @@ class BrowserSession:
         return self._run_on_pw_thread(_do)
 
     def tab_action(self, action: str = "list", tab_id: int | None = None,
-                   url: str | None = None) -> str:
+                   url: str | None = None, thread_id: str = "default") -> str:
         """Manage tabs: list, switch, new, close."""
         def _do():
             pages = self._context.pages
+            my_page = self._get_page_for_thread(thread_id)
 
             if action == "list":
                 lines = [f"Open tabs ({len(pages)}):"]
                 for i, pg in enumerate(pages):
-                    marker = " ← active" if pg == self.page else ""
+                    marker = " ← active" if pg == my_page else ""
                     lines.append(f"  [{i}] {pg.url} — {pg.title()}{marker}")
                 return "\n".join(lines)
 
             elif action == "switch":
                 if tab_id is None or tab_id < 0 or tab_id >= len(pages):
                     return f"Invalid tab_id. Use 0–{len(pages) - 1}."
-                self._active_page = pages[tab_id]
+                self._thread_pages[thread_id] = pages[tab_id]
                 pages[tab_id].bring_to_front()
                 snap = _take_snapshot(pages[tab_id])
                 return f"Switched to tab [{tab_id}].\n\n{_format_snapshot(snap)}"
 
             elif action == "new":
                 new_page = self._context.new_page()
-                self._active_page = new_page
+                self._thread_pages[thread_id] = new_page
                 new_page.bring_to_front()
                 if url:
                     try:
@@ -700,11 +839,14 @@ class BrowserSession:
                 if len(pages) <= 1:
                     return "Cannot close the last tab."
                 closed_page = pages[tab_id]
-                if self._active_page == closed_page:
-                    self._active_page = None
+                # Remove from any thread's mapping
+                for tid, pg in list(self._thread_pages.items()):
+                    if pg == closed_page:
+                        del self._thread_pages[tid]
                 closed_page.close()
                 remaining = self._context.pages
-                active = self.page  # resolves to a valid page
+                # Re-resolve calling thread's page
+                active = self._get_page_for_thread(thread_id)
                 snap = _take_snapshot(active)
                 return f"Closed tab [{tab_id}]. {len(remaining)} tab(s) remaining.\n\n{_format_snapshot(snap)}"
 
@@ -712,13 +854,20 @@ class BrowserSession:
                 return f"Unknown tab action: {action}. Use list/switch/new/close."
         return self._run_on_pw_thread(_do)
 
-    def take_screenshot(self) -> bytes | None:
-        """Take a screenshot (PNG bytes) of the current page."""
+    def take_screenshot(self, thread_id: str | None = None) -> bytes | None:
+        """Take a screenshot (PNG bytes) of the thread's page.
+
+        If *thread_id* is given, screenshots that thread's tab.
+        Otherwise falls back to the most recently used tab.
+        Never creates a new tab.
+        """
         if not self._launched or self._closed:
             return None
         try:
             def _do():
-                page = self.page
+                page = self.get_page_for_screenshot(thread_id)
+                if page is None:
+                    return None
                 return page.screenshot(type="png")
             return self._run_on_pw_thread(_do)
         except Exception:
@@ -734,7 +883,8 @@ class BrowserSessionManager:
 
     Only one Chromium instance can use a persistent profile directory at a
     time.  Rather than per-thread sessions (which would fight over the
-    profile lock), every thread shares the same browser window.
+    profile lock), every thread shares the same browser window.  Each
+    thread gets its own tab within that window for isolation.
     """
 
     def __init__(self):
@@ -761,8 +911,10 @@ class BrowserSessionManager:
             return self._shared_session
 
     def kill_session(self, thread_id: str) -> None:
-        """No-op — the shared browser stays open until app exit."""
-        pass
+        """Release the tab owned by *thread_id* (if any)."""
+        with self._lock:
+            if self._shared_session is not None:
+                self._shared_session.release_thread(thread_id)
 
     def kill_all(self) -> None:
         """Shut down the shared browser (called on app exit)."""
@@ -824,24 +976,8 @@ def clear_browser_history(thread_id: str) -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# HELPER — background workflow guard
+# HELPER — thread ID resolution
 # ═════════════════════════════════════════════════════════════════════════════
-
-def _block_if_background(action_name: str) -> str | None:
-    """Return an error string if running in a background workflow, else None."""
-    try:
-        from agent import is_background_workflow
-        if is_background_workflow():
-            return (
-                f"⚠️ BLOCKED: browser_{action_name} cannot run in a "
-                "background workflow. Browser automation requires a visible "
-                "window and user presence. Do NOT retry this tool. "
-                "Inform the user that this action was skipped."
-            )
-    except ImportError:
-        pass
-    return None
-
 
 def _get_thread_id() -> str:
     """Get the current thread ID from the agent context."""
@@ -928,10 +1064,6 @@ class BrowserTool(BaseTool):
             Args:
                 url: The URL to navigate to (must start with http:// or https://)
             """
-            blocked = _block_if_background("navigate")
-            if blocked:
-                return blocked
-
             # Security: reject javascript: URLs
             if url.strip().lower().startswith("javascript:"):
                 return "Error: javascript: URLs are not allowed for security reasons."
@@ -940,7 +1072,7 @@ class BrowserTool(BaseTool):
 
             thread_id = _get_thread_id()
             session = _session_manager.get_session(thread_id)
-            result = session.navigate(url)
+            result = session.navigate(url, thread_id)
 
             # Persist to history
             append_browser_history(thread_id, {
@@ -963,13 +1095,9 @@ class BrowserTool(BaseTool):
             Args:
                 ref: The reference number [N] of the element to click
             """
-            blocked = _block_if_background("click")
-            if blocked:
-                return blocked
-
             thread_id = _get_thread_id()
             session = _session_manager.get_session(thread_id)
-            result = session.click(ref)
+            result = session.click(ref, thread_id)
 
             append_browser_history(thread_id, {
                 "action": "click",
@@ -991,13 +1119,9 @@ class BrowserTool(BaseTool):
                 text: The text to type
                 submit: Whether to press Enter after typing (default: False)
             """
-            blocked = _block_if_background("type")
-            if blocked:
-                return blocked
-
             thread_id = _get_thread_id()
             session = _session_manager.get_session(thread_id)
-            result = session.type_text(ref, text, submit)
+            result = session.type_text(ref, text, submit, thread_id)
 
             append_browser_history(thread_id, {
                 "action": "type",
@@ -1017,13 +1141,9 @@ class BrowserTool(BaseTool):
                 direction: 'up' or 'down' (default: 'down')
                 amount: Number of scroll steps, each ~400px (default: 3)
             """
-            blocked = _block_if_background("scroll")
-            if blocked:
-                return blocked
-
             thread_id = _get_thread_id()
             session = _session_manager.get_session(thread_id)
-            result = session.scroll(direction, amount)
+            result = session.scroll(direction, amount, thread_id)
 
             append_browser_history(thread_id, {
                 "action": "scroll",
@@ -1042,13 +1162,9 @@ class BrowserTool(BaseTool):
             typeable, and interactive elements.  Use this after the user
             interacts with the browser manually, or to refresh stale refs.
             """
-            blocked = _block_if_background("snapshot")
-            if blocked:
-                return blocked
-
             thread_id = _get_thread_id()
             session = _session_manager.get_session(thread_id)
-            return session.snapshot()
+            return session.snapshot(thread_id)
 
         # ── Back ─────────────────────────────────────────────────────────
 
@@ -1057,13 +1173,9 @@ class BrowserTool(BaseTool):
 
             Returns a fresh snapshot of the page after going back.
             """
-            blocked = _block_if_background("back")
-            if blocked:
-                return blocked
-
             thread_id = _get_thread_id()
             session = _session_manager.get_session(thread_id)
-            result = session.go_back()
+            result = session.go_back(thread_id)
 
             append_browser_history(thread_id, {
                 "action": "back",
@@ -1091,10 +1203,6 @@ class BrowserTool(BaseTool):
                 tab_id: Tab index (required for 'switch' and 'close')
                 url: URL to open in a new tab (only for action='new')
             """
-            blocked = _block_if_background("tab")
-            if blocked:
-                return blocked
-
             # Validate URL for new tab
             if action == "new" and url:
                 if url.strip().lower().startswith("javascript:"):
@@ -1104,7 +1212,7 @@ class BrowserTool(BaseTool):
 
             thread_id = _get_thread_id()
             session = _session_manager.get_session(thread_id)
-            result = session.tab_action(action, tab_id, url)
+            result = session.tab_action(action, tab_id, url, thread_id)
 
             append_browser_history(thread_id, {
                 "action": f"tab_{action}",

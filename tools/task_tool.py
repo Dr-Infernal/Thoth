@@ -32,7 +32,9 @@ class _TaskCreateInput(BaseModel):
         description=(
             "Ordered list of prompts the agent will execute sequentially. "
             "Leave empty for notify-only tasks (reminders/timers). "
-            "Supports template variables: {{date}}, {{day}}, {{time}}, {{month}}, {{year}}."
+            "Supports template variables: {{date}}, {{day}}, {{time}}, "
+            "{{month}}, {{year}}, {{task_id}} (the task's own ID, useful "
+            "for self-management like task_update(task_id='{{task_id}}', enabled=false))."
         ),
     )
     description: str = Field(

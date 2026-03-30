@@ -92,6 +92,16 @@ def _get_thread_messages(thread_id: str) -> list[dict]:
         for m in messages:
             role = "user" if m.type == "human" else ("assistant" if m.type == "ai" else None)
             content = getattr(m, "content", "") or ""
+            if isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif isinstance(block, str):
+                        text_parts.append(block)
+                content = "\n".join(text_parts)
+            if not isinstance(content, str):
+                content = str(content) if content else ""
             if role and content.strip():
                 result.append({"role": role, "content": content[:2000]})
         return result
@@ -119,7 +129,18 @@ def _extract_from_conversation(conversation_text: str) -> list[dict]:
         prompt = EXTRACTION_PROMPT.format(conversation=conversation_text)
         llm = get_llm_for(get_current_model())
         response = llm.invoke([HumanMessage(content=prompt)])
-        raw = (response.content or "").strip()
+        raw = response.content or ""
+        if isinstance(raw, list):
+            text_parts = []
+            for block in raw:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+                elif isinstance(block, str):
+                    text_parts.append(block)
+            raw = "\n".join(text_parts)
+        if not isinstance(raw, str):
+            raw = str(raw) if raw else ""
+        raw = raw.strip()
 
         # Strip <think>...</think> blocks from reasoning models
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)

@@ -70,3 +70,26 @@ There are three task types:
 14. **Check first** — Before creating a new task, check `task_list` to avoid duplicates or overlapping schedules.
 15. **Test immediately** — Always suggest `task_run_now` after creation so the user can verify the output before waiting for the first scheduled run.
 16. **Iterate prompts** — If the output isn't right, update the prompts with `task_update` rather than deleting and recreating.
+
+## Monitoring / Polling
+
+When the user wants to **monitor a condition** and be notified when it changes ("check X and tell me when Y", "alert me if Z drops below W"), use the **interval + self-disable** pattern:
+
+17. **Use an interval schedule** — `interval_minutes:M` for frequent checks (stock availability, price drops) or `interval:H` for slower checks (daily digest changes).
+
+18. **Write a conditional prompt** — The prompt should:
+    - Check the condition (e.g. search the web, read a URL, check a price)
+    - If the condition IS met → report the finding and self-disable with `task_update(task_id='{{task_id}}', enabled=false)`
+    - If the condition is NOT met → say so briefly (this keeps the persistent thread informed without wasting tokens)
+
+19. **Always use `persistent_thread_id`** — This lets the agent see prior checks across runs. Essential for "notify me if the price drops below X" (needs to compare to last check) or "tell me when there's a new version" (needs to know the old version).
+
+20. **Template: polling prompt pattern** —
+    ```
+    Search for [condition]. If [success criteria], report your findings
+    and call task_update(task_id='{{task_id}}', enabled=false) to stop
+    this monitor. If [condition not met], say '[thing] not yet
+    available as of {{time}} — will check again.'
+    ```
+
+21. **Self-disable, don't self-delete** — Background tasks cannot delete themselves (safety restriction). Use `task_update(enabled=false)` instead. The user can re-enable, delete, or leave the disabled task.

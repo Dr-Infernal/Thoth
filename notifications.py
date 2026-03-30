@@ -32,6 +32,7 @@ def notify(
     message: str,
     sound: str = "default",
     icon: str = "🔔",
+    toast_type: str = "positive",
 ) -> None:
     """Fire a notification through all channels.
 
@@ -57,7 +58,8 @@ def notify(
     _play_sound(sound)
 
     # 3. Queue toast for next Streamlit rerun
-    _toast_queue.put({"icon": icon, "message": f"{message} ({timestamp})"})
+    _toast_queue.put({"icon": icon, "message": f"{message} ({timestamp})",
+                      "toast_type": toast_type})
 
 
 def drain_toasts() -> list[dict]:

@@ -61,14 +61,46 @@ New `.github/workflows/release.yml` — automated build, sign, notarize, and rel
 - **User entity prompt** — memory extraction prompt updated to fix entity naming for the canonical "User" node
 - **Memory content merge** — fixed a bug where merging duplicate entities could lose content from the richer entry
 
+### 🌐 Per-Thread Browser Tabs & Background Browsing
+
+Browser automation now works in background tasks. Each thread (interactive chat or scheduled task) gets its own isolated browser tab.
+
+- **Per-thread tab isolation** — replaced the single shared page with a `_thread_pages` dict; each thread claims or creates its own tab; the agent never hijacks tabs belonging to other threads
+- **Blank-page-only claiming** — only pages at `about:blank` or `chrome://newtab/` are eligible for claiming; pages with content from prior sessions are never auto-claimed
+- **Background browsing** — removed `_block_if_background()` entirely; browser tools now work in background tasks through per-thread tab isolation
+- **Browser crash recovery** — if the browser is closed externally, a `disconnected` handler detects it, clears stale state, and the next browser action automatically relaunches the session
+- **Retry on close** — `_run_on_pw_thread()` catches "has been closed" errors, resets the session, and retries once
+- **Tab cleanup on task completion** — `run_task_background` finally block calls `kill_session(thread_id)` to close the task's tab
+- **Screenshot thread-awareness** — `take_screenshot(thread_id)` uses a new `get_page_for_screenshot()` that never creates tabs or steals focus from other threads
+
+### 📊 Monitoring / Polling Tasks
+
+New task pattern for monitoring conditions and self-disabling when met.
+
+- **`{{task_id}}` template variable** — `expand_template_vars()` now supports `{{task_id}}`; lets prompts reference their own task for self-management
+- **System prompt triage** — 4-line monitoring hint helps the agent distinguish "check X and notify me when Y" (monitoring task) from simple reminders
+- **SKILL.md guidance** — Task Automation skill gained items 17–21: interval schedules, conditional prompts, persistent threads, polling template, self-disable vs self-delete
+
+### 🔴 Error Notification Improvements
+
+API errors are now visible, persistent, and survive thread refresh.
+
+- **Red persistent toast** — `notify()` gained a `toast_type` parameter; API errors fire `toast_type="negative"` → red banner, no auto-dismiss, close button
+- **Error persistence in checkpoint** — error messages are written to the LangGraph checkpoint via `update_state()` so they appear when the thread is refreshed or revisited
+- **Content normalization** — `_normalise_content()` handles gpt-5.4 list-type `AIMessage.content` in streaming and memory extraction
+
+### 🛡️ Agent Robustness
+
+- **Recursion limits** — raised from 25 to 50 (interactive) / 100 (background tasks); wind-down warning injected at 75% asking the model to wrap up; 4× repeated tool-call loop detection
+- **Thread rendering fix** — `load_thread_messages()` now handles interrupted tool-call loops (orphaned `ToolMessage` without matching `AIMessage`)
+
 ### 🧪 Tests
 
-- **841 PASS**, 0 FAIL, 2 WARN (up from 745 in v3.7.0)
-- New test sections: Skills engine (discovery, parsing, enable/disable, user override, prompt injection, cache)
-- New test sections: Memory intelligence (auto-link, FAISS fallback, orphan repair, decay scoring)
-- New test sections: Dynamic tool budgets (budget calculation, tool hiding, priority ordering)
-- New test sections: tiktoken token counting (accuracy, encoding selection)
-- Extended integration tests for cloud model context propagation
+- **842 PASS**, 0 FAIL, 2 WARN (up from 841 in v3.8.0 baseline)
+- New: per-thread tab isolation test (19g), `{{task_id}}` expansion test (24j2)
+- Updated: `kill_session` assertion (19e), security audit assertion (32g)
+- Removed: `_block_if_background` test (replaced by per-thread tabs)
+- Context-size-aware browser snapshot test scaling
 
 ### 📁 Files Changed
 
@@ -76,9 +108,16 @@ New `.github/workflows/release.yml` — automated build, sign, notarize, and rel
 |------|--------|
 | **`skills.py`** | **New** — skills engine: YAML frontmatter parsing, bundled + user skill discovery, enable/disable config, prompt building, caching |
 | **`bundled_skills/`** | **New** — 9 skill directories, each with `SKILL.md` (Brain Dump, Daily Briefing, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) |
-| **`agent.py`** | Dynamic tool budgets based on context headroom; tiktoken-based token counting; `contextvars.ContextVar` for model override propagation; skills prompt injection in pre-model hook |
+| **`agent.py`** | Dynamic tool budgets based on context headroom; tiktoken-based token counting; `contextvars.ContextVar` for model override propagation; skills prompt injection in pre-model hook; content normalization for list-type `AIMessage.content`; API error surfacing with `toast_type="negative"`; recursion limits 50/100 with wind-down and loop detection |
+| **`app_nicegui.py`** | Thread rendering fix for interrupted tool loops; error persistence to LangGraph checkpoint via `update_state()`; red persistent error toasts; screenshot passes `thread_id`; `AIMessage` import |
+| **`notifications.py`** | `toast_type` parameter on `notify()` (default `"positive"`); toast queue carries `toast_type`; `drain_toasts()` returns dicts with type |
+| **`tools/browser_tool.py`** | Per-thread tab isolation (`_thread_pages` dict, `_BLANK_URLS` claiming filter); `get_page_for_screenshot()`; `release_thread()`; crash recovery (`_on_close` handler, retry logic); removed `_block_if_background()`; all 7 actions accept `thread_id` |
+| **`tasks.py`** | `{{task_id}}` in `expand_template_vars()`; browser tab cleanup in finally block |
+| **`tools/task_tool.py`** | `_TaskCreateInput.prompts` description mentions `{{task_id}}` |
+| **`prompts.py`** | 4-line monitoring/polling triage hint; `{{task_id}}` in template variables list |
+| **`bundled_skills/task_automation/SKILL.md`** | Monitoring / Polling section (items 17–21) |
+| **`memory_extraction.py`** | Content normalization for list-type `AIMessage.content`; user entity prompt fix; content merge bug fix |
 | **`knowledge_graph.py`** | Auto-link on save; FAISS fallback search with relaxed threshold; background orphan repair; memory decay scoring |
-| **`memory_extraction.py`** | User entity prompt fix; content merge bug fix |
 | **`models.py`** | `contextvars.ContextVar` for cloud model override |
 | **`installer/build_installer.ps1`** | Pre-installs pip deps at build time; patches `._pth` file |
 | **`installer/build_mac_app.sh`** | **New** — self-contained macOS build with python-build-standalone, code signing, `.pkg` creation |
@@ -86,9 +125,9 @@ New `.github/workflows/release.yml` — automated build, sign, notarize, and rel
 | **`installer/thoth_setup.iss`** | Removed post-install downloads; added `bundled_skills/` and `workflows.py` |
 | **`.github/workflows/release.yml`** | **New** — CI/CD: test → build → sign → notarize → GitHub Release |
 | **`.gitignore`** | Added `installer/apple_signing/` |
-| **`test_suite.py`** | ~96 new tests across skills, memory intelligence, tool budgets, tiktoken |
+| **`test_suite.py`** | ~101 new tests across skills, memory intelligence, tool budgets, tiktoken, per-thread tabs, `{{task_id}}`, error persistence |
 | **`requirements.txt`** | Added `tiktoken` |
-| **`README.md`** | Added Skills section, updated Memory/Agent/Architecture docs |
+| **`README.md`** | Added Skills section, updated Memory/Agent/Architecture docs, browser per-thread tabs, monitoring/polling tasks, error notification improvements, updated safety section, test count badge |
 
 ---
 
