@@ -344,7 +344,7 @@ jobs:
   notarize-macos-dmg:
     needs: build-macos
     runs-on: macos-latest
-    timeout-minutes: 180
+    timeout-minutes: 420
 
     steps:
       - name: Download macOS pending artifacts
@@ -390,7 +390,7 @@ jobs:
           wait_notary_status() {
             local submission_id="$1"
             local label="$2"
-            local timeout_seconds=7200
+            local timeout_seconds=21600
             local sleep_seconds=30
             local start_time=$(date +%s)
             local info_json="$RUNNER_TEMP/notary_${label}_info.json"
