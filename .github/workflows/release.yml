@@ -8,11 +8,12 @@
 # Jobs:
 #   test           → run test suite
 #   build-windows  → self-contained .exe (Inno Setup)
-#   build-macos    → signed .app/.pkg/.dmg + fire-and-forget notarization submit
+#   build-macos    → signed .app/.pkg/.dmg (no notarization — test first!)
 #   release        → create draft GitHub Release with both artifacts
 #
-# Notarization stapling is handled separately by staple-notarization.yml
-# (manual workflow_dispatch) after Apple finishes processing.
+# Notarization is handled by two separate manual workflows:
+#   notarize-submit.yml  — submit DMG to Apple (after testing)
+#   notarize-check.yml   — check status, staple when accepted
 #
 # Required secrets (set in repo Settings → Secrets → Actions):
 #   APPLE_APPLICATION_P12   Base64 of Developer ID Application .p12
@@ -340,53 +341,6 @@ jobs:
           name: Thoth-macOS
           path: dist/Thoth-*-macOS-*.dmg
           retention-days: 90
-
-      # Fire-and-forget: submit to Apple notarization but don't wait.
-      # Use the separate staple-notarization.yml workflow to poll + staple later.
-      - name: Submit DMG for notarization (fire and forget)
-        continue-on-error: true
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          DMG_PATH="$(ls dist/Thoth-*-macOS-*.dmg | head -n1)"
-          echo "Submitting DMG for notarization (fire-and-forget): $DMG_PATH"
-
-          NOTARY_JSON="$RUNNER_TEMP/notary_submit.json"
-          attempts=0
-          max_attempts=3
-          submitted=false
-
-          while [ "$attempts" -lt "$max_attempts" ]; do
-            attempts=$((attempts + 1))
-            echo "Submit attempt ${attempts}/${max_attempts}..."
-            if perl -e 'alarm 600; exec @ARGV' -- xcrun notarytool submit "$DMG_PATH" \
-                 --apple-id "$APPLE_ID" \
-                 --password "$APPLE_APP_PASSWORD" \
-                 --team-id "$APPLE_TEAM_ID" \
-                 --output-format json > "$NOTARY_JSON" 2>&1; then
-              submitted=true
-              break
-            fi
-            echo "::warning::Submit attempt ${attempts} failed. Retrying in 30s..."
-            sleep 30
-          done
-
-          if [ "$submitted" = true ]; then
-            SUBMISSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$NOTARY_JSON")"
-            echo "══════════════════════════════════════════════════════════════"
-            echo "  NOTARIZATION SUBMITTED SUCCESSFULLY"
-            echo "  Submission ID: $SUBMISSION_ID"
-            echo "  Run ID:        ${{ github.run_id }}"
-            echo ""
-            echo "  Use these values in the 'Staple Notarization' workflow"
-            echo "  to poll Apple and produce a stapled DMG."
-            echo "══════════════════════════════════════════════════════════════"
-          else
-            echo "::warning::Notarization submit failed after ${max_attempts} attempts. DMG is still signed and usable — submit manually or re-run staple workflow."
-          fi
 
   # ════════════════════════════════════════════════════════════════════════════
   #  Create GitHub Release (only on tag push)
