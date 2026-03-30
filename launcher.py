@@ -426,8 +426,15 @@ class ThothTray:
     def _on_open(self, icon=None, item=None) -> None:   # noqa: ARG002
         """Open (or re-open) the native window."""
         if self._is_window_alive():
-            # Window already open — nothing to do
-            return
+            # Window process is alive but may be hidden behind other apps.
+            # Kill the old window and spawn a fresh one so it comes to front.
+            # The server keeps running — session state is preserved.
+            try:
+                self._window_proc.terminate()
+                self._window_proc.wait(timeout=3)
+            except Exception:
+                pass
+            self._window_proc = None
 
         if self._owns_server and not self._server.is_alive:
             # Server crashed — restart it first

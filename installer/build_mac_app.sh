@@ -160,7 +160,22 @@ for dir in static sounds docs; do
     fi
 done
 
-# Icons
+# Icons — generate .icns from PNG if not already present
+if [ ! -f "$PROJECT_DIR/thoth.icns" ] && [ -f "$PROJECT_DIR/docs/thoth_glyph.png" ]; then
+    info "Generating thoth.icns from thoth_glyph.png..."
+    ICONSET_DIR="$BUILD_DIR/thoth.iconset"
+    mkdir -p "$ICONSET_DIR"
+    SRC_PNG="$PROJECT_DIR/docs/thoth_glyph.png"
+    for sz in 16 32 64 128 256 512; do
+        sips -z $sz $sz "$SRC_PNG" --out "$ICONSET_DIR/icon_${sz}x${sz}.png" >/dev/null 2>&1
+    done
+    for sz in 32 64 128 256 512 1024; do
+        half=$((sz / 2))
+        sips -z $sz $sz "$SRC_PNG" --out "$ICONSET_DIR/icon_${half}x${half}@2x.png" >/dev/null 2>&1
+    done
+    iconutil -c icns "$ICONSET_DIR" -o "$PROJECT_DIR/thoth.icns"
+    ok "Generated thoth.icns"
+fi
 [ -f "$PROJECT_DIR/thoth.icns" ] && cp "$PROJECT_DIR/thoth.icns" "$RESOURCES/thoth.icns"
 [ -f "$PROJECT_DIR/thoth.ico" ]  && cp "$PROJECT_DIR/thoth.ico" "$APP_SRC/"
 
