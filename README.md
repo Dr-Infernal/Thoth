@@ -466,13 +466,12 @@ If you don't plan to run local models, Thoth's requirements drop significantly:
 
 ### macOS
 
-1. Download **[Thoth-3.8.0-macOS.zip](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
-2. Unzip the file — this creates a `Thoth` folder
-3. Open the `Thoth` folder and double-click **`Start Thoth.command`**
-   - If macOS blocks it: right-click → **Open** → click **Open** in the dialog
+1. Download **[Thoth-3.8.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+2. Open the DMG and drag **Thoth.app** into the **Applications** folder
+3. Launch **Thoth** from Applications or Launchpad
+   - First run may prompt "Thoth is an app downloaded from the internet" → click **Open**
    - First run installs Homebrew (if needed), Python, Ollama, and all dependencies automatically
    - Subsequent launches skip installation and start in ~3 seconds
-4. *(Optional)* Drag the included **Thoth.app** to `/Applications` for Dock/Launchpad access
 
 > **Works on Apple Silicon (M1/M2/M3/M4) and Intel Macs** (macOS 12+). No terminal, no manual setup — just double-click and go.
 

@@ -4752,6 +4752,13 @@ async def index():
         with ui.row().classes("w-full gap-2"):
             def _go_home():
                 prev = state.thread_id
+                # Detach any running generation on the thread we're leaving
+                prev_gen = _active_generations.get(prev) if prev else None
+                if prev_gen and prev_gen.status == "streaming":
+                    prev_gen.detached = True
+                    if prev_gen.tts_active:
+                        state.tts_service.stop()
+                        prev_gen.tts_active = False
                 state.thread_id = None
                 state.thread_name = None
                 state.messages = []
@@ -4766,6 +4773,13 @@ async def index():
                 name = f"💻 Thread {datetime.now().strftime('%b %d, %H:%M')}"
                 _save_thread_meta(tid, name)
                 prev = state.thread_id
+                # Detach any running generation on the thread we're leaving
+                prev_gen = _active_generations.get(prev) if prev else None
+                if prev_gen and prev_gen.status == "streaming":
+                    prev_gen.detached = True
+                    if prev_gen.tts_active:
+                        state.tts_service.stop()
+                        prev_gen.tts_active = False
                 state.thread_id = tid
                 state.thread_name = name
                 state.messages = []
@@ -5975,12 +5989,22 @@ async def index():
         with p.chat_scroll:
             p.chat_container = ui.column().classes("w-full gap-2")
 
-        # Render existing messages
-        for msg in state.messages:
+        # Render existing messages — strip trailing synthetic "interrupted"
+        # message when there's a running generation or background task
+        _reattach_gen = _active_generations.get(state.thread_id)
+        _has_active_gen = (_reattach_gen and _reattach_gen.detached
+                          and _reattach_gen.status == "streaming")
+        _has_running_task = state.thread_id in get_running_tasks()
+        _msgs_to_render = state.messages
+        if ((_has_active_gen or _has_running_task)
+                and _msgs_to_render
+                and _msgs_to_render[-1].get("content", "").startswith(
+                    "\u26a0\ufe0f The assistant was interrupted")):
+            _msgs_to_render = _msgs_to_render[:-1]
+        for msg in _msgs_to_render:
             _add_chat_message(msg)
 
         # ── Reattach to a running generation (user switched back) ────────
-        _reattach_gen = _active_generations.get(state.thread_id)
         if _reattach_gen and _reattach_gen.detached and _reattach_gen.status == "streaming":
             with p.chat_container:
                 with ui.element("div").classes("thoth-msg-row"):
