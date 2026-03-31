@@ -26,6 +26,7 @@ vector_store/
 # Dev/test scripts
 seed_knowledge_graph.py
 _*.py
+!__init__.py
 
 # Old Streamlit app (replaced by NiceGUI in v3.0.0)
 .streamlit/
