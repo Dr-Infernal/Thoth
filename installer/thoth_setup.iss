@@ -1,5 +1,5 @@
 ; =============================================================================
-; Thoth v3.8.0 – Inno Setup Script
+; Thoth v3.9.0 – Inno Setup Script
 ; Self-contained installer: bundles embedded Python with all pip packages
 ; pre-installed.  No internet downloads at install time.
 ; =============================================================================
@@ -10,7 +10,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "3.8.0"
+#define MyAppVersion   "3.9.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -41,7 +41,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; ── App source code ──────────────────────────────────────────────────────────
-Source: "..\app_nicegui.py";             DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\app.py";                  DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\agent.py";                 DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\memory.py";                DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\memory_extraction.py";     DestDir: "{app}\app"; Flags: ignoreversion
@@ -104,7 +104,22 @@ Source: "..\tools\youtube_tool.py";    DestDir: "{app}\app\tools"; Flags: ignore
 ; ── Bundled Skills ───────────────────────────────────────────────────────────
 Source: "..\bundled_skills\*";         DestDir: "{app}\app\bundled_skills"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\skills.py";                 DestDir: "{app}\app"; Flags: ignoreversion
-
+; ── UI package (modular frontend) ─────────────────────────────────────────────────
+Source: "..\ui\__init__.py";            DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\chat.py";               DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\constants.py";          DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\export.py";             DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\graph_panel.py";        DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\head_html.py";          DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\helpers.py";            DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\home.py";               DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\render.py";             DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\settings.py";           DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\setup_wizard.py";       DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\sidebar.py";            DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\state.py";              DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\streaming.py";          DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\task_dialog.py";        DestDir: "{app}\app\ui"; Flags: ignoreversion
 ; ── Embedded Python (with all packages pre-installed) ────────────────────────
 Source: "build\python\*";              DestDir: "{app}\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 
@@ -127,3 +142,4 @@ Type: filesandordirs; Name: "{app}\python"
 Type: filesandordirs; Name: "{app}\app\__pycache__"
 Type: filesandordirs; Name: "{app}\app\tools\__pycache__"
 Type: filesandordirs; Name: "{app}\app\channels\__pycache__"
+Type: filesandordirs; Name: "{app}\app\ui\__pycache__"

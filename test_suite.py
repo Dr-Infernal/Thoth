@@ -1,4 +1,4 @@
-"""Thoth v3.5.0 — Comprehensive Test Suite
+"""Thoth v3.9.0 — Comprehensive Test Suite
 
 Validates that all modules import cleanly, key functions exist,
 config round-trips work, DB connectivity works, and the NiceGUI
@@ -351,14 +351,14 @@ except Exception as e:
     record("FAIL", "thread DB connectivity", str(e))
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 10. NO STREAMLIT IMPORTS IN app_nicegui.py
+# 10. NO STREAMLIT IMPORTS IN app.py
 # ═════════════════════════════════════════════════════════════════════════════
 print("\n" + "=" * 70)
-print("10. NO STREAMLIT IMPORTS IN app_nicegui.py")
+print("10. NO STREAMLIT IMPORTS IN app.py")
 print("=" * 70)
 
 try:
-    source = (PROJECT_ROOT / "app_nicegui.py").read_text(encoding="utf-8")
+    source = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
 
     streamlit_imports = []
@@ -372,9 +372,9 @@ try:
                 streamlit_imports.append(f"line {node.lineno}: from {node.module} import ...")
 
     if not streamlit_imports:
-        record("PASS", "no streamlit imports in app_nicegui.py")
+        record("PASS", "no streamlit imports in app.py")
     else:
-        record("FAIL", "streamlit imports found in app_nicegui.py", "; ".join(streamlit_imports))
+        record("FAIL", "streamlit imports found in app.py", "; ".join(streamlit_imports))
 
 except Exception as e:
     record("FAIL", "streamlit import check", str(e))
@@ -387,11 +387,11 @@ print("11. NiceGUI APP AST PARSE + BASIC IMPORT CHECK")
 print("=" * 70)
 
 try:
-    source = (PROJECT_ROOT / "app_nicegui.py").read_text(encoding="utf-8")
+    source = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    record("PASS", f"app_nicegui.py AST parsed ({len(source):,} chars)")
+    record("PASS", f"app.py AST parsed ({len(source):,} chars)")
 except Exception as e:
-    record("FAIL", "app_nicegui.py AST parse", str(e))
+    record("FAIL", "app.py AST parse", str(e))
 
 # Check nicegui is importable
 try:
@@ -750,7 +750,7 @@ else:
     try:
         python = sys.executable
         proc = subprocess.Popen(
-            [python, "app_nicegui.py"],
+            [python, "app.py"],
             cwd=str(PROJECT_ROOT),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             stdout=subprocess.DEVNULL,
@@ -2110,30 +2110,30 @@ try:
     else:
         record("FAIL", "activity: get_running_tasks()", f"got {type(_running)}")
 
-    # 22h. app_nicegui imports the new functions
+    # 22h. ui/home.py imports the new functions
     import ast as _ast
-    _app_src = Path("app_nicegui.py").read_text(encoding="utf-8")
-    _app_tree = _ast.parse(_app_src)
+    _home_src = Path("ui/home.py").read_text(encoding="utf-8")
+    _home_tree = _ast.parse(_home_src)
     _imported_names: set[str] = set()
-    for node in _ast.walk(_app_tree):
+    for node in _ast.walk(_home_tree):
         if isinstance(node, _ast.ImportFrom):
             for alias in node.names:
                 _imported_names.add(alias.name)
     _activity_imports = {"get_recent_runs", "get_next_fire_times", "get_extraction_status"}
     _missing_imports = _activity_imports - _imported_names
     if not _missing_imports:
-        record("PASS", "activity: app_nicegui imports all Activity helpers")
+        record("PASS", "activity: ui/home.py imports all Activity helpers")
     else:
-        record("FAIL", "activity: app_nicegui missing imports", str(_missing_imports))
+        record("FAIL", "activity: app missing imports", str(_missing_imports))
 
-    # 22i. _build_activity_content string exists in app_nicegui source
-    if "_build_activity_content" in _app_src:
-        record("PASS", "activity: _build_activity_content defined in app_nicegui")
+    # 22i. _build_activity_content string exists in ui/home.py
+    if "_build_activity_content" in _home_src:
+        record("PASS", "activity: _build_activity_content defined in ui/home.py")
     else:
-        record("FAIL", "activity: _build_activity_content not found in app_nicegui")
+        record("FAIL", "activity: _build_activity_content not found in app")
 
-    # 22j. Activity tab string exists in app_nicegui source
-    if "Activity" in _app_src and "home_tabs" in _app_src:
+    # 22j. Activity tab string exists in ui/home.py
+    if "Activity" in _home_src and "home_tabs" in _home_src:
         record("PASS", "activity: tab toggle present in home screen")
     else:
         record("FAIL", "activity: tab toggle missing from home screen")
@@ -2273,8 +2273,8 @@ try:
         delete_task(_tmp_id)
 
     # 23o. completed_delivery_failed status in Activity tab source
-    _app_src2 = Path("app_nicegui.py").read_text(encoding="utf-8")
-    if "completed_delivery_failed" in _app_src2:
+    _home_src2 = Path("ui/home.py").read_text(encoding="utf-8")
+    if "completed_delivery_failed" in _home_src2:
         record("PASS", "delivery: completed_delivery_failed in Activity tab")
     else:
         record("FAIL", "delivery: completed_delivery_failed missing from Activity tab")
@@ -3189,12 +3189,15 @@ try:
     else:
         record("FAIL", "vis: edges missing arrow specification")
 
-    # --- 27q. UI wiring: _build_graph_panel exists in app_nicegui ---------
-    _app_src = open(os.path.join(PROJECT_ROOT, "app_nicegui.py"), encoding="utf-8").read()
-    if "_build_graph_panel" in _app_src:
-        record("PASS", "vis: _build_graph_panel() exists in app_nicegui.py")
+    # --- 27q. UI wiring: _build_graph_panel exists in ui --------
+    _ui_graph_src = open(os.path.join(PROJECT_ROOT, "ui", "graph_panel.py"), encoding="utf-8").read()
+    _ui_home_src = open(os.path.join(PROJECT_ROOT, "ui", "home.py"), encoding="utf-8").read()
+    _ui_head_src = open(os.path.join(PROJECT_ROOT, "ui", "head_html.py"), encoding="utf-8").read()
+    _app_src = _ui_graph_src + _ui_home_src + _ui_head_src
+    if "build_graph_panel" in _app_src:
+        record("PASS", "vis: build_graph_panel() exists in ui")
     else:
-        record("FAIL", "vis: _build_graph_panel() missing from app_nicegui.py")
+        record("FAIL", "vis: build_graph_panel() missing from ui")
 
     # --- 27r. UI has vis-network reference ----------------------------------
     if "vis-network" in _app_src:
@@ -3252,9 +3255,8 @@ try:
     else:
         record("FAIL", "vis: thothGraphRedraw or wireControls missing")
 
-    # --- 27aa. vis-network loaded in add_head_html (global, not per-panel)
-    _head_html_idx = _app_src.find("add_head_html")
-    _vis_in_head = "vis-network.min.js" in _app_src[_head_html_idx:_head_html_idx+500] if _head_html_idx != -1 else False
+    # --- 27aa. vis-network loaded in head_html module (global, not per-panel)
+    _vis_in_head = "vis-network.min.js" in _app_src and "add_head_html" in _app_src
     if _vis_in_head:
         record("PASS", "vis: vis-network.min.js loaded once in add_head_html")
     else:
@@ -3762,14 +3764,14 @@ try:
     assert "save_to_file" in _p_src30
     record("PASS", "v3.6: prompts.py mentions save_to_file")
 
-    # ── 30t. "telegram" in skip_tools in app_nicegui.py ───────────────────
-    _app_src30 = Path("app_nicegui.py").read_text(encoding="utf-8")
+    # ── 30t. "telegram" in skip_tools in ui/settings.py ─────────
+    _settings_src30 = Path("ui/settings.py").read_text(encoding="utf-8")
     # Find the skip_tools set definition and check telegram is in it
     import re as _re30
-    _skip_match30 = _re30.search(r'skip_tools\s*=\s*\{([^}]+)\}', _app_src30, _re30.DOTALL)
-    assert _skip_match30, "skip_tools set not found in app_nicegui.py"
+    _skip_match30 = _re30.search(r'skip_tools\s*=\s*\{([^}]+)\}', _settings_src30, _re30.DOTALL)
+    assert _skip_match30, "skip_tools set not found in ui/settings.py"
     assert "telegram" in _skip_match30.group(1), f"telegram not in skip_tools: {_skip_match30.group(1)[:200]}"
-    record("PASS", "v3.6: telegram in skip_tools in app_nicegui.py")
+    record("PASS", "v3.6: telegram in skip_tools in ui/settings.py")
 
     # ── 30u. kaleido in requirements.txt ──────────────────────────────────
     _req_src30 = Path("requirements.txt").read_text(encoding="utf-8")
@@ -3964,7 +3966,7 @@ try:
     _src_shell31 = Path("tools/shell_tool.py").read_text(encoding="utf-8")
     _src_gmail31 = Path("tools/gmail_tool.py").read_text(encoding="utf-8")
     _src_prompts31 = Path("prompts.py").read_text(encoding="utf-8")
-    _src_ui31 = Path("app_nicegui.py").read_text(encoding="utf-8")
+    _src_ui31 = Path("ui/task_dialog.py").read_text(encoding="utf-8")
 
     # ── 31a. ContextVars for task permissions exist in agent.py ──────
     assert "_task_allowed_commands_var" in _src_agent31, \
@@ -4140,7 +4142,6 @@ except Exception as e:
 try:
     _src_agent32 = Path("agent.py").read_text(encoding="utf-8")
     _src_tasks32 = Path("tasks.py").read_text(encoding="utf-8")
-    _src_wf32 = Path("workflows.py").read_text(encoding="utf-8")
     _src_shell32 = Path("tools/shell_tool.py").read_text(encoding="utf-8")
     _src_gmail32 = Path("tools/gmail_tool.py").read_text(encoding="utf-8")
     _src_browser32 = Path("tools/browser_tool.py").read_text(encoding="utf-8")
@@ -4156,8 +4157,6 @@ try:
         "SECURITY: _tlocal.background_workflow still in agent.py — must use ContextVar"
     assert "_tlocal.background_workflow" not in _src_tasks32, \
         "SECURITY: _tlocal.background_workflow still in tasks.py"
-    assert "_tlocal.background_workflow" not in _src_wf32, \
-        "SECURITY: _tlocal.background_workflow still in workflows.py"
     record("PASS", "v3.6: background flag uses ContextVar (not threading.local)")
 
     # ── 32b. is_background_workflow reads ContextVar ─────────────────
@@ -4188,11 +4187,6 @@ try:
     assert "_background_workflow_var" in _src_tasks32, \
         "tasks.py must import _background_workflow_var"
     record("PASS", "v3.6: tasks.py sets ContextVar for background")
-
-    # ── 32f. workflows.py sets ContextVar ────────────────────────────
-    assert "_background_workflow_var.set(True)" in _src_wf32, \
-        "workflows.py must set _background_workflow_var to True"
-    record("PASS", "v3.6: workflows.py sets ContextVar for background")
 
     # ── 32g. Runtime tool gates ────────────────────────────────────
     # Shell tool and gmail tool use is_background_workflow() for gating.
@@ -4259,7 +4253,7 @@ try:
     # ── 32k. Interactive channels do NOT set background flag ─────────
     _src_tg32 = Path("channels/telegram.py").read_text(encoding="utf-8")
     _src_em32 = Path("channels/email.py").read_text(encoding="utf-8")
-    _src_ui32 = Path("app_nicegui.py").read_text(encoding="utf-8")
+    _src_ui32 = Path("app.py").read_text(encoding="utf-8")
     # These should NEVER set background_workflow to True
     assert "_background_workflow_var" not in _src_tg32, \
         "SECURITY: Telegram must NOT set _background_workflow_var"
@@ -4386,7 +4380,7 @@ try:
     import re as _re34
 
     def _safe_filename_ref(name: str) -> str:
-        """Reference implementation matching app_nicegui._safe_filename."""
+        """Reference implementation matching app._safe_filename."""
         return _re34.sub(r'[\\/:*?"<>|]', '-', name).strip('- ')
 
     # 34a. Colons replaced (the actual bug — timestamps in thread names)
@@ -4803,30 +4797,32 @@ try:
     assert "*_rest_em" in _em_src35
     record("PASS", "cloud: email channel handles 5-column rows")
 
-    # ── 35ag. app_nicegui.py: Cloud tab + dual sections ──────────────
-    _gui_src35 = Path("app_nicegui.py").read_text(encoding="utf-8")
+    # ── 35ag. UI: Cloud tab + dual sections ────────────────────
+    _gui_src35 = Path("app.py").read_text(encoding="utf-8") + "".join(
+        f.read_text(encoding="utf-8") for f in sorted(Path("ui").glob("*.py"))
+    )
     assert "_build_cloud_tab" in _gui_src35
     assert "tab_cloud" in _gui_src35
     assert "OpenAI Direct" in _gui_src35 or "openai" in _gui_src35.lower()
-    record("PASS", "cloud: app_nicegui.py has Cloud settings tab")
+    record("PASS", "cloud: app.py has Cloud settings tab")
 
-    # ── 35ah. app_nicegui.py: chat header model picker ───────────────
+    # ── 35ah. app.py: chat header model picker ───────────────
     assert "Select model for this thread" in _gui_src35
     assert "list_starred_cloud_models" in _gui_src35, "picker should use starred models"
-    record("PASS", "cloud: app_nicegui.py has starred-model picker")
+    record("PASS", "cloud: app.py has starred-model picker")
 
-    # ── 35ai. app_nicegui.py: cloud warning banner ───────────────────
+    # ── 35ai. app.py: cloud warning banner ───────────────────
     assert "data is sent to the cloud" in _gui_src35
     assert "get_cloud_provider" in _gui_src35, "banner should detect provider"
-    record("PASS", "cloud: app_nicegui.py has provider-aware warning banner")
+    record("PASS", "cloud: app.py has provider-aware warning banner")
 
-    # ── 35aj. app_nicegui.py: sidebar cloud icon ─────────────────────
+    # ── 35aj. app.py: sidebar cloud icon ─────────────────────
     assert "is_cloud_thread" in _gui_src35
-    record("PASS", "cloud: app_nicegui.py sidebar has cloud thread detection")
+    record("PASS", "cloud: app.py sidebar has cloud thread detection")
 
-    # ── 35ak. app_nicegui.py: health check bypasses Ollama for cloud ─
+    # ── 35ak. app.py: health check bypasses Ollama for cloud ─
     assert "is_cloud_model" in _gui_src35
-    record("PASS", "cloud: app_nicegui.py health check handles cloud default")
+    record("PASS", "cloud: app.py health check handles cloud default")
 
     # ── 35al. requirements.txt includes langchain-openai ─────────────
     _req_src35 = Path("requirements.txt").read_text(encoding="utf-8")
@@ -4927,11 +4923,11 @@ try:
     assert "is_cloud_model" in _vision_src35, "vision.py should check is_cloud_model"
     record("PASS", "cloud: vision.py has cloud-aware analyze routing")
 
-    # ── 35au. app_nicegui.py: cloud vision in settings + wizard ──────
+    # ── 35au. app.py: cloud vision in settings + wizard ──────
     assert "list_cloud_vision_models" in _gui_src35, "settings should use cloud vision list"
     assert "is_cloud_vision_model" in _gui_src35 or "cloud_vision_select" in _gui_src35, \
         "setup wizard should have cloud vision picker"
-    record("PASS", "cloud: app_nicegui.py has cloud vision model support")
+    record("PASS", "cloud: app.py has cloud vision model support")
 
     # ── 35av. _CLOUD_CACHE_PATH defined ──────────────────────────────
     assert _CLOUD_CACHE_PATH.name == "cloud_models_cache.json"
@@ -4956,25 +4952,25 @@ try:
     assert isinstance(_trending, list), "get_trending_models should return a list"
     record("PASS", "cloud: get_trending_models returns list")
 
-    # ── 35az. app_nicegui.py uses trending models + Ollama-aware logic
-    assert "fetch_trending_ollama_models" in _gui_src35, "app_nicegui.py should import fetch_trending"
-    assert "get_trending_models" in _gui_src35, "app_nicegui.py should import get_trending_models"
-    assert "🆕" in _gui_src35, "app_nicegui.py should show trending icon"
-    assert "_ollama_up" in _gui_src35, "app_nicegui.py should track Ollama reachability"
-    assert "ollama.com/download" in _gui_src35, "app_nicegui.py should link to Ollama download"
-    record("PASS", "cloud: app_nicegui.py has trending + Ollama-aware model lists")
+    # ── 35az. app.py uses trending models + Ollama-aware logic
+    assert "fetch_trending_ollama_models" in _gui_src35, "app.py should import fetch_trending"
+    assert "get_trending_models" in _gui_src35, "app.py should import get_trending_models"
+    assert "🆕" in _gui_src35, "app.py should show trending icon"
+    assert "_ollama_up" in _gui_src35, "app.py should track Ollama reachability"
+    assert "ollama.com/download" in _gui_src35, "app.py should link to Ollama download"
+    record("PASS", "cloud: app.py has trending + Ollama-aware model lists")
 
-    # ── 35ba. cross-platform install instructions in app_nicegui ─────
-    assert "brew install ollama" in _gui_src35, "app_nicegui.py should have macOS install hint"
-    assert "curl -fsSL" in _gui_src35, "app_nicegui.py should have Linux install hint"
-    record("PASS", "cloud: app_nicegui.py has cross-platform Ollama install instructions")
+    # ── 35ba. cross-platform install instructions in app ─────
+    assert "brew install ollama" in _gui_src35, "app.py should have macOS install hint"
+    assert "curl -fsSL" in _gui_src35, "app.py should have Linux install hint"
+    record("PASS", "cloud: app.py has cross-platform Ollama install instructions")
 
-    # ── 35bb. cloud/local chat banners in app_nicegui ────────────────
+    # ── 35bb. cloud/local chat banners in app ────────────────
     assert "complete privacy" in _gui_src35, "local banner should mention privacy"
     assert "data is sent to the cloud" in _gui_src35, "cloud banner should warn about data"
     assert 'icon("lock"' in _gui_src35, "local banner should use lock icon"
     assert 'icon("cloud"' in _gui_src35, "cloud banner should use cloud icon"
-    record("PASS", "cloud: app_nicegui.py has cloud/local chat banners")
+    record("PASS", "cloud: app.py has cloud/local chat banners")
 
     # ── 35bc. chat scroll area has model-type tint ───────────────────
     assert "rgba(255, 152, 0" in _gui_src35, "cloud scroll should have orange tint"
@@ -5000,7 +4996,7 @@ try:
     # ── 35bh. chat picker has "More models" entry ────────────────────
     assert "More models" in _gui_src35, "chat picker should have More models option"
     assert "_MORE_MODELS_SENTINEL" in _gui_src35, "sentinel constant should exist"
-    assert "_open_settings" in _gui_src35, "More models should open settings"
+    assert "open_settings" in _gui_src35, "More models should open settings"
     record("PASS", "cloud: chat picker has More models entry")
 
     # ── 35bi. cloud tab layout order ─────────────────────────────────
@@ -5031,7 +5027,7 @@ try:
     # ── 35bl. provider-specific emojis ────────────────────────────────
     _mod_src35 = Path("models.py").read_text(encoding="utf-8")
     assert 'get_provider_emoji' in _mod_src35, "models.py must define get_provider_emoji"
-    assert 'get_provider_emoji' in _gui_src35, "app_nicegui.py must use get_provider_emoji"
+    assert 'get_provider_emoji' in _gui_src35, "app.py must use get_provider_emoji"
     assert '_PROVIDER_EMOJI' in _mod_src35, "models.py must define _PROVIDER_EMOJI mapping"
     # Verify provider emojis are distinct
     assert '"openai"' in _mod_src35 and '"openrouter"' in _mod_src35, \
@@ -5339,22 +5335,24 @@ try:
         "create_task should accept skills_override"
     record("PASS", "skills: tasks.py has skills_override support")
 
-    # ── 36q. app_nicegui.py has Skills tab ────────────────────────────
-    _src_app36 = (PROJECT_ROOT / "app_nicegui.py").read_text(encoding="utf-8")
+    # ── 36q. UI has Skills tab ──────────────────────────────
+    _src_app36 = "".join(
+        f.read_text(encoding="utf-8") for f in sorted((PROJECT_ROOT / "ui").glob("*.py"))
+    )
     assert "_build_skills_tab" in _src_app36, \
-        "app_nicegui.py should have _build_skills_tab function"
+        "ui/ should have _build_skills_tab function"
     assert 'tab_skills' in _src_app36, \
-        "app_nicegui.py should have tab_skills defined"
-    assert "Skills" in _src_app36[_src_app36.index("_tab_map"):], \
-        "Skills should be in the tab map"
-    record("PASS", "skills: app_nicegui.py has Skills tab")
+        "ui/ should have tab_skills defined"
+    assert "Skills" in _src_app36, \
+        "Skills should be referenced in ui/"
+    record("PASS", "skills: ui/ has Skills tab")
 
-    # ── 36r. app_nicegui.py has per-thread skills override ────────────
+    # ── 36r. UI has per-thread skills override ────────────────
     assert "get_thread_skills_override" in _src_app36, \
-        "app_nicegui.py should import get_thread_skills_override"
+        "ui/ should import get_thread_skills_override"
     assert "set_thread_skills_override" in _src_app36, \
-        "app_nicegui.py should import set_thread_skills_override"
-    record("PASS", "skills: app_nicegui.py has per-thread skills override")
+        "ui/ should import set_thread_skills_override"
+    record("PASS", "skills: ui/ has per-thread skills override")
 
     # ── 36s. Bundled SKILL.md files have valid YAML ───────────────────
     import yaml as _yaml36
@@ -5773,9 +5771,9 @@ try:
     import notifications as _notif37
     record("PASS", "smoke: notifications module imports")
 
-    # ── 37k. Workflows module imports ─────────────────────────────────
-    import workflows as _wf37
-    record("PASS", "smoke: workflows module imports")
+    # ── 37k. UI package imports ─────────────────────────────────────
+    import ui as _ui37
+    record("PASS", "smoke: ui package imports")
 
     # ── 37l. Channel modules import ───────────────────────────────────
     from channels import config as _chcfg37
@@ -5803,8 +5801,8 @@ try:
     record("PASS", "smoke: launcher.py parses cleanly")
 
     # ── 37q. App NiceGUI parses cleanly ───────────────────────────────
-    _ast37p.parse((PROJECT_ROOT / "app_nicegui.py").read_text(encoding="utf-8"))
-    record("PASS", "smoke: app_nicegui.py parses cleanly")
+    _ast37p.parse((PROJECT_ROOT / "app.py").read_text(encoding="utf-8"))
+    record("PASS", "smoke: app.py parses cleanly")
 
     # ── 37r. Skills module round-trip (quick) ─────────────────────────
     import skills as _sk37

@@ -6,7 +6,7 @@ graph layer and maps column names so that callers who expect the old
 ``memories`` schema (``category``, ``content``) still work seamlessly.
 
 Nothing downstream needs to change — ``memory_extraction.py``,
-``tools/memory_tool.py``, ``agent.py``, and ``app_nicegui.py`` all import
+``tools/memory_tool.py``, ``agent.py``, and ``app.py`` all import
 from this module and get the same signatures and return values.
 
 Database lives at ``~/.thoth/memory.db`` (shared with knowledge_graph.py).

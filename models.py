@@ -231,7 +231,7 @@ def get_llm():
             _llm_instance = _get_cloud_llm(_current_model)
         else:
             logger.info("Creating LLM instance: model=%s, num_ctx=%s", _current_model, _num_ctx)
-            _llm_instance = ChatOllama(model=_current_model, num_ctx=_num_ctx)
+            _llm_instance = ChatOllama(model=_current_model, num_ctx=_num_ctx, reasoning=True)
     return _llm_instance
 
 
@@ -257,7 +257,7 @@ def get_llm_for(model_name: str, num_ctx: int | None = None):
     key = (model_name, num_ctx)
     if key not in _override_llm_cache:
         logger.info("Creating override LLM: model=%s, num_ctx=%s", model_name, num_ctx)
-        _override_llm_cache[key] = ChatOllama(model=model_name, num_ctx=num_ctx)
+        _override_llm_cache[key] = ChatOllama(model=model_name, num_ctx=num_ctx, reasoning=True)
     return _override_llm_cache[key]
 
 
@@ -307,7 +307,7 @@ def set_model(model_name: str):
     if is_cloud_model(model_name):
         _llm_instance = _get_cloud_llm(model_name)
     else:
-        _llm_instance = ChatOllama(model=model_name, num_ctx=_num_ctx)
+        _llm_instance = ChatOllama(model=model_name, num_ctx=_num_ctx, reasoning=True)
     _save_settings({"model": _current_model, "context_size": _num_ctx})
 
 
@@ -375,7 +375,7 @@ def set_context_size(size: int):
     if is_cloud_model(_current_model):
         _llm_instance = _get_cloud_llm(_current_model)
     else:
-        _llm_instance = ChatOllama(model=_current_model, num_ctx=_num_ctx)
+        _llm_instance = ChatOllama(model=_current_model, num_ctx=_num_ctx, reasoning=True)
     _save_settings({"model": _current_model, "context_size": _num_ctx})
 
 
@@ -584,35 +584,37 @@ def is_cloud_vision_model(model_name: str) -> bool:
 
 
 def _get_cloud_llm(model_name: str):
-    """Return a cached ChatOpenAI for an OpenAI-direct or OpenRouter model."""
-    from langchain_openai import ChatOpenAI
+    """Return a cached LLM for a cloud model.
+
+    OpenAI-direct models use ``ChatOpenAI``.  OpenRouter models use
+    ``ChatOpenRouter`` which correctly surfaces ``reasoning_content``
+    in ``additional_kwargs`` for reasoning models.
+    """
     from api_keys import get_key
 
     provider = get_cloud_provider(model_name)
+    ctx = get_cloud_model_context(model_name)
+    key = (model_name, ctx)
+    if key in _override_llm_cache:
+        return _override_llm_cache[key]
+
+    logger.info("Creating cloud LLM: model=%s via %s", model_name, provider or "openrouter")
+
     if provider == "openai":
+        from langchain_openai import ChatOpenAI
         api_key = get_key("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OpenAI API key not configured. Set it in Settings → Cloud.")
-        base_url = None  # use default OpenAI endpoint
-        headers = {}
+        _override_llm_cache[key] = ChatOpenAI(model=model_name, api_key=api_key)
     else:
-        # OpenRouter (or fallback for unknown)
+        from langchain_openrouter import ChatOpenRouter
         api_key = get_key("OPENROUTER_API_KEY")
         if not api_key:
             raise ValueError("OpenRouter API key not configured. Set it in Settings → Cloud.")
-        base_url = OPENROUTER_BASE_URL
-        headers = {"HTTP-Referer": "https://github.com/hermes-thoth/thoth"}
-
-    ctx = get_cloud_model_context(model_name)
-    key = (model_name, ctx)
-    if key not in _override_llm_cache:
-        logger.info("Creating cloud LLM: model=%s via %s", model_name, provider or "openrouter")
-        kwargs: dict = dict(model=model_name, api_key=api_key)
-        if base_url:
-            kwargs["base_url"] = base_url
-        if headers:
-            kwargs["default_headers"] = headers
-        _override_llm_cache[key] = ChatOpenAI(**kwargs)
+        _override_llm_cache[key] = ChatOpenRouter(
+            model_name=model_name,
+            openrouter_api_key=api_key,
+        )
     return _override_llm_cache[key]
 
 

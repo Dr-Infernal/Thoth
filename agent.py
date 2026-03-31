@@ -1344,8 +1344,22 @@ def _stream_graph(agent, input_data, config: dict,
                 continue
 
             content = _content_to_str(msg.content)
+
+            # ── Reasoning via additional_kwargs (LangChain standard) ─
+            # All major providers (OpenAI, Ollama/DeepSeek, Groq, XAI)
+            # surface reasoning tokens in additional_kwargs["reasoning_content"].
+            # Extract them BEFORE checking content so the thinking bubble
+            # works even when content is empty during the reasoning phase.
+            _ak = getattr(msg, "additional_kwargs", None) or {}
+            _reasoning = _ak.get("reasoning_content", "")
+            if _reasoning:
+                if not thinking_signalled:
+                    thinking_signalled = True
+                yield ("thinking_token", _reasoning)
+
             if not content:
-                # Empty content = thinking phase for reasoning models
+                # Empty content = thinking phase (signal spinner if no
+                # reasoning_content was yielded above)
                 if not thinking_signalled:
                     thinking_signalled = True
                     yield ("thinking", None)

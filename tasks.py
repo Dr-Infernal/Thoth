@@ -556,7 +556,7 @@ def get_running_task_thread(task_id: str) -> str | None:
     return None
 
 
-# Backward-compat alias used by app_nicegui sidebar
+# Backward-compat alias used by app sidebar
 get_running_workflows = get_running_tasks
 
 
@@ -843,7 +843,7 @@ def run_task_background(
 
             # ── Determine final status ────────────────────────────────
             delivery_status, delivery_detail = "", ""
-            if task.get("delivery_channel") and task.get("delivery_target"):
+            if task.get("delivery_channel"):
                 deliver_text = last_response or f"✅ Task '{task['name']}' completed."
                 delivery_status, delivery_detail = _deliver_to_channel(
                     task, deliver_text,
@@ -1087,7 +1087,7 @@ def _on_task_fire(task_id: str) -> None:
     # (a) the thread appears in the sidebar immediately, and
     # (b) _thread_exists() returns True at completion, allowing the
     #     final rename/save.  Mirrors the manual-run handler in
-    #     app_nicegui.py.
+    #     app.py.
     from threads import _save_thread_meta
     thread_name = (
         f"\u26a1 {task['name']} — "
@@ -1284,7 +1284,7 @@ def seed_default_tasks() -> None:
     logger.info("Seeded %d default tasks", len(_DEFAULT_TASKS))
 
 
-# Backward-compat aliases for app_nicegui.py transition
+# Backward-compat aliases for legacy transition
 seed_default_workflows = seed_default_tasks
 list_workflows = list_tasks
 create_workflow = lambda name, prompts, description="", icon="⚡", schedule=None: create_task(

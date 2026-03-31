@@ -262,7 +262,7 @@ class VisionService:
                 return f"Vision analysis failed: {exc}"
 
     def _analyze_cloud(self, b64: str, question: str) -> str:
-        """Send image to a cloud vision model via ChatOpenAI."""
+        """Send image to a cloud vision model."""
         from models import get_llm_for
         from langchain_core.messages import HumanMessage
 

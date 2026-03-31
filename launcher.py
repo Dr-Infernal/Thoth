@@ -3,7 +3,7 @@
 Responsibilities:
     • Splash screen while the server starts (tkinter — no extra deps)
     • System-tray icon (green = running, grey = stopped)
-    • Launch  ``python app_nicegui.py``  as a headless server subprocess
+    • Launch  ``python app.py``  as a headless server subprocess
     • Open a pywebview native window pointing at the server
     • Closing the window keeps the server (and tasks/channels) alive
     • Detect an already-running instance and just open a window
@@ -156,14 +156,14 @@ class _ThothProcess:
         self._log_file: Path | None = None
 
     def start(self) -> None:
-        """Launch ``python app_nicegui.py`` as a headless server.
+        """Launch ``python app.py`` as a headless server.
 
         The server runs without ``--native`` so it stays alive
         independently of any UI window.  The launcher opens a
         separate pywebview window to display the UI.
         """
         app_dir = Path(__file__).resolve().parent
-        app_py = app_dir / "app_nicegui.py"
+        app_py = app_dir / "app.py"
 
         # Use the same Python that's running this launcher
         python = sys.executable

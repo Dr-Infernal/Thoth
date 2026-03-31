@@ -245,7 +245,7 @@ class TTSService:
         """True if the Kokoro model and voices file are both present."""
         return _MODEL_PATH.exists() and _VOICES_PATH.exists()
 
-    # Backward-compatible aliases used by app_nicegui.py
+    # Backward-compatible aliases used by app.py
     def is_piper_installed(self) -> bool:
         """Alias for is_installed() — kept for backward compatibility."""
         return self.is_installed()

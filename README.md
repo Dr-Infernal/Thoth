@@ -199,11 +199,12 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 
 ### 🧩 Bundled Skills
 
-Skills are reusable instruction packs that shape how the agent thinks and responds. Each skill is a `SKILL.md` file with YAML frontmatter (display name, icon, description, required tools, tags) and freeform instructions injected into the system prompt when enabled. Thoth ships with 9 bundled skills — enable any combination from **⚙️ Settings → Skills**.
+Skills are reusable instruction packs that shape how the agent thinks and responds. Each skill is a `SKILL.md` file with YAML frontmatter (display name, icon, description, required tools, tags) and freeform instructions injected into the system prompt when enabled. Thoth ships with **10 bundled skills** — enable any combination from **⚙️ Settings → Skills**.
 
 | Skill | Description |
 |-------|-------------|
 | **🧠 Brain Dump** | Capture unstructured thoughts and organize them into structured notes saved to memory |
+| **📊 Data Analyst** | Analyse datasets, produce statistical summaries, and create insightful charts |
 | **☀️ Daily Briefing** | Compile a morning briefing with weather, calendar, and news headlines |
 | **🔬 Deep Research** | Perform multi-source research on a topic and produce a structured report |
 | **🗣️ Humanizer** | Write in a natural, human tone — no AI-speak, no filler, no corporate fluff |
@@ -213,6 +214,7 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 | **⚙️ Task Automation** | Design effective automated workflows using scheduled tasks, prompt chaining, and delivery channels |
 | **🌐 Web Navigator** | Strategic patterns for effective browser automation — research, forms, and data extraction |
 
+- **10 bundled skills** cover data analysis, research, automation, meeting notes, daily briefings, and more
 - **User skills** — create your own skills in `~/.thoth/skills/<name>/SKILL.md`; user skills with the same name as a bundled skill override it
 - **In-app skill editor** — create and edit skills directly from Settings → Skills with a visual editor — set the name, icon, description, required tools, and write instructions without touching any files
 - **Enable/disable per-skill** — toggle individual skills from Settings; only enabled skills are injected into the system prompt
@@ -279,7 +281,7 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                    NiceGUI Frontend (app_nicegui.py)                 │
+│                    NiceGUI Frontend (app.py + ui/ package)              │
 │  ┌────────────┐  ┌──────────────────────┐  ┌───────────────────┐   │
 │  │  Sidebar   │  │   Chat Interface     │  │   Settings Dialog │   │
 │  │  Threads   │  │   Streaming Tokens   │  │   12 Tabs         │   │
@@ -361,12 +363,12 @@ Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI,
 
 | File | Purpose |
 |------|---------|
-| **`app_nicegui.py`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (12 tabs including Cloud), tabbed home screen (Tasks + Activity + Memory graph), Task Edit dialog, file attachment handling, streaming event loop with error recovery, export, voice bar, first-launch setup wizard (Local/Cloud paths), per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network), centralized logging configuration |
-| **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator, interrupt handling for destructive actions, live token usage reporting, graph-enhanced auto-recall with memory IDs and relation context, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off), task cancellation via stop_event, displaced tool-call auto-repair |
+| **`app.py`** + **`ui/`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (12 tabs including Cloud), tabbed home screen (Tasks + Activity + Memory graph), Task Edit dialog, file attachment handling, streaming event loop with error recovery, export, voice bar, first-launch setup wizard (Local/Cloud paths), per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network), centralized logging configuration |
+| **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator with thinking/reasoning token extraction, interrupt handling for destructive actions, live token usage reporting, graph-enhanced auto-recall with memory IDs and relation context, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off), task cancellation via stop_event, displaced tool-call auto-repair |
 | **`threads.py`** | SQLite-backed thread metadata and `SqliteSaver` checkpointer for persisting LangGraph conversation state |
 | **`memory.py`** | Backward-compatible memory wrapper — delegates all operations to `knowledge_graph.py`, mapping legacy column names (`category`/`content` to `entity_type`/`description`); provides `save_memory`, `find_by_subject`, `update_memory`, `delete_memory`, `semantic_search`, and `count_memories` with unchanged signatures |
 | **`knowledge_graph.py`** | Personal knowledge graph engine — SQLite entity + relation tables (WAL mode), NetworkX DiGraph for traversal, FAISS vector index for semantic search; entity CRUD with alias resolution, relation CRUD with cascade delete, `graph_enhanced_recall()` for semantic + graph expansion, `graph_to_vis_json()` for visualization; deterministic dedup via normalized subject matching |
-| **`models.py`** | Ollama + cloud model management — local model listing/downloading/switching, cloud provider support (OpenAI, OpenRouter), starred models, context-size catalog with heuristics, model override routing, cloud vision detection |
+| **`models.py`** | Ollama + cloud model management — local model listing/downloading/switching, cloud provider support (OpenAI direct, OpenRouter via ChatOpenRouter), starred models, context-size catalog with heuristics, model override routing, cloud vision detection, reasoning model support (`reasoning=True` for thinking models) |
 | **`documents.py`** | Document ingestion — PDF/DOCX/TXT loading, chunking, FAISS embedding and storage |
 | **`voice.py`** | Local STT pipeline — toggle-based 4-state machine (stopped/listening/transcribing/muted) with faster-whisper CPU-only int8 transcription |
 | **`tts.py`** | Kokoro TTS integration — cross-platform neural TTS, model auto-downloaded on first use (~169 MB), 10 built-in voices, streaming sentence-by-sentence playback |
@@ -377,7 +379,7 @@ Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI,
 | **`prompts.py`** | Centralized LLM prompts — system prompt (with BUILDING CONNECTIONS, EXPLORING CONNECTIONS, and BACKGROUND TASK PERMISSIONS sections), extraction prompt (triple-based with User entity convention and relation taxonomy), summarization prompt; memory guidelines with dedup and update instructions |
 | **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts entities and relations as structured triples, two-pass dedup (entities with alias merging, then relations with subject-to-ID resolution), User entity pre-population, excludes active threads, runs on startup + every 6 hours |
 | **`skills.py`** | Skills engine — discovers, loads, and caches bundled and user skill definitions from `SKILL.md` files with YAML frontmatter; builds prompt text for enabled skills injected into the system prompt; config persistence in `~/.thoth/skills_config.json` |
-| **`bundled_skills/`** | 9 built-in skill packages (Brain Dump, Daily Briefing, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) — each a directory containing a `SKILL.md` instruction file |
+| **`bundled_skills/`** | 10 built-in skill packages (Brain Dump, Daily Briefing, Data Analyst, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) — each a directory containing a `SKILL.md` instruction file |
 | **`tasks.py`** | Task engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, sequential prompt execution, background runner with threading, channel delivery (Telegram/Email), per-task model override, run history persistence, task stop/cancel, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
 | **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue with `toast_type` support (positive/negative); error toasts render as persistent red banners; coordinates task completion chimes and timer alerts |
 | **`channels/`** | Messaging channel adapters — Telegram bot (long polling, interrupt approval, corrupt thread recovery, HTML formatting) and Email channel (Gmail polling, interrupt approval, corrupt thread recovery, sender-only filter), with shared config store |
@@ -460,13 +462,13 @@ If you don't plan to run local models, Thoth's requirements drop significantly:
 
 ### Windows
 
-1. Download **[ThothSetup_3.8.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.9.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.8.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.9.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Open the DMG and drag **Thoth.app** into the **Applications** folder
 3. Launch **Thoth** from Applications or Launchpad
    - First run may prompt "Thoth is an app downloaded from the internet" → click **Open**
@@ -518,7 +520,7 @@ If you don't plan to run local models, Thoth's requirements drop significantly:
 
    Alternatively, run directly without the tray:
    ```bash
-   python app_nicegui.py
+   python app.py
    ```
 
 > **First launch:** A setup wizard lets you choose between **Local** (Ollama) and **Cloud** (API key) setup paths. For local, the default brain model (`qwen3:14b`, ~9 GB) is recommended. For cloud, enter your OpenAI or OpenRouter API key and pick a default model.

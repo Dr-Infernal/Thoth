@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 $BuildDir = Join-Path $PSScriptRoot "build"
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host " Thoth v3.8.0 Installer Builder"              -ForegroundColor Cyan
+Write-Host " Thoth v3.9.0 Installer Builder"              -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 

@@ -2,6 +2,84 @@
 
 ---
 
+## v3.9.0 — Modular UI, Thinking Models & Cloud Model Expansion
+
+Thoth's monolithic 6,500-line frontend is now a **clean modular architecture** — `app.py` + a `ui/` package of 15 focused modules. **Thinking model support** lands with full reasoning-token extraction, collapsible thinking bubbles, and persistence across thread reloads. **OpenRouter gets first-class support** via `ChatOpenRouter`, and a new **Data Analyst** bundled skill rounds out the skill library to 10. Multiple rendering fixes (URL auto-linking, YouTube embeds) and a privacy improvement round out the release.
+
+### 🏗️ UI Modularization
+
+The monolith `app_nicegui.py` (6,535 lines) has been replaced by `app.py` + `ui/` package using a strangler-fig migration pattern.
+
+- **15 focused modules** — `state.py` (dataclasses), `constants.py`, `head_html.py`, `helpers.py` (config, file processing, exports), `render.py` (message rendering), `streaming.py` (generation consumer, send/interrupt), `setup_wizard.py`, `settings.py`, `graph_panel.py` (knowledge graph vis), `sidebar.py`, `home.py`, `tasks_ui.py`, `voice_bar.py`, `export.py`, `__init__.py`
+- **Zero functionality loss** — every feature from the monolith is preserved; all imports resolve cleanly
+- **Launcher updated** — `launcher.py`, both installer scripts (Windows ISS + macOS build), CI workflow, test suite, and all documentation updated to reference the new entry point
+
+### 💡 Thinking Model Support
+
+Full support for reasoning models (DeepSeek-R1, Qwen3, QwQ, etc.) across local and cloud providers.
+
+- **Reasoning token extraction** — `additional_kwargs["reasoning_content"]` is extracted from streaming chunks before content, surfacing the model's chain-of-thought in real time
+- **`reasoning=True`** — all four `ChatOllama` instantiation sites now enable native reasoning mode
+- **`<think>` tag stripping** — models that embed `<think>…</think>` blocks in content have them separated into thinking tokens and stripped from the visible response
+- **Collapsible thinking bubble** — during streaming, thinking content displays live in italic at 55% opacity, then auto-collapses into a `💭 Thinking` expansion with `psychology` icon when the real response begins
+- **Thinking persistence on thread reload** — `load_thread_messages()` now recovers reasoning content from both `additional_kwargs` and `<think>` tags in the LangGraph checkpoint; historical messages render a collapsed thinking expansion matching the live-streaming style
+
+### ☁️ Cloud Model Expansion
+
+- **ChatOpenRouter** — OpenRouter models now use `langchain-openrouter`'s dedicated `ChatOpenRouter` class instead of the generic `ChatOpenAI` wrapper, enabling proper provider-specific features
+- **New dependency** — `langchain-openrouter` added to `requirements.txt`
+
+### 📊 Data Analyst Skill
+
+- **New bundled skill** — `bundled_skills/data_analyst/SKILL.md` (v1.1) — guides the agent through dataset analysis, statistical summaries, and insightful Plotly chart creation
+- **10 bundled skills total** — Brain Dump, Daily Briefing, Data Analyst, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator
+
+### 🔗 Rendering Fixes
+
+- **URL auto-linking** — bare `https://` URLs in messages now automatically render as clickable links; a regex preprocessor safely skips URLs already inside markdown links, angle brackets, inline code, or fenced code blocks
+- **YouTube embed fix** — `render_text_with_embeds()` rewritten to match the full `**[text](youtube_url)**` context, eliminating `**` and `)**` artifacts that appeared when YouTube links were wrapped in markdown bold/link syntax
+
+### 📊 Chart Tool Fixes
+
+- **Reliable chart rendering** — chart tool improvements for consistent Plotly chart creation and inline display
+
+### 🔒 Privacy
+
+- **User content removed from logs** — `send_message()` no longer logs `agent_input_preview` (the first 200 characters of the user's message); log now shows only file names and content lengths
+
+### 📁 Housekeeping
+
+- **`workflows.py` removed** — fully superseded by `tasks.py` since v3.5.0; dead code deleted
+- **Version bump** — v3.8.0 → v3.9.0 across installers, CI, documentation, and landing page
+- **Test suite** — all `app_nicegui` references updated to `app`
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`app.py`** | **Renamed** from `app_v2.py` — modular entry point, port 8080, title "Thoth" |
+| **`ui/`** | **New** — 15-module UI package extracted from monolith |
+| **`app_nicegui.py`** | **Deleted** — archived as `.bak` |
+| **`workflows.py`** | **Deleted** — dead code, superseded by `tasks.py` |
+| **`agent.py`** | Thinking/reasoning token extraction from `additional_kwargs["reasoning_content"]`; `<think>` tag separation |
+| **`models.py`** | `reasoning=True` on all `ChatOllama` calls; `ChatOpenRouter` for OpenRouter cloud models |
+| **`requirements.txt`** | Added `langchain-openrouter` |
+| **`tools/chart_tool.py`** | Chart creation and rendering fixes |
+| **`prompts.py`** | System prompt refinements |
+| **`bundled_skills/data_analyst/`** | **New** — Data Analyst skill v1.1 |
+| **`launcher.py`** | References updated `app_nicegui.py` → `app.py` |
+| **`installer/thoth_setup.iss`** | Version 3.9.0; `app_nicegui.py` → `app.py`; added `ui\` package (15 files) |
+| **`installer/build_mac_app.sh`** | Version 3.9.0; added `ui` to rsync; removed `app.py` from skip list |
+| **`installer/build_installer.ps1`** | Version 3.9.0 |
+| **`.github/workflows/release.yml`** | `DEFAULT_VERSION` → 3.9.0 |
+| **`test_suite.py`** | 67× `app_nicegui` → `app`; docstring version v3.9.0 |
+| **`README.md`** | Architecture diagram, module table, installer filenames updated; skills count 10; models.py description updated |
+| **`docs/index.html`** | Download links v3.9.0; skills 9→10; new Thinking Models feature card; footer version |
+| **`installer/README.md`** | Version reference updated |
+| **`memory.py`**, **`tts.py`**, **`tasks.py`**, **`vision.py`** | Comment/docstring references updated |
+
+---
+
 ## v3.8.0 — Bundled Skills, Memory Intelligence & Self-Contained Installers
 
 Thoth ships with **9 bundled skills** — reusable instruction packs that shape how the agent thinks and responds. The memory system gets smarter with **auto-linking, FAISS fallback search, background orphan repair, and memory decay**. Token counting is now accurate via **tiktoken**, and the agent dynamically adjusts its tool set based on available context. Installers are now fully **self-contained** (no post-install downloads), and a new **CI/CD pipeline** automates builds, code signing, notarization, and GitHub Releases.

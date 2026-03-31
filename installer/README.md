@@ -1,6 +1,6 @@
 # Building the Thoth Windows Installer
 
-This guide explains how to build a distributable Windows installer for Thoth v3.7.0.
+This guide explains how to build a distributable Windows installer for Thoth v3.9.0.
 
 ## Architecture
 
@@ -59,7 +59,7 @@ C:\Program Files\Thoth\            # Installation directory
 │   ├── Lib\site-packages\          # All pip packages installed here
 │   └── ...
 └── app\                            # Application source code
-    ├── app_nicegui.py              # NiceGUI frontend
+    ├── app.py                       # NiceGUI frontend
     ├── agent.py                    # ReAct agent
     ├── memory.py                   # Long-term memory DB + FAISS vector search
     ├── memory_extraction.py        # Background memory extraction from conversations

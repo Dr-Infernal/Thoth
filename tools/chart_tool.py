@@ -4,7 +4,7 @@ The agent calls ``create_chart`` with a structured specification (chart type,
 column names, optional parameters).  The tool loads the data from a
 workspace file or a cached attachment, builds a Plotly figure, and returns
 its JSON representation wrapped in a ``__CHART__`` marker so the UI layer
-can render it inline with ``st.plotly_chart()``.
+can render it inline.
 """
 
 from __future__ import annotations
@@ -13,6 +13,9 @@ import io
 import json
 from pathlib import Path
 from typing import Optional
+
+# Module-level attachment cache — set by the UI layer before agent invocation.
+_attachment_cache: dict[str, bytes] = {}
 
 import plotly.express as px
 import plotly.graph_objects as go
@@ -32,6 +35,20 @@ _CHART_TYPES = {
     "histogram", "box", "area", "heatmap",
 }
 
+# Common aliases LLMs try — silently resolve instead of erroring
+_CHART_ALIASES: dict[str, str] = {
+    "grouped_bar": "bar",
+    "stacked_bar": "bar",
+    "stacked_area": "area",
+    "barh": "horizontal_bar",
+    "hbar": "horizontal_bar",
+    "doughnut": "donut",
+    "ring": "donut",
+    "boxplot": "box",
+    "heat_map": "heatmap",
+    "correlation": "heatmap",
+}
+
 # ── Maximum rows to plot (guard against huge datasets) ───────────────────
 _MAX_PLOT_ROWS = 10_000
 
@@ -41,14 +58,20 @@ class _CreateChartInput(BaseModel):
     chart_type: str = Field(
         description=(
             "Type of chart to create.  One of: bar, horizontal_bar, line, "
-            "scatter, pie, donut, histogram, box, area, heatmap."
+            "scatter, pie, donut, histogram, box, area, heatmap.  "
+            "For grouped/stacked bars use 'bar' with comma-separated "
+            "y_column values (e.g. 'Q1,Q2,Q3,Q4')."
         )
     )
     data_source: str = Field(
         description=(
-            "Path to the data file (CSV, Excel, JSON, TSV) in the "
-            "workspace, OR the filename of an attached file the user "
-            "uploaded in this conversation."
+            "The data to chart.  Accepts THREE formats:\n"
+            "1. **Inline CSV/TSV** — paste the data directly, e.g. "
+            "'City,Population\\nLondon,9000000\\nParis,2100000'\n"
+            "2. **File path** — path to a CSV, Excel, JSON, or TSV file "
+            "in the workspace\n"
+            "3. **Attached filename** — the name of a file the user "
+            "uploaded in this conversation"
         )
     )
     x_column: Optional[str] = Field(
@@ -87,21 +110,38 @@ class _CreateChartInput(BaseModel):
 
 
 # ── Data loading helper ─────────────────────────────────────────────────
-def _load_data(data_source: str, sheet: str | None) -> pd.DataFrame:
-    """Load a DataFrame from a workspace file or a cached attachment."""
+def _normalise_newlines(s: str) -> str:
+    """Replace escaped literal '\\n' sequences with real newlines."""
+    # Agents often emit the two-char sequence \n instead of a real newline
+    if "\\n" in s and "\n" not in s:
+        return s.replace("\\n", "\n")
+    return s
 
-    # 1) Try the attachment cache (populated by app.py when user attaches files)
-    try:
-        import streamlit as st
-        cache: dict[str, bytes] = st.session_state.get("_attached_data_cache", {})
-        name_lower = Path(data_source).name.lower()
-        for cached_name, cached_bytes in cache.items():
-            if cached_name.lower() == name_lower:
-                suffix = Path(cached_name).suffix.lower()
-                buf = io.BytesIO(cached_bytes)
-                return _read_df(buf, suffix, sheet)
-    except Exception:
-        pass
+
+def _looks_like_inline_data(s: str) -> bool:
+    """Return True if *s* appears to be inline CSV/TSV rather than a path."""
+    normed = _normalise_newlines(s)
+    return "\n" in normed.strip() and ("," in normed or "\t" in normed)
+
+
+def _load_data(data_source: str, sheet: str | None) -> pd.DataFrame:
+    """Load a DataFrame from inline data, a cached attachment, or a file."""
+
+    # 0) Inline CSV / TSV data — the agent passed raw data directly
+    if _looks_like_inline_data(data_source):
+        data_source = _normalise_newlines(data_source)
+        sep = "\t" if "\t" in data_source else ","
+        df = pd.read_csv(io.StringIO(data_source), sep=sep, on_bad_lines="skip")
+        if len(df.columns) >= 1 and len(df) >= 1:
+            return df
+
+    # 1) Try the attachment cache (populated by the UI when user attaches files)
+    name_lower = Path(data_source).name.lower()
+    for cached_name, cached_bytes in _attachment_cache.items():
+        if cached_name.lower() == name_lower:
+            suffix = Path(cached_name).suffix.lower()
+            buf = io.BytesIO(cached_bytes)
+            return _read_df(buf, suffix, sheet)
 
     # 2) Try as a workspace file path
     path = Path(data_source)
@@ -258,9 +298,15 @@ def _build_figure(
             fig = px.area(df, x=x, y=y, color=color, title=title)
 
     elif chart_type == "heatmap":
-        # Pivot for heatmap if colour column exists
+        # Pivot for heatmap — need a numeric column for values
         if color and color in df.columns and x in df.columns and y in df.columns:
-            pivot = df.pivot_table(index=y, columns=x, values=color, aggfunc="mean")
+            # Use color as values if numeric, otherwise as an axis
+            if df[color].dtype.kind in ("i", "f"):
+                pivot = df.pivot_table(index=y, columns=x, values=color, aggfunc="mean")
+            elif df[y].dtype.kind in ("i", "f"):
+                pivot = df.pivot_table(index=color, columns=x, values=y, aggfunc="mean")
+            else:
+                pivot = df.pivot_table(index=y, columns=x, values=num_cols[0], aggfunc="mean")
             fig = px.imshow(pivot, title=title, aspect="auto")
         elif len(num_cols) >= 2:
             corr = df[num_cols].corr()
@@ -282,6 +328,77 @@ def _build_figure(
     return fig
 
 
+# ── Wide-format auto-melt ────────────────────────────────────────────────
+def _auto_melt_if_needed(
+    df: pd.DataFrame,
+    x_column: str | None,
+    y_column: str | None,
+) -> pd.DataFrame:
+    """Auto-unpivot wide-format data when the agent requests columns that
+    don't exist but could be derived by melting numeric columns.
+
+    Real-world example
+    ------------------
+    Data:   Region, Category, Q1, Q2, Q3, Q4
+    Agent:  x_column='Quarter', y_column='Sales'
+
+    Neither column exists, but there are 4 numeric columns that can be
+    melted.  Result:  Region, Category, Quarter, Sales  (long format).
+
+    This handles the generic shape mismatch between how LLMs conceptualise
+    data (long/tidy) and how users supply it (wide from spreadsheets).
+    """
+    cols = set(df.columns)
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+
+    if len(num_cols) < 2:
+        return df  # not enough numeric columns to melt
+
+    # Gather which requested column parts are missing
+    x_parts = [p.strip() for p in x_column.split(",")] if x_column else []
+    y_parts = [p.strip() for p in y_column.split(",")] if y_column else []
+
+    # Only melt when an entire side (x or y) is fully absent.
+    # Partial mismatches (e.g. "Q1,Sales" where Q1 exists) are left for
+    # normal validation — melting would destroy the existing column.
+    x_fully_missing = bool(x_parts) and all(c not in cols for c in x_parts)
+    y_fully_missing = bool(y_parts) and all(c not in cols for c in y_parts)
+
+    if not x_fully_missing and not y_fully_missing:
+        return df  # nothing to melt — requested columns already exist
+
+    # Don't melt if the *other* side references numeric columns that would
+    # be consumed.  e.g. x='Quarter'(missing), y='Q1,Q2,Q3,Q4'(present)
+    # means the agent wants multi-series — melting would destroy y.
+    num_set = set(num_cols)
+    if x_fully_missing and not y_fully_missing:
+        if any(p.strip() in num_set for p in y_parts):
+            return df
+    if y_fully_missing and not x_fully_missing:
+        if any(p.strip() in num_set for p in x_parts):
+            return df
+
+    id_cols = [c for c in df.columns if c not in num_cols]
+
+    # Name the two new columns after what the agent asked for
+    var_name = x_parts[0] if x_fully_missing else "variable"
+    value_name = y_parts[0] if y_fully_missing else "value"
+
+    # Avoid name collision
+    if var_name == value_name:
+        value_name = value_name + "_value"
+
+    melted = pd.melt(
+        df,
+        id_vars=id_cols or None,
+        value_vars=num_cols,
+        var_name=var_name,
+        value_name=value_name,
+    )
+
+    return melted
+
+
 # ── Main tool function ───────────────────────────────────────────────────
 def _create_chart(
     chart_type: str,
@@ -296,6 +413,7 @@ def _create_chart(
     """Create a chart and return a JSON marker for the UI to render."""
 
     chart_type = chart_type.strip().lower()
+    chart_type = _CHART_ALIASES.get(chart_type, chart_type)
     if chart_type not in _CHART_TYPES:
         return (
             f"Unsupported chart type '{chart_type}'. "
@@ -311,6 +429,24 @@ def _create_chart(
     if len(df) > _MAX_PLOT_ROWS:
         df = df.head(_MAX_PLOT_ROWS)
 
+    # Auto-unpivot wide-format data when the agent asks for conceptual
+    # columns (e.g. "Quarter", "Sales") that don't exist in the raw data
+    df = _auto_melt_if_needed(df, x_column, y_column)
+
+    # Post-melt: if the melt created generic "variable"/"value" columns
+    # and the agent references a conceptual name elsewhere (e.g.
+    # color_column='Sales' but melt named it 'value'), rename to match.
+    for req_col in (x_column, y_column, color_column):
+        if not req_col:
+            continue
+        for part in req_col.split(","):
+            part = part.strip()
+            if part and part not in df.columns:
+                if "variable" in df.columns:
+                    df = df.rename(columns={"variable": part})
+                elif "value" in df.columns:
+                    df = df.rename(columns={"value": part})
+
     # Validate columns exist
     for col_name, col_label in [(x_column, "x_column"), (y_column, "y_column"), (color_column, "color_column")]:
         if col_name:
@@ -319,7 +455,18 @@ def _create_chart(
                 if part and part not in df.columns:
                     close = [c for c in df.columns if part.lower() in c.lower()]
                     hint = f" Did you mean: {', '.join(close[:3])}?" if close else ""
-                    return f"Column '{part}' not found in data. Available columns: {', '.join(df.columns.tolist())}.{hint}"
+                    num = df.select_dtypes(include="number").columns.tolist()
+                    multi_hint = ""
+                    if len(num) >= 2 and col_label == "y_column":
+                        multi_hint = (
+                            f" TIP: for multi-series, use the actual column "
+                            f"names with commas: y_column='{','.join(num[:4])}'."
+                        )
+                    return (
+                        f"Column '{part}' not found in data. "
+                        f"Available columns: {', '.join(df.columns.tolist())}."
+                        f"{hint}{multi_hint}"
+                    )
 
     try:
         fig = _build_figure(df, chart_type, x_column, y_column, color_column, title)
