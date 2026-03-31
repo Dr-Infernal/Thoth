@@ -1,0 +1,421 @@
+"""Thoth — Modular NiceGUI Frontend
+==================================
+
+Refactored UI using the ``ui/`` package.
+
+Run:   python app.py          →   http://localhost:8080
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import sys
+
+# ── Configure root logger (same as production app) ──────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stderr,
+)
+for _noisy in ("httpx", "httpcore", "urllib3", "asyncio", "multipart",
+               "watchfiles", "nicegui", "uvicorn.error", "uvicorn.access",
+               "sentence_transformers", "transformers", "huggingface_hub",
+               "googleapiclient", "googleapiclient.discovery_cache",
+               "primp", "ddgs", "ddgs.ddgs", "faster_whisper",
+               "streamlit", "kaleido", "choreographer"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+os.environ.setdefault("USER_AGENT", "Thoth/3.9")
+
+logger = logging.getLogger(__name__)
+
+# Ensure app directory is on sys.path
+_app_dir = os.path.dirname(os.path.abspath(__file__))
+if _app_dir not in sys.path:
+    sys.path.insert(0, _app_dir)
+
+from nicegui import ui, app, run
+
+# ── UI package ───────────────────────────────────────────────────────────────
+from ui.state import (
+    AppState, GenerationState, P,
+    _active_generations,
+    startup_ready, startup_status, startup_warnings,
+)
+from ui.constants import EXAMPLE_PROMPTS, welcome_message
+from ui.helpers import (
+    is_first_run, is_setup_complete, mark_onboarding_seen,
+    load_thread_messages, browse_file,
+)
+from ui.head_html import inject_head_html
+from ui.setup_wizard import show_setup_wizard
+from ui.render import render_text_with_embeds, add_chat_message, add_terminal_entry
+from ui.export import open_export
+from ui.graph_panel import build_graph_panel
+from ui.task_dialog import show_task_dialog
+from ui.sidebar import build_sidebar
+from ui.settings import open_settings
+from ui.streaming import Callbacks, send_message, build_interrupt_dialog
+from ui.home import build_home
+from ui.chat import build_chat
+
+# ── Backend imports ──────────────────────────────────────────────────────────
+from threads import _save_thread_meta
+from models import (
+    get_current_model, is_cloud_model, is_cloud_available,
+    is_model_local, refresh_cloud_models,
+)
+from api_keys import apply_keys
+from agent import get_token_usage, clear_summary_cache
+from memory_extraction import (
+    run_extraction, start_periodic_extraction, set_active_thread,
+)
+from tasks import seed_default_tasks, start_task_scheduler, get_running_tasks, stop_task
+from notifications import drain_toasts
+
+# ── Channels ─────────────────────────────────────────────────────────────────
+from channels.telegram import start_bot as _tg_start_bot
+from channels.email import start_polling as _email_start
+from channels import config as _ch_config
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SINGLETON STATE
+# ═════════════════════════════════════════════════════════════════════════════
+
+state = AppState()
+state.show_onboarding = is_first_run()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STARTUP / SHUTDOWN
+# ═════════════════════════════════════════════════════════════════════════════
+
+@app.on_startup
+async def on_startup():
+    import ui.state as _st
+
+    def _set(msg: str):
+        _st.startup_status = msg
+        print(f"[startup] {msg}")
+
+    _set("🔑 Applying API keys…")
+    await asyncio.to_thread(apply_keys)
+
+    from models import fetch_context_catalog
+    _set("📊 Fetching context catalog…")
+    await asyncio.to_thread(fetch_context_catalog)
+
+    if is_cloud_available():
+        _set("☁️ Refreshing cloud models…")
+        await asyncio.to_thread(refresh_cloud_models)
+        state.current_model = get_current_model()
+
+    _set("🧠 Extracting memories…")
+    def _extract():
+        def _on_status(m):
+            _st.startup_status = f"🧠 {m}"
+            print(f"[startup]   {m}")
+        return run_extraction(on_status=_on_status)
+    count = await asyncio.to_thread(_extract)
+    print(f"[startup] Memory extraction done — {count} new memory(s)")
+
+    _set("🔄 Starting periodic extraction…")
+    await asyncio.to_thread(start_periodic_extraction)
+
+    _set("⚡ Loading workflows…")
+    await asyncio.to_thread(lambda: (seed_default_tasks(), start_task_scheduler()))
+
+    # Auto-start channels
+    _set("📡 Starting channels…")
+    if _ch_config.get("telegram", "auto_start", False):
+        try:
+            ok = await _tg_start_bot()
+            if ok:
+                print("[startup] ✅ Telegram bot auto-started")
+            else:
+                _st.startup_warnings.append("⚠️ Telegram bot failed to auto-start — check Settings → Channels")
+        except Exception as exc:
+            _st.startup_warnings.append(f"⚠️ Telegram bot failed to auto-start: {exc}")
+
+    if _ch_config.get("email", "auto_start", False):
+        try:
+            ok = await _email_start()
+            if ok:
+                print("[startup] ✅ Email polling auto-started")
+            else:
+                _st.startup_warnings.append("⚠️ Email polling failed to auto-start — check Settings → Channels")
+        except Exception as exc:
+            _st.startup_warnings.append(f"⚠️ Email polling failed to auto-start: {exc}")
+
+    _set("✅ Ready")
+    _st.startup_ready = True
+
+
+@app.on_shutdown
+async def on_shutdown():
+    print("[shutdown] Cleaning up sessions…")
+    try:
+        from tools.browser_tool import get_session_manager as _get_bsm
+        _get_bsm().kill_all()
+        print("[shutdown] Browser session closed")
+    except Exception as exc:
+        print(f"[shutdown] Browser cleanup error: {exc}")
+    try:
+        from tools.shell_tool import get_session_manager as _get_ssm
+        _get_ssm().kill_all()
+        print("[shutdown] Shell sessions closed")
+    except Exception as exc:
+        print(f"[shutdown] Shell cleanup error: {exc}")
+    print("[shutdown] Done")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MAIN PAGE
+# ═════════════════════════════════════════════════════════════════════════════
+
+@ui.page("/")
+async def index():
+    import ui.state as _st
+
+    ui.dark_mode(True)
+
+    # ── Startup splash (poll until backend is ready) ─────────────────────
+    if not _st.startup_ready:
+        with ui.column().classes("absolute-center items-center gap-4"):
+            ui.label("𓁟").style("font-size: 4rem; color: gold;")
+            ui.label("Thoth").style(
+                "font-size: 1.6rem; font-weight: 700; letter-spacing: 0.1em; color: gold;"
+            )
+            status_label = ui.label(_st.startup_status).classes("text-grey-5 text-sm")
+            ui.spinner("dots", size="1.5rem", color="grey-6")
+
+        def _poll_ready():
+            status_label.text = _st.startup_status
+            if _st.startup_ready:
+                _poll_timer.deactivate()
+                ui.navigate.to("/")
+
+        _poll_timer = ui.timer(0.3, _poll_ready)
+        return
+
+    # ── Startup warnings ─────────────────────────────────────────────────
+    if _st.startup_warnings:
+        for msg in _st.startup_warnings:
+            ui.notify(msg, type="warning", timeout=8000, close_button=True)
+        _st.startup_warnings.clear()
+
+    # ── Head HTML (styles, highlight.js, vis-network) ────────────────────
+    inject_head_html()
+
+    # ── Per-client element holder ────────────────────────────────────────
+    p = P()
+    p.pending_files = []
+
+    # Pre-create dialogs (modules call .clear() + .open() on these)
+    p.settings_dlg = ui.dialog().props("maximized transition-show=fade transition-hide=fade")
+    p.export_dlg = ui.dialog()
+    p.task_dlg = ui.dialog().props("persistent")
+
+    # ── Health check ─────────────────────────────────────────────────────
+    def _run_health_check() -> tuple[bool, str]:
+        current = get_current_model()
+        if is_cloud_model(current):
+            if not is_cloud_available():
+                return False, "Cloud model selected but no API key configured. Open Settings → Cloud."
+            return True, ""
+        from models import _ollama_reachable
+        if not _ollama_reachable():
+            return False, "Cannot connect to Ollama. Make sure it is running (`ollama serve`)."
+        if not is_model_local(current):
+            return False, f"Model {current} is not downloaded. Open Settings → Models to download it."
+        return True, ""
+
+    ok, err = await run.io_bound(_run_health_check)
+    if not ok and is_setup_complete():
+        ui.notify(err, type="negative", timeout=0, close_button=True)
+
+    # ── Setup wizard gate ────────────────────────────────────────────────
+    if not is_setup_complete():
+        async def _on_wizard_finish():
+            state.current_model = get_current_model()
+            ui.navigate.to("/")
+
+        await show_setup_wizard(state, on_finish=_on_wizard_finish)
+        return
+
+    # ── Build Callbacks bundle ───────────────────────────────────────────
+    cb = Callbacks()
+    # Slots wired after layout is built (forward declarations)
+
+    # ── Wrappers that close over (state, p, cb) ─────────────────────────
+    def _open_settings(initial_tab: str = "Models"):
+        open_settings(state, p, initial_tab)
+
+    def _open_export():
+        open_export(state, p)
+
+    def _send_message(text: str, voice_mode: bool = False):
+        return send_message(text, state=state, p=p, cb=cb, voice_mode=voice_mode)
+
+    def _show_task_dialog(task, on_done):
+        show_task_dialog(task, on_done, state=state, p=p)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # LAYOUT
+    # ══════════════════════════════════════════════════════════════════════
+
+    # ── Sidebar (left drawer) ────────────────────────────────────────────
+    rebuild_thread_list = build_sidebar(
+        state, p,
+        rebuild_main=lambda: _rebuild_main(),
+        open_settings=_open_settings,
+        load_thread_messages=load_thread_messages,
+    )
+
+    # ── Main content column ──────────────────────────────────────────────
+    p.main_col = ui.column().classes("w-full max-w-7xl mx-auto px-4 no-wrap").style(
+        "height: calc(100vh - 16px); overflow: hidden;"
+    )
+
+    def _rebuild_main() -> None:
+        if p.main_col is None:
+            return
+        p.main_col.clear()
+        with p.main_col:
+            if state.thread_id is None:
+                build_home(
+                    state, p,
+                    rebuild_main=_rebuild_main,
+                    rebuild_thread_list=rebuild_thread_list,
+                    send_message=_send_message,
+                    show_task_dialog=_show_task_dialog,
+                    build_graph_panel=build_graph_panel,
+                    is_first_run=is_first_run,
+                    mark_onboarding_seen=mark_onboarding_seen,
+                )
+            else:
+                build_chat(
+                    state, p,
+                    rebuild_main=_rebuild_main,
+                    rebuild_thread_list=rebuild_thread_list,
+                    send_message=_send_message,
+                    open_settings=_open_settings,
+                    open_export=_open_export,
+                    show_interrupt=cb.show_interrupt,
+                    add_chat_message=lambda msg: add_chat_message(msg, p),
+                    add_terminal_entry=lambda entry: add_terminal_entry(entry, p),
+                    browse_file=browse_file,
+                )
+
+    # ── Interrupt dialog ─────────────────────────────────────────────────
+    show_interrupt = build_interrupt_dialog(state, p, cb)
+
+    # ── Wire callback bundle ─────────────────────────────────────────────
+    cb.rebuild_main = _rebuild_main
+    cb.rebuild_thread_list = rebuild_thread_list
+    cb.show_interrupt = show_interrupt
+    cb.update_token_counter = lambda: _update_token_counter()
+    cb.add_chat_message = lambda msg: add_chat_message(msg, p)
+    cb.add_terminal_entry = lambda entry: add_terminal_entry(entry, p)
+    cb.render_text_with_embeds = render_text_with_embeds
+
+    # ── Timers ───────────────────────────────────────────────────────────
+
+    def _poll_notifications() -> None:
+        for t in drain_toasts():
+            _tkw = {"type": t.get("type", "info"), "close_button": True}
+            if t.get("persistent"):
+                _tkw["timeout"] = 0
+            else:
+                _tkw["timeout"] = 5000
+            ui.notify(t["message"], **_tkw)
+            rebuild_thread_list()
+
+    def _poll_voice() -> None:
+        if not state.voice_enabled:
+            if p.voice_status_label:
+                p.voice_status_label.text = ""
+            return
+
+        svc = state.voice_service
+        new_status = svc.get_status()
+        st = svc.state
+        if p.voice_status_label:
+            if st == "listening":
+                p.voice_status_label.text = "🔴 Listening — speak now…"
+            elif st == "transcribing":
+                p.voice_status_label.text = "⏳ Processing…"
+            elif st == "muted":
+                tts = state.tts_service
+                if tts and not tts.is_speaking:
+                    svc.unmute()
+                    p.voice_status_label.text = "🔴 Listening — speak now…"
+                else:
+                    p.voice_status_label.text = "🔇 Speaking…"
+            elif st == "stopped":
+                p.voice_status_label.text = f"⚫ {new_status or 'Stopped'}"
+
+        text = svc.get_transcription()
+        if text:
+            if state.tts_service and state.tts_service.enabled:
+                state.tts_service.stop()
+            if state.thread_name and state.thread_name.startswith("Thread "):
+                state.thread_name = text[:50]
+                _save_thread_meta(state.thread_id, state.thread_name)
+                rebuild_thread_list()
+            asyncio.create_task(_send_message(text, voice_mode=True))
+
+    def _update_token_counter() -> None:
+        config = {"configurable": {"thread_id": state.thread_id}} if state.thread_id else None
+        _mo = state.thread_model_override or None
+        used, max_tokens = get_token_usage(config, model_override=_mo)
+        pct = min(used / max_tokens, 1.0) if max_tokens else 0.0
+
+        def _fmt(val):
+            if val >= 1_000_000:
+                return f"{val / 1_000_000:.1f}M"
+            if val >= 1_000:
+                return f"{val / 1_000:.1f}K"
+            return str(val)
+
+        if p.token_label:
+            p.token_label.text = f"Context: {_fmt(used)} / {_fmt(max_tokens)} ({pct:.0%})"
+        if p.token_bar:
+            p.token_bar.value = pct
+
+    ui.timer(1.0, _poll_notifications)
+    ui.timer(0.3, _poll_voice)
+    ui.timer(5.0, _update_token_counter)
+
+    # ── Build initial view ───────────────────────────────────────────────
+    _rebuild_main()
+    _update_token_counter()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ═════════════════════════════════════════════════════════════════════════════
+
+if __name__ in {"__main__", "__mp_main__"}:
+    _static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    if os.path.isdir(_static_dir):
+        app.add_static_files("/static", _static_dir)
+
+    _native = "--native" in sys.argv
+    _show = "--show" in sys.argv and not _native
+
+    ui.run(
+        title="Thoth",
+        port=8080,
+        dark=True,
+        favicon="𓁟",
+        reload=False,
+        show=_show,
+        native=_native,
+        window_size=(1280, 900) if _native else None,
+    )

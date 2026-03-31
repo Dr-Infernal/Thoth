@@ -28,7 +28,6 @@ seed_knowledge_graph.py
 _*.py
 
 # Old Streamlit app (replaced by NiceGUI in v3.0.0)
-app.py
 .streamlit/
 
 # Old workflows module (replaced by tasks.py in v3.5.0)
