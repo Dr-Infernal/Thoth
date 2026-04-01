@@ -82,7 +82,26 @@ jobs:
               ;;
             Accepted)
               echo "Notarization ACCEPTED! Stapling ticket into DMG..."
-              xcrun stapler staple "$DMG_PATH"
+              # Apple CloudKit can take a few minutes to propagate the ticket
+              # after notarization is accepted — retry with backoff.
+              STAPLE_OK=false
+              for attempt in 1 2 3 4 5; do
+                echo "Staple attempt $attempt/5..."
+                if xcrun stapler staple "$DMG_PATH" 2>&1; then
+                  STAPLE_OK=true
+                  break
+                fi
+                if [ "$attempt" -lt 5 ]; then
+                  wait_secs=$((attempt * 30))
+                  echo "Staple not ready yet — waiting ${wait_secs}s before retry..."
+                  sleep "$wait_secs"
+                fi
+              done
+              if [ "$STAPLE_OK" != "true" ]; then
+                echo "::error::Failed to staple after 5 attempts. Apple ticket not yet propagated."
+                echo "Re-run this workflow in a few minutes."
+                exit 1
+              fi
               echo "Verifying staple..."
               xcrun stapler validate "$DMG_PATH"
               echo ""
