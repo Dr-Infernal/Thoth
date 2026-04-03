@@ -755,17 +755,15 @@ def section_6_tools():
     except Exception as e:
         record("FAIL", "tool: YouTube search", str(e))
 
-    # --- 6e. arXiv retriever ---
+    # --- 6e. arXiv search ---
     try:
         from tools.arxiv_tool import ArxivTool
         arxiv = ArxivTool()
-        retriever = arxiv.get_retriever()
-        docs = retriever.invoke("transformer attention mechanisms")
-        docs = arxiv.post_process(docs)
-        if docs and len(docs) > 0:
-            record("PASS", f"tool: arXiv retriever returned {len(docs)} documents")
+        result = arxiv.execute("transformer attention mechanisms")
+        if result and "No arXiv papers found" not in result:
+            record("PASS", "tool: arXiv search returned results")
         else:
-            record("WARN", "tool: arXiv retriever returned no documents")
+            record("WARN", "tool: arXiv search returned no results")
     except ImportError:
         record("SKIP", "tool: arXiv (module not available)")
     except Exception as e:
@@ -2104,7 +2102,6 @@ def section_16_skills():
         fetched = skills.get_skill("integ_test_skill")
         assert fetched is not None
         assert fetched.display_name == "Integration Test Skill"
-        assert fetched.tools == ["web_search", "memory"]
 
         # Update
         updated = skills.update_skill("integ_test_skill", icon="✅", description="Updated desc")
@@ -2281,6 +2278,13 @@ def section_16_skills():
     # --- 16h. get_skills_prompt with multiple enabled skills ---
     try:
         skills.load_skills()
+        # Save original enabled state so we can restore it after
+        _all_sk = skills.get_all_skills()
+        _orig_enabled = {s.name: skills.is_enabled(s.name) for s in _all_sk}
+
+        # Disable everything, then enable only our 3 test skills
+        for s in _all_sk:
+            skills.set_enabled(s.name, False)
         skills.set_enabled("daily_briefing", True)
         skills.set_enabled("deep_research", True)
         skills.set_enabled("brain_dump", True)
@@ -2298,12 +2302,18 @@ def section_16_skills():
         assert est_global == est_explicit, \
             f"global={est_global} vs explicit={est_explicit}"
 
-        skills.set_enabled("daily_briefing", False)
-        skills.set_enabled("deep_research", False)
-        skills.set_enabled("brain_dump", False)
+        # Restore original enabled state
+        for _name, _was_enabled in _orig_enabled.items():
+            skills.set_enabled(_name, _was_enabled)
 
         record("PASS", "skills: multi-skill prompt and token estimate consistency")
     except Exception as e:
+        # Restore original enabled state even on failure
+        try:
+            for _name, _was_enabled in _orig_enabled.items():
+                skills.set_enabled(_name, _was_enabled)
+        except Exception:
+            pass
         record("FAIL", "skills: multi-skill prompt", str(e))
 
     # --- 16i. Agent injection source verification ---

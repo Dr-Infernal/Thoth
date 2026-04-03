@@ -30,6 +30,7 @@ def build_home(
     build_graph_panel: Callable,
     is_first_run: Callable,
     mark_onboarding_seen: Callable,
+    open_settings: Callable | None = None,
 ) -> None:
     """Render the home screen with Tasks / Memory Graph / Activity tabs."""
     from models import is_cloud_model, get_current_model
@@ -42,12 +43,10 @@ def build_home(
     )
     from memory_extraction import get_extraction_status
 
-    # ── Logo ─────────────────────────────────────────────────────────
-    ui.html(
-        '<div style="text-align:center; padding-top:1.2rem; padding-bottom:0.2rem;">'
-        '<h1 style="color: gold;">𓁟 Thoth</h1></div>',
-        sanitize=False,
-    )
+    # ── Status bar (replaces old logo) ───────────────────────────────
+    from ui.status_bar import build_status_bar
+    _open = open_settings if open_settings else lambda tab: None
+    build_status_bar(open_settings=_open)
 
     # ── Tab toggle ───────────────────────────────────────────────────
     with ui.tabs().classes("w-full shrink-0").props(

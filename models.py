@@ -93,8 +93,8 @@ _trending_fetched: bool = False
 DEFAULT_MODEL = "qwen3:14b"
 DEFAULT_CONTEXT_SIZE = 32768
 
-CONTEXT_SIZE_OPTIONS = [4096, 8192, 16384, 32768, 65536, 131072, 262144]
-CONTEXT_SIZE_LABELS = {4096: "4K", 8192: "8K", 16384: "16K", 32768: "32K",
+CONTEXT_SIZE_OPTIONS = [16384, 32768, 65536, 131072, 262144]
+CONTEXT_SIZE_LABELS = {16384: "16K", 32768: "32K",
                        65536: "64K", 131072: "128K", 262144: "256K"}
 
 # ── Persistent settings file ────────────────────────────────────────────────
@@ -215,6 +215,9 @@ _TOOL_COMPATIBLE_FAMILIES: set[str] = {
 
 _current_model = _saved.get("model", DEFAULT_MODEL)
 _num_ctx = _saved.get("context_size", DEFAULT_CONTEXT_SIZE)
+# Clamp legacy values below the new minimum to the smallest option
+if _num_ctx < CONTEXT_SIZE_OPTIONS[0]:
+    _num_ctx = CONTEXT_SIZE_OPTIONS[0]
 _llm_instance = None
 _model_max_ctx_cache: dict[str, int | None] = {}  # model_name → max context
 

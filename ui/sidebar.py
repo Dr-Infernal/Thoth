@@ -69,6 +69,7 @@ def build_sidebar(
                 state.thread_id = None
                 state.thread_name = None
                 state.messages = []
+                p.pending_files.clear()
                 set_active_thread(None, previous_id=prev)
                 rebuild_main()
                 _rebuild_thread_list_ref[0]()
@@ -90,6 +91,7 @@ def build_sidebar(
                 state.thread_name = name
                 state.messages = []
                 state.thread_model_override = ""
+                p.pending_files.clear()
                 set_active_thread(tid, previous_id=prev)
                 rebuild_main()
                 _rebuild_thread_list_ref[0]()
@@ -161,6 +163,7 @@ def build_sidebar(
                     state.thread_name = n
                     state.thread_model_override = mo or ""
                     state.messages = load_thread_messages(t)
+                    p.pending_files.clear()
                     set_active_thread(t, previous_id=prev)
                     rebuild_main()
                     _rebuild_thread_list_ref[0]()

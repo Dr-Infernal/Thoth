@@ -1,4 +1,4 @@
-"""Thoth v3.9.0 — Comprehensive Test Suite
+"""Thoth v3.10.0 — Comprehensive Test Suite
 
 Validates that all modules import cleanly, key functions exist,
 config round-trips work, DB connectivity works, and the NiceGUI
@@ -5196,7 +5196,8 @@ try:
         assert _expected_names.issubset(set(_discovered.keys())), \
             f"missing bundled skills: {_expected_names - set(_discovered.keys())}"
         for _sn, _sk36 in _discovered.items():
-            assert _sk36.source == "bundled", f"{_sn} should be bundled"
+            if _sk36.source != "bundled":
+                continue  # skip user skills — don't trip over user overrides
             assert _sk36.instructions, f"{_sn} should have instructions"
         record("PASS", f"skills: discovered {len(_discovered)} bundled skills")
     else:
@@ -5231,7 +5232,9 @@ try:
     record("PASS", "skills: load_skills, enable/disable round-trip")
 
     # ── 36i. get_skills_prompt ────────────────────────────────────────
-    # With no skills enabled, prompt should be empty
+    # Disable all skills first so prompt is guaranteed empty
+    for _sk36 in _skills_mod36.get_all_skills():
+        _skills_mod36.set_enabled(_sk36.name, False)
     _empty_prompt = _skills_mod36.get_skills_prompt()
     assert _empty_prompt == "", "prompt should be empty with no enabled skills"
     # Enable two skills and check prompt
@@ -5269,7 +5272,6 @@ try:
         icon="🧪",
         description="Test CRUD ops",
         instructions="Step 1: Test.\nStep 2: Verify.",
-        tools=["web_search"],
         tags=["test"],
         enabled=True,
     )
@@ -5473,7 +5475,6 @@ try:
         icon="🔒",
         description="preserve fields",
         instructions="Original instructions.",
-        tools=["web_search"],
         tags=["prod"],
         enabled=True,
     )
@@ -5484,7 +5485,6 @@ try:
     assert _updated_sk.display_name == "PreserveTest"
     assert _updated_sk.description == "preserve fields"
     assert _updated_sk.instructions == "Original instructions."
-    assert _updated_sk.tools == ["web_search"]
     assert _updated_sk.tags == ["prod"]
     _skills_mod36.delete_skill("test_update_preserve")
     record("PASS", "skills: update preserves unchanged fields")
@@ -5814,8 +5814,493 @@ except Exception as e:
     record("FAIL", "smoke regression tests", f"{type(e).__name__}: {e}")
     traceback.print_exc()
 
+# ═════════════════════════════════════════════════════════════════════════════
 print("\n" + "=" * 70)
-print("SUMMARY")
+print("38. IMAGE HANDLING IMPROVEMENTS")
+print("=" * 70)
+# ═════════════════════════════════════════════════════════════════════════════
+
+try:
+    # ── 38a. VisionService.capture_and_analyze accepts source='file' ─────
+    from vision import VisionService as _VS38
+    import inspect as _insp38
+    _sig38 = _insp38.signature(_VS38.capture_and_analyze)
+    _params38 = list(_sig38.parameters.keys())
+    assert "file_path" in _params38, f"missing file_path param: {_params38}"
+    assert "source" in _params38, f"missing source param: {_params38}"
+    record("PASS", "image: VisionService.capture_and_analyze accepts file_path")
+
+    # ── 38b. VisionService._resolve_image_path returns None for missing ──
+    _r38b = _VS38._resolve_image_path("__nonexistent_test_file__.jpg")
+    assert _r38b is None, f"expected None, got {_r38b}"
+    record("PASS", "image: _resolve_image_path returns None for missing file")
+
+    # ── 38c. VisionService._analyze_from_file returns error for missing ──
+    _vs38c = _VS38()
+    _r38c = _vs38c._analyze_from_file("__nonexistent__.png", "describe")
+    assert "not found" in _r38c.lower(), f"unexpected: {_r38c}"
+    record("PASS", "image: _analyze_from_file returns error for missing file")
+
+    # ── 38d. Vision tool schema includes file_path parameter ─────────────
+    from tools.vision_tool import VisionTool as _VT38
+    _vt38 = _VT38()
+    _tools38 = _vt38.as_langchain_tools()
+    _schema38 = _tools38[0].args_schema.model_json_schema()
+    assert "file_path" in _schema38["properties"], "file_path missing from tool schema"
+    assert "source" in _schema38["properties"], "source missing from tool schema"
+    record("PASS", "image: vision tool schema includes file_path and source")
+
+    # ── 38e. Filesystem tool has get_and_clear_displayed_image ────────────
+    from tools.filesystem_tool import (
+        get_and_clear_displayed_image as _gcdi38,
+        _last_displayed_image as _ldi38_initial,
+    )
+    assert _ldi38_initial is None, "initial _last_displayed_image should be None"
+    assert _gcdi38() is None, "get_and_clear should return None initially"
+    record("PASS", "image: filesystem get_and_clear_displayed_image exists")
+
+    # ── 38f. Filesystem image detection: read_file on image returns display msg ──
+    import tempfile, os, base64 as _b6438
+    from tools.filesystem_tool import _make_pdf_aware_read_tool as _mprt38
+    import tools.filesystem_tool as _fstmod38
+    _td38 = tempfile.mkdtemp()
+    # Create a tiny valid JPEG (smallest valid JPEG is 107 bytes, use a stub)
+    _jpeg_stub = b"\xff\xd8\xff\xe0" + b"\x00" * 50
+    _img_path38 = os.path.join(_td38, "test_photo.jpg")
+    with open(_img_path38, "wb") as _f38:
+        _f38.write(_jpeg_stub)
+    _read_tool38 = _mprt38(_td38)
+    _result38f = _read_tool38.invoke({"file_path": "test_photo.jpg"})
+    assert "Displayed image" in _result38f, f"unexpected read_file result: {_result38f}"
+    assert "test_photo.jpg" in _result38f
+    # Verify the displayed image was stored
+    _disp38 = _fstmod38.get_and_clear_displayed_image()
+    assert _disp38 is not None, "displayed image not stored"
+    assert _disp38["name"] == "test_photo.jpg"
+    assert len(_disp38["b64"]) > 0
+    # Verify it was cleared
+    assert _fstmod38.get_and_clear_displayed_image() is None
+    os.remove(_img_path38)
+    os.rmdir(_td38)
+    record("PASS", "image: filesystem read_file detects and displays images")
+
+    # ── 38g. _img_data_uri MIME detection ────────────────────────────────
+    from ui.streaming import _img_data_uri as _idu38
+    _jpeg_b6438 = _b6438.b64encode(b"\xff\xd8\xff\xe0test").decode()
+    _png_b6438 = _b6438.b64encode(b"\x89PNG\r\n\x1a\ntest").decode()
+    _gif_b6438 = _b6438.b64encode(b"GIF89atest").decode()
+    _webp_b6438 = _b6438.b64encode(b"RIFF\x00\x00\x00\x00WEBPtest").decode()
+    assert "image/jpeg" in _idu38(_jpeg_b6438), "JPEG MIME failed"
+    assert "image/png" in _idu38(_png_b6438), "PNG MIME failed"
+    assert "image/gif" in _idu38(_gif_b6438), "GIF MIME failed"
+    assert "image/webp" in _idu38(_webp_b6438), "WebP MIME failed"
+    record("PASS", "image: _img_data_uri detects JPEG/PNG/GIF/WebP correctly")
+
+    # ── 38h. System prompt mentions new image capabilities ───────────────
+    from prompts import AGENT_SYSTEM_PROMPT as _asp38
+    assert "source='file'" in _asp38, "prompt missing source='file'"
+    assert "file_path" in _asp38, "prompt missing file_path"
+    assert "auto-analyzed" in _asp38, "prompt missing auto-analyzed"
+    assert "displays them inline" in _asp38 or "image files" in _asp38, \
+        "prompt missing filesystem image mention"
+    record("PASS", "image: system prompt documents all new image capabilities")
+
+    # ── 38i. GenerationState.captured_images exists ──────────────────────
+    from ui.state import GenerationState as _GS38
+    import queue as _q38, threading as _t38
+    _gs38 = _GS38(
+        thread_id="test", q=_q38.Queue(), stop_event=_t38.Event(),
+        config={}, enabled_tools=[],
+    )
+    assert hasattr(_gs38, "captured_images"), "missing captured_images"
+    assert isinstance(_gs38.captured_images, list), "captured_images not a list"
+    _gs38.captured_images.append("test_b64")
+    assert len(_gs38.captured_images) == 1
+    record("PASS", "image: GenerationState.captured_images works")
+
+    # ── 38j. Filesystem read_file still works for text files ─────────────
+    _td38j = tempfile.mkdtemp()
+    _txt_path38 = os.path.join(_td38j, "note.txt")
+    with open(_txt_path38, "w", encoding="utf-8") as _f38j:
+        _f38j.write("Hello world test content")
+    _read_tool38j = _mprt38(_td38j)
+    _result38j = _read_tool38j.invoke({"file_path": "note.txt"})
+    assert "Hello world test content" in _result38j, f"text read failed: {_result38j}"
+    os.remove(_txt_path38)
+    os.rmdir(_td38j)
+    record("PASS", "image: filesystem read_file still works for text files")
+
+except Exception as e:
+    record("FAIL", "image handling improvements", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("39. OAUTH TOKEN HEALTH CHECK")
+print("=" * 70)
+# ═════════════════════════════════════════════════════════════════════════════
+
+try:
+    # ── 39a. _check_google_token returns 'missing' for nonexistent path ──
+    from tools.gmail_tool import _check_google_token as _gck39
+    _s39a, _d39a = _gck39("/nonexistent/path/token.json")
+    assert _s39a == "missing", f"expected 'missing', got '{_s39a}'"
+    record("PASS", "oauth: _check_google_token returns 'missing' for bad path")
+
+    # ── 39b. Calendar _check_google_token also returns 'missing' ─────────
+    from tools.calendar_tool import _check_google_token as _cck39
+    _s39b, _d39b = _cck39("/nonexistent/path/token.json")
+    assert _s39b == "missing", f"expected 'missing', got '{_s39b}'"
+    record("PASS", "oauth: calendar _check_google_token returns 'missing'")
+
+    # ── 39c. GmailTool.check_token_health method exists ──────────────────
+    from tools.gmail_tool import GmailTool as _GT39
+    _gt39 = _GT39()
+    assert hasattr(_gt39, "check_token_health"), "GmailTool missing check_token_health"
+    assert callable(_gt39.check_token_health), "check_token_health not callable"
+    record("PASS", "oauth: GmailTool.check_token_health exists")
+
+    # ── 39d. CalendarTool.check_token_health method exists ───────────────
+    from tools.calendar_tool import CalendarTool as _CT39
+    _ct39 = _CT39()
+    assert hasattr(_ct39, "check_token_health"), "CalendarTool missing check_token_health"
+    assert callable(_ct39.check_token_health), "check_token_health not callable"
+    record("PASS", "oauth: CalendarTool.check_token_health exists")
+
+    # ── 39e. check_token_health returns tuple(str, str) ──────────────────
+    _r39e = _gt39.check_token_health()
+    assert isinstance(_r39e, tuple), f"expected tuple, got {type(_r39e)}"
+    assert len(_r39e) == 2, f"expected 2-tuple, got {len(_r39e)}"
+    assert isinstance(_r39e[0], str) and isinstance(_r39e[1], str), "tuple elements must be str"
+    assert _r39e[0] in ("valid", "refreshed", "expired", "missing", "error"), \
+        f"unexpected status: {_r39e[0]}"
+    record("PASS", "oauth: check_token_health returns valid (status, detail) tuple")
+
+    # ── 39f. _check_google_token handles corrupt token file ──────────────
+    _td39f = tempfile.mkdtemp()
+    _corrupt39 = os.path.join(_td39f, "token.json")
+    with open(_corrupt39, "w", encoding="utf-8") as _f39f:
+        _f39f.write("not valid json {{{")
+    _s39f, _d39f = _gck39(_corrupt39)
+    assert _s39f == "error", f"expected 'error' for corrupt file, got '{_s39f}'"
+    os.remove(_corrupt39)
+    os.rmdir(_td39f)
+    record("PASS", "oauth: _check_google_token handles corrupt token file")
+
+    # ── 39g. _check_oauth_tokens skips disabled tools ────────────────────
+    from tools import registry as _reg39
+    # Temporarily disable both tools and verify no warnings
+    _orig_gmail_en = _reg39.is_enabled("gmail")
+    _orig_cal_en = _reg39.is_enabled("calendar")
+    _reg39.set_enabled("gmail", False)
+    _reg39.set_enabled("calendar", False)
+    from app import _check_oauth_tokens as _coauth39
+    _w39g = _coauth39()
+    assert _w39g == [], f"expected [] when tools disabled, got {_w39g}"
+    # Restore original states
+    _reg39.set_enabled("gmail", _orig_gmail_en)
+    _reg39.set_enabled("calendar", _orig_cal_en)
+    record("PASS", "oauth: _check_oauth_tokens skips disabled tools")
+
+    # ── 39h. _periodic_oauth_check callable ──────────────────────────────
+    from app import _periodic_oauth_check as _poc39
+    assert callable(_poc39), "_periodic_oauth_check not callable"
+    record("PASS", "oauth: _periodic_oauth_check is callable")
+
+except Exception as e:
+    record("FAIL", "oauth token health check", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ═══════════════════════════════════════════════════════════════════════
+print("40. ARXIV TOOL REWRITE")
+# ═══════════════════════════════════════════════════════════════════════
+try:
+    # ── 40a. ArxivTool is registered ─────────────────────────────────
+    from tools.arxiv_tool import ArxivTool as _AT40
+    from tools import registry as _reg40
+    _at40 = _AT40()
+    assert "arxiv" in _reg40._tools, "ArxivTool not registered"
+    record("PASS", "arxiv: ArxivTool registered")
+
+    # ── 40b. execute() is overridden (not using get_retriever) ───────
+    assert "execute" in _AT40.__dict__, "ArxivTool should override execute()"
+    assert "get_retriever" not in _AT40.__dict__, "ArxivTool should NOT define get_retriever"
+    record("PASS", "arxiv: execute() overridden, get_retriever removed")
+
+    # ── 40c. Description mentions HTML link and query syntax ────────
+    _desc40 = _at40.description
+    assert "html" in _desc40.lower(), "description should mention HTML"
+    assert "ti:" in _desc40, "description should mention ti: query syntax"
+    assert "cat:" in _desc40, "description should mention cat: query syntax"
+    assert "URL reader" in _desc40 or "url reader" in _desc40.lower(), "description should mention URL reader"
+    record("PASS", "arxiv: description mentions HTML link, query syntax, URL reader")
+
+    # ── 40d. execute() with mocked client returns proper format ──────
+    from unittest.mock import patch as _patch40, MagicMock as _MM40
+    from datetime import datetime as _dt40
+
+    _mock_result = _MM40()
+    _mock_result.get_short_id.return_value = "2401.12345v1"
+    _mock_result.title = "Test Paper Title"
+    _a1_40 = _MM40(); _a1_40.name = "Alice"
+    _a2_40 = _MM40(); _a2_40.name = "Bob"
+    _mock_result.authors = [_a1_40, _a2_40]
+    _mock_result.published = _dt40(2024, 1, 15)
+    _mock_result.summary = "A test abstract."
+    _mock_result.primary_category = "cs.AI"
+    _mock_result.pdf_url = "https://arxiv.org/pdf/2401.12345v1"
+    _mock_result.entry_id = "https://arxiv.org/abs/2401.12345v1"
+
+    with _patch40("arxiv.Client") as _mc40:
+        _mc40.return_value.results.return_value = [_mock_result]
+        _out40 = _at40.execute("test query")
+
+    assert "Test Paper Title" in _out40, f"Title missing from output"
+    assert "Alice" in _out40, "Authors missing from output"
+    assert "2024-01-15" in _out40, "Published date missing from output"
+    assert "cs.AI" in _out40, "Category missing from output"
+    assert "arxiv.org/html/2401.12345" in _out40, "HTML URL missing"
+    assert "v1" not in _out40.split("arxiv.org/html/")[1].split("\n")[0], "HTML URL should not have version"
+    assert "SOURCE_URL: https://arxiv.org/abs/2401.12345v1" in _out40, "SOURCE_URL missing"
+    record("PASS", "arxiv: execute() returns properly formatted results")
+
+    # ── 40e. execute() returns message when no results ───────────────
+    with _patch40("arxiv.Client") as _mc40e:
+        _mc40e.return_value.results.return_value = []
+        _out40e = _at40.execute("xyznonexistent99")
+    assert "No arXiv papers found" in _out40e, f"Expected no-results message, got: {_out40e}"
+    record("PASS", "arxiv: execute() handles no results gracefully")
+
+    # ── 40f. HTML URL strips version suffix correctly ────────────────
+    import re as _re40
+    # Simulate various ID formats
+    for _tid, _expected in [
+        ("2401.12345v1", "2401.12345"),
+        ("2401.12345v2", "2401.12345"),
+        ("2401.12345", "2401.12345"),
+        ("quant-ph/0201082v1", "quant-ph/0201082"),
+    ]:
+        _base = _re40.sub(r"v\d+$", "", _tid)
+        assert _base == _expected, f"Version strip failed: {_tid} -> {_base}, expected {_expected}"
+    record("PASS", "arxiv: HTML URL version stripping works for all ID formats")
+
+    # ── 40g. Author truncation for many-author papers ────────────────
+    _mock_many = _MM40()
+    _mock_many.get_short_id.return_value = "2401.99999v1"
+    _mock_many.title = "Many Author Paper"
+    _mock_many.authors = []
+    for _ai in range(12):
+        _am = _MM40(); _am.name = f"Author{_ai}"
+        _mock_many.authors.append(_am)
+    _mock_many.published = _dt40(2024, 2, 1)
+    _mock_many.summary = "Abstract."
+    _mock_many.primary_category = "cs.CL"
+    _mock_many.pdf_url = "https://arxiv.org/pdf/2401.99999v1"
+    _mock_many.entry_id = "https://arxiv.org/abs/2401.99999v1"
+
+    with _patch40("arxiv.Client") as _mc40g:
+        _mc40g.return_value.results.return_value = [_mock_many]
+        _out40g = _at40.execute("many authors")
+    assert "et al." in _out40g, "Should show 'et al.' for many authors"
+    assert "12 authors" in _out40g, "Should state total author count"
+    # Only first 5 listed
+    assert "Author0" in _out40g and "Author4" in _out40g, "First 5 authors should be listed"
+    assert "Author5" not in _out40g.split("et al.")[0], "Author6+ should not appear before et al."
+    record("PASS", "arxiv: author list truncated with et al. for >5 authors")
+
+except Exception as e:
+    record("FAIL", "arxiv tool rewrite", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 41. Status Monitor — status_checks & status_bar modules
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n41. Status Monitor")
+print("-" * 70)
+
+try:
+    # ── 41a. Module imports ──────────────────────────────────────────
+    from ui.status_checks import (
+        CheckResult, ALL_CHECKS, LIGHT_CHECKS, HEAVY_CHECKS,
+        run_all_checks, run_light_checks,
+        check_ollama, check_active_model, check_cloud_api,
+        check_gmail_channel, check_telegram,
+        check_gmail_oauth, check_calendar_oauth,
+        check_task_scheduler, check_memory_extraction,
+        check_disk_space, check_threads_db, check_faiss_index,
+        check_document_store, check_network,
+    )
+    record("PASS", "status_checks: module imports")
+
+    from ui.status_bar import (
+        build_status_bar, _load_avatar_config, _save_avatar_config,
+        _AVATAR_EMOJIS, _RING_COLORS, _DEFAULT_EMOJI, _DEFAULT_COLOR,
+        _force_refresh,
+    )
+    record("PASS", "status_bar: module imports")
+
+    # ── 41b. CheckResult dataclass ───────────────────────────────────
+    cr = CheckResult("Test", "ok", "detail text", settings_tab="Models")
+    assert cr.name == "Test"
+    assert cr.status == "ok"
+    assert cr.detail == "detail text"
+    assert cr.settings_tab == "Models"
+    assert cr.dot_color == "#4caf50"
+    assert cr.icon == "check_circle"
+    assert cr.status_label == "Healthy"
+    assert cr.checked_at > 0
+    record("PASS", "status_checks: CheckResult ok properties")
+
+    cr_warn = CheckResult("W", "warn", "w")
+    assert cr_warn.dot_color == "#ff9800"
+    assert cr_warn.icon == "warning"
+    assert cr_warn.status_label == "Warning"
+    record("PASS", "status_checks: CheckResult warn properties")
+
+    cr_err = CheckResult("E", "error", "e")
+    assert cr_err.dot_color == "#f44336"
+    assert cr_err.icon == "error"
+    assert cr_err.status_label == "Error"
+    record("PASS", "status_checks: CheckResult error properties")
+
+    cr_na = CheckResult("N", "inactive", "n")
+    assert cr_na.dot_color == "#666"
+    assert cr_na.icon == "radio_button_unchecked"
+    assert cr_na.status_label == "Not configured"
+    record("PASS", "status_checks: CheckResult inactive properties")
+
+    # ── 41c. Check registry completeness ─────────────────────────────
+    assert len(ALL_CHECKS) == 14, f"Expected 14 checks, got {len(ALL_CHECKS)}"
+    record("PASS", "status_checks: 14 checks registered in ALL_CHECKS")
+
+    assert set(LIGHT_CHECKS).issubset(set(ALL_CHECKS)), "LIGHT_CHECKS not subset"
+    assert set(HEAVY_CHECKS).issubset(set(ALL_CHECKS)), "HEAVY_CHECKS not subset"
+    assert len(LIGHT_CHECKS) + len(HEAVY_CHECKS) == len(ALL_CHECKS), \
+        "LIGHT + HEAVY should cover all checks"
+    record("PASS", "status_checks: LIGHT + HEAVY partition covers ALL_CHECKS")
+
+    # ── 41d. Every check runs without crashing ───────────────────────
+    all_results = run_all_checks()
+    assert len(all_results) == 14, f"Expected 14 results, got {len(all_results)}"
+    for r in all_results:
+        assert isinstance(r, CheckResult), f"Not CheckResult: {r}"
+        assert r.status in ("ok", "warn", "error", "inactive"), f"Bad status: {r.status}"
+        assert r.name, "Empty check name"
+    record("PASS", "status_checks: run_all_checks returns 14 valid results")
+
+    light_results = run_light_checks()
+    assert len(light_results) == len(LIGHT_CHECKS)
+    for r in light_results:
+        assert isinstance(r, CheckResult)
+    record("PASS", "status_checks: run_light_checks returns correct count")
+
+    # ── 41e. Individual check return types ───────────────────────────
+    for fn in ALL_CHECKS:
+        r = fn()
+        assert isinstance(r, CheckResult), f"{fn.__name__} didn't return CheckResult"
+        assert r.name, f"{fn.__name__} returned empty name"
+    record("PASS", "status_checks: all individual checks return CheckResult")
+
+    # ── 41f. Avatar config round-trip ────────────────────────────────
+    import tempfile, json as _json41
+    from pathlib import Path as _P41
+    import ui.status_bar as _sb41
+
+    _orig_path = _sb41._USER_CONFIG_PATH
+    _orig_dir = _sb41._DATA_DIR
+    try:
+        with tempfile.TemporaryDirectory() as _td41:
+            _sb41._DATA_DIR = _P41(_td41)
+            _sb41._USER_CONFIG_PATH = _P41(_td41) / "user_config.json"
+
+            # Before any config, should return empty
+            cfg = _load_avatar_config()
+            assert cfg == {}, f"Expected empty dict, got {cfg}"
+
+            # Save and reload
+            _save_avatar_config({"emoji": "🤖", "color": "#ff0000"})
+            cfg2 = _load_avatar_config()
+            assert cfg2["emoji"] == "🤖", f"Emoji mismatch: {cfg2}"
+            assert cfg2["color"] == "#ff0000", f"Color mismatch: {cfg2}"
+
+            # Verify file structure
+            data = _json41.loads(_sb41._USER_CONFIG_PATH.read_text(encoding="utf-8"))
+            assert "avatar" in data
+            assert data["avatar"]["emoji"] == "🤖"
+
+            # Overwrite with new values preserves file
+            _save_avatar_config({"emoji": "🦊", "color": "#00ff00"})
+            cfg3 = _load_avatar_config()
+            assert cfg3["emoji"] == "🦊"
+            assert cfg3["color"] == "#00ff00"
+
+        record("PASS", "status_bar: avatar config save/load round-trip")
+    finally:
+        _sb41._USER_CONFIG_PATH = _orig_path
+        _sb41._DATA_DIR = _orig_dir
+
+    # ── 41g. Avatar defaults ─────────────────────────────────────────
+    assert _DEFAULT_EMOJI == "𓁟"
+    assert _DEFAULT_COLOR == "#FFD700"
+    assert len(_AVATAR_EMOJIS) >= 20, f"Too few emojis: {len(_AVATAR_EMOJIS)}"
+    assert len(_RING_COLORS) >= 10, f"Too few colors: {len(_RING_COLORS)}"
+    record("PASS", "status_bar: avatar defaults and catalogs")
+
+    # ── 41h. Force refresh populates cache ───────────────────────────
+    fr = _force_refresh()
+    assert len(fr) == 14, f"force_refresh returned {len(fr)} results"
+    from ui.status_bar import _status_cache, _cache_time
+    assert len(_status_cache) == 14
+    assert _cache_time > 0
+    record("PASS", "status_bar: force_refresh populates cache")
+
+    # ── 41i. Disk check thresholds ───────────────────────────────────
+    disk_r = check_disk_space()
+    assert disk_r.name == "Disk"
+    assert "GB free" in disk_r.detail
+    record("PASS", "status_checks: disk check returns size info")
+
+    # ── 41j. Threads DB check ────────────────────────────────────────
+    db_r = check_threads_db()
+    assert db_r.name == "Threads DB"
+    assert db_r.status in ("ok", "error")
+    record("PASS", "status_checks: threads DB check runs")
+
+    # ── 41k. Network check ───────────────────────────────────────────
+    net_r = check_network()
+    assert net_r.name == "Network"
+    assert net_r.status in ("ok", "warn", "error")
+    record("PASS", "status_checks: network check runs")
+
+    # ── 41l. Check settings_tab mapping ──────────────────────────────
+    _tabs_expected = {
+        "Ollama": "Models", "Model": "Models", "Cloud API": "Cloud",
+        "Email": "Channels", "Telegram": "Channels",
+        "Gmail OAuth": "Gmail", "Calendar OAuth": "Calendar",
+        "Memory": "Memory", "FAISS Index": "Memory",
+        "Documents": "Documents", "Threads DB": "",
+    }
+    for r in all_results:
+        if r.name in _tabs_expected:
+            assert r.settings_tab == _tabs_expected[r.name], \
+                f"{r.name}: expected tab '{_tabs_expected[r.name]}', got '{r.settings_tab}'"
+    record("PASS", "status_checks: settings_tab mapping correct")
+
+    # ── 41m. build_status_bar callable signature ─────────────────────
+    import inspect as _insp41
+    sig = _insp41.signature(build_status_bar)
+    assert "open_settings" in sig.parameters
+    record("PASS", "status_bar: build_status_bar accepts open_settings param")
+
+    # ── 41n. home.py accepts open_settings kwarg ─────────────────────
+    from ui.home import build_home as _bh41
+    sig_home = _insp41.signature(_bh41)
+    assert "open_settings" in sig_home.parameters
+    record("PASS", "home: build_home accepts open_settings kwarg")
+
+except Exception as e:
+    record("FAIL", "status monitor", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
 print("=" * 70)
 print(f"  ✅ PASS: {PASS}")
 print(f"  ❌ FAIL: {FAIL}")

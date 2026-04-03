@@ -1088,12 +1088,15 @@ def _on_task_fire(task_id: str) -> None:
     # (b) _thread_exists() returns True at completion, allowing the
     #     final rename/save.  Mirrors the manual-run handler in
     #     app.py.
-    from threads import _save_thread_meta
-    thread_name = (
-        f"\u26a1 {task['name']} — "
-        f"{datetime.now().strftime('%b %d, %I:%M %p')}"
-    )
-    _save_thread_meta(thread_id, thread_name)
+    # Skip thread creation for notify-only tasks — they fire a
+    # notification and return immediately with no conversation.
+    if not task.get("notify_only"):
+        from threads import _save_thread_meta
+        thread_name = (
+            f"\u26a1 {task['name']} — "
+            f"{datetime.now().strftime('%b %d, %I:%M %p')}"
+        )
+        _save_thread_meta(thread_id, thread_name)
 
     if task.get("model_override"):
         from threads import _set_thread_model_override

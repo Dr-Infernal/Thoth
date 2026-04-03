@@ -289,7 +289,12 @@ class VisionService:
         )
         return response["message"]["content"]
 
-    def capture_and_analyze(self, question: str, source: str = "camera") -> str:
+    def capture_and_analyze(
+        self,
+        question: str,
+        source: str = "camera",
+        file_path: str = "",
+    ) -> str:
         """Capture from the given source and analyze in one call.
 
         Parameters
@@ -297,12 +302,19 @@ class VisionService:
         question : str
             The user's visual question.
         source : str
-            ``"camera"`` for webcam or ``"screen"`` for screenshot.
+            ``"camera"`` for webcam, ``"screen"`` for screenshot,
+            or ``"file"`` to analyze an image file on disk.
+        file_path : str
+            Path to the image file when *source* is ``"file"``.
+            Can be workspace-relative or absolute.
         """
+        if source == "file":
+            return self._analyze_from_file(file_path, question)
         if source == "screen":
             frame = self.screenshot()
             if frame is None:
                 return "Failed to capture screenshot."
+            question = f"This is a screenshot of the user's computer screen. {question}"
         else:
             frame = self.capture()
             if frame is None:
@@ -310,4 +322,43 @@ class VisionService:
                     "Could not access the camera. Make sure a webcam is connected "
                     "and not in use by another application."
                 )
+            question = f"This is a live photo from the user's webcam. {question}"
         return self.analyze(frame, question)
+
+    def _analyze_from_file(self, file_path: str, question: str) -> str:
+        """Read an image file and analyze it."""
+        resolved = self._resolve_image_path(file_path)
+        if resolved is None:
+            return f"Image file not found: {file_path}"
+        try:
+            data = resolved.read_bytes()
+        except Exception as exc:
+            return f"Failed to read image file '{file_path}': {exc}"
+        if not data:
+            return f"Image file is empty: {file_path}"
+        self.last_capture = data
+        return self.analyze(data, question)
+
+    @staticmethod
+    def _resolve_image_path(file_path: str) -> pathlib.Path | None:
+        """Resolve a workspace-relative or absolute image path."""
+        p = pathlib.Path(file_path)
+        if p.is_absolute() and p.is_file():
+            return p
+        # Try workspace root from filesystem tool config
+        try:
+            from tools import registry as _reg
+            fs_tool = _reg.get_tool("filesystem")
+            if fs_tool:
+                ws_root = fs_tool.get_config("workspace_root", "")
+                if ws_root:
+                    candidate = pathlib.Path(ws_root) / file_path
+                    if candidate.is_file():
+                        return candidate.resolve()
+        except Exception:
+            pass
+        # Try cwd
+        cwd_candidate = pathlib.Path.cwd() / file_path
+        if cwd_candidate.is_file():
+            return cwd_candidate.resolve()
+        return None

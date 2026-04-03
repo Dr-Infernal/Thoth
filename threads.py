@@ -4,6 +4,7 @@ import sqlite3
 import uuid
 import os
 import pathlib
+import json
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -11,6 +12,9 @@ logger = logging.getLogger(__name__)
 # Store data in %APPDATA%/Thoth (writable even when app is in Program Files)
 DATA_DIR = pathlib.Path(os.environ.get("THOTH_DATA_DIR", pathlib.Path.home() / ".thoth"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+_THREAD_UI_DIR = DATA_DIR / "thread_ui"
+_THREAD_UI_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = str(DATA_DIR / "threads.db")
 
@@ -55,6 +59,36 @@ def _save_thread_meta(thread_id: str, name: str):
     conn.commit()
     conn.close()
 
+
+def _thread_ui_images_path(thread_id: str) -> pathlib.Path:
+    return _THREAD_UI_DIR / f"{thread_id}.images.json"
+
+
+def save_thread_ui_images(thread_id: str, payload: dict) -> None:
+    """Persist UI image metadata for a thread.
+
+    This sidecar keeps base64 images for chat reload without inflating
+    LangGraph checkpoint messages.
+    """
+    try:
+        path = _thread_ui_images_path(thread_id)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        logger.warning("Failed to save thread UI images for %s", thread_id, exc_info=True)
+
+
+def load_thread_ui_images(thread_id: str) -> dict | None:
+    """Load persisted UI image metadata for a thread (if any)."""
+    try:
+        path = _thread_ui_images_path(thread_id)
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        logger.warning("Failed to load thread UI images for %s", thread_id, exc_info=True)
+        return None
+
 _init_thread_db()
 
 def _delete_thread(thread_id: str):
@@ -63,6 +97,10 @@ def _delete_thread(thread_id: str):
     conn.execute("DELETE FROM thread_meta WHERE thread_id = ?", (thread_id,))
     conn.commit()
     conn.close()
+    try:
+        _thread_ui_images_path(thread_id).unlink(missing_ok=True)
+    except Exception:
+        logger.warning("Failed to delete UI image sidecar for %s", thread_id, exc_info=True)
 
 
 def _get_thread_model_override(thread_id: str) -> str:

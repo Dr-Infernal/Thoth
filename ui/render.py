@@ -14,6 +14,16 @@ from nicegui import ui
 
 from ui.state import AppState, P
 
+def _img_data_uri(b64: str) -> str:
+    """Return a data URI with the correct MIME type for a base64-encoded image."""
+    if b64.startswith("iVBOR"):
+        return f"data:image/png;base64,{b64}"
+    if b64.startswith("UklGR"):
+        return f"data:image/webp;base64,{b64}"
+    if b64.startswith("R0lGO"):
+        return f"data:image/gif;base64,{b64}"
+    return f"data:image/jpeg;base64,{b64}"
+
 # ── Bare-URL auto-linking ────────────────────────────────────────────
 # Matches (in priority order) patterns we must *skip*, then bare URLs
 # we want to convert.  Only capture-group 1 (bare URL) triggers a
@@ -66,11 +76,100 @@ _YT_EMBED_RE = re.compile(
     r'\*{0,2}',                                       # optional trailing **
 )
 
+_MERMAID_START_RE = re.compile(
+    r"^(graph|flowchart|sequenceDiagram|classDiagram|erDiagram|journey|gantt|"
+    r"stateDiagram(?:-v2)?|mindmap|timeline|pie)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_mermaid_continuation_line(line: str) -> bool:
+    """Return True if a line likely belongs to a Mermaid diagram body."""
+    s = line.strip()
+    if not s:
+        return True
+    lower = s.lower()
+    if lower.startswith(
+        (
+            "graph ",
+            "flowchart ",
+            "sequencediagram",
+            "classdiagram",
+            "erdiagram",
+            "journey",
+            "gantt",
+            "statediagram",
+            "mindmap",
+            "timeline",
+            "pie",
+            "subgraph",
+            "end",
+            "classdef ",
+            "class ",
+            "style ",
+            "linkstyle ",
+            "click ",
+            "direction ",
+            "%%",
+        )
+    ):
+        return True
+    if any(tok in s for tok in ("-->", "---", "-.->", "==>", "<--", "<->", ":::", "|", "[", "]", "(", ")", "{", "}")):
+        return True
+    return False
+
+
+def _auto_fence_mermaid(text: str) -> str:
+    """Wrap Mermaid plaintext in a fenced block when missing fences.
+
+    Models sometimes output Mermaid syntax without ```mermaid fences,
+    which prevents the UI mermaid renderer from detecting it.
+    """
+    if not text or "```mermaid" in text:
+        return text
+
+    lines = text.splitlines()
+    start_idx = None
+    for i, line in enumerate(lines):
+        if _MERMAID_START_RE.match(line.strip()):
+            start_idx = i
+            break
+
+    if start_idx is None:
+        return text
+
+    end_idx = len(lines)
+    body_lines: list[str] = []
+    for i in range(start_idx, len(lines)):
+        line = lines[i]
+        if _is_mermaid_continuation_line(line):
+            body_lines.append(line)
+        else:
+            end_idx = i
+            break
+
+    mermaid_body = "\n".join(body_lines).strip()
+    # Avoid false positives: Mermaid blocks generally include edges/subgraphs.
+    if "-->" not in mermaid_body and "subgraph" not in mermaid_body.lower():
+        return text
+
+    prefix = "\n".join(lines[:start_idx]).rstrip()
+    suffix = "\n".join(lines[end_idx:]).strip()
+    fenced = f"```mermaid\n{mermaid_body}\n```"
+    out_parts = []
+    if prefix:
+        out_parts.append(prefix)
+    out_parts.append(fenced)
+    if suffix:
+        out_parts.append(suffix)
+    return "\n\n".join(out_parts)
+
 
 def render_text_with_embeds(text: str) -> None:
     """Render markdown text with inline YouTube video embeds."""
     if not text:
         return
+    text = _auto_fence_mermaid(text)
     seen_yt: set[str] = set()
     last_end = 0
     parts: list[tuple[str, str | None]] = []
@@ -137,7 +236,7 @@ def render_message_content(msg: dict) -> None:
     if images:
         caption = "📎 Attached" if role == "user" else "📷 Captured"
         for b64 in images:
-            ui.image(f"data:image/jpeg;base64,{b64}").classes("w-80 rounded")
+            ui.image(_img_data_uri(b64)).classes("w-80 rounded")
             ui.label(caption).classes("text-xs text-grey-6")
     elif tool_results and any(
         tr.get("name") in ("analyze_image", "👁️ Vision") for tr in tool_results
@@ -171,9 +270,19 @@ def render_message_content(msg: dict) -> None:
     if text:
         render_text_with_embeds(text)
 
-    # Trigger highlight.js on new code blocks
+    # Trigger highlight.js on new code blocks + render mermaid diagrams
     try:
         ui.run_javascript("document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));")
+        ui.run_javascript(
+            "document.querySelectorAll('pre code.language-mermaid').forEach(function(el) {"
+            "  var pre = el.parentElement;"
+            "  var div = document.createElement('div');"
+            "  div.className = 'mermaid-rendered';"
+            "  div.textContent = el.textContent;"
+            "  pre.replaceWith(div);"
+            "});"
+            "if (typeof mermaid !== 'undefined') { mermaid.run({nodes: document.querySelectorAll('.mermaid-rendered')}); }"
+        )
     except RuntimeError:
         pass
 

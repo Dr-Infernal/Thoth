@@ -37,10 +37,13 @@ def _get_vision_service():
 
 # ── Tool implementation ──────────────────────────────────────────────────────
 
-def _analyze_image(question: str, source: str = "camera") -> str:
-    """Capture an image from the user's camera or screen and analyze it."""
+def _analyze_image(
+    question: str, source: str = "camera", file_path: str = "",
+) -> str:
+    """Capture an image from the user's camera or screen and analyze it,
+    or analyze an existing image file."""
     svc = _get_vision_service()
-    return svc.capture_and_analyze(question, source=source)
+    return svc.capture_and_analyze(question, source=source, file_path=file_path)
 
 
 # ── Registration ─────────────────────────────────────────────────────────────
@@ -72,20 +75,31 @@ class VisionTool(BaseTool):
         class _AnalyzeInput(BaseModel):
             question: str = Field(
                 description=(
-                    "The question about what the camera or screen shows. "
+                    "The question about what the camera or screen shows, "
+                    "or about the contents of an image file. "
                     "Be specific — e.g. 'What text is on the paper?', "
                     "'Describe the object in front of the camera', "
-                    "'What error is on the screen?'."
+                    "'What error is on the screen?', 'Describe this diagram'."
                 )
             )
             source: str = Field(
                 default="camera",
                 description=(
-                    "Where to capture the image from. Use 'camera' when the "
+                    "Where to get the image from. Use 'camera' when the "
                     "user asks you to look at something physical (an object, "
                     "a document, themselves). Use 'screen' when the user asks "
                     "about their screen, monitor, display, or something "
-                    "shown on their computer."
+                    "shown on their computer. Use 'file' when the user "
+                    "asks about a specific image file in their workspace "
+                    "(e.g. 'analyze photo.jpg', 'what's in diagram.png')."
+                ),
+            )
+            file_path: str = Field(
+                default="",
+                description=(
+                    "Path to the image file when source='file'. Can be "
+                    "workspace-relative (e.g. 'images/photo.jpg') or "
+                    "absolute. Only used when source='file'."
                 ),
             )
 
@@ -94,19 +108,23 @@ class VisionTool(BaseTool):
                 func=_analyze_image,
                 name="analyze_image",
                 description=(
-                    "Capture an image from the user's webcam or their screen "
-                    "and analyze it. Use this when the user asks you to look "
-                    "at something, read text from a document, screen, or image, "
+                    "Analyze an image from the user's webcam, a screenshot "
+                    "of their screen/desktop, or a file in the workspace. "
+                    "Use this when the user asks you to look at something, "
+                    "see their screen, read text from a document or image, "
                     "identify an object, or answer any visual question. "
-                    "Set source='screen' when the user refers to their screen, "
-                    "monitor, or display; otherwise default to source='camera'."
+                    "Captures a real screenshot of the entire desktop — not "
+                    "limited to the browser. Set source='screen' for "
+                    "screen/monitor/display/desktop; source='file' with "
+                    "file_path for workspace image files; otherwise default "
+                    "to source='camera'."
                 ),
                 args_schema=_AnalyzeInput,
             ),
         ]
 
     def execute(self, query: str) -> str:
-        return _analyze_image(query, source="camera")
+        return _analyze_image(query, source="camera", file_path="")
 
 
 registry.register(VisionTool())

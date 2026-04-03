@@ -82,6 +82,7 @@ def open_export(state: AppState, p: P) -> None:
 
             def dl_pdf():
                 try:
+                    ui.notify("Generating PDF…", type="info", timeout=3000)
                     data = export_as_pdf(name, msgs)
                     fname = f"{name}.pdf"
                     p.export_dlg.close()

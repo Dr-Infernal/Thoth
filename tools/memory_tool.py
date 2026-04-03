@@ -395,7 +395,7 @@ class MemoryTool(BaseTool):
                 name="explore_connections",
                 description=(
                     "Explore the knowledge graph around a memory to see how it connects "
-                    "to other memories. Shows relationships, nearby entities, and a visual "
+                    "to other memories. Shows relationships, nearby entities, and a Mermaid "
                     "graph diagram. Use when the user asks about how things are related, "
                     "'tell me about my family', 'what do you know about my work', etc."
                 ),

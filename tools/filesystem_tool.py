@@ -14,6 +14,17 @@ ALL_OPERATIONS = _SAFE_OPS + _WRITE_OPS + _DESTRUCTIVE_OPS
 # Default: safe + write + move (move has interrupt gate)
 DEFAULT_OPERATIONS = _SAFE_OPS + _WRITE_OPS + ["move_file"]
 
+# Module-level buffer for images displayed via read_file.
+# The streaming layer reads and clears this after workspace_read_file calls.
+_last_displayed_image: dict | None = None  # {"b64": str, "name": str}
+
+def get_and_clear_displayed_image() -> dict | None:
+    """Return and clear the pending displayed image, if any."""
+    global _last_displayed_image
+    img = _last_displayed_image
+    _last_displayed_image = None
+    return img
+
 
 class FileSystemTool(BaseTool):
 
@@ -291,6 +302,29 @@ def _make_pdf_aware_read_tool(root_dir: str):
         if not resolved.exists():
             return f"Error: file not found: {file_path}"
 
+        # ── Image files — display inline instead of reading as text ────
+        from ui.constants import IMAGE_EXTENSIONS
+        if resolved.suffix.lower() in IMAGE_EXTENSIONS:
+            import base64 as _b64
+            global _last_displayed_image
+            try:
+                data = resolved.read_bytes()
+                b64 = _b64.b64encode(data).decode("ascii")
+                _last_displayed_image = {"b64": b64, "name": resolved.name}
+                size_kb = len(data) / 1024
+                if size_kb >= 1024:
+                    size_str = f"{size_kb / 1024:.1f} MB"
+                else:
+                    size_str = f"{size_kb:.0f} KB"
+                return (
+                    f"Displayed image: {file_path} ({size_str}). "
+                    f"The image is now shown inline in the chat. "
+                    f"To analyze its contents, use analyze_image with "
+                    f"source='file' and file_path='{file_path}'."
+                )
+            except Exception as exc:
+                return f"Error reading image '{file_path}': {exc}"
+
         # ── Structured data files (CSV, Excel, JSON) ────────────────────
         from data_reader import is_data_file, read_data_file
         if is_data_file(resolved.name):
@@ -324,7 +358,8 @@ def _make_pdf_aware_read_tool(root_dir: str):
         func=read_file,
         name="workspace_read_file",
         description=(
-            "Read the contents of a file (including PDF, CSV, Excel, and JSON files). "
+            "Read the contents of a file (including PDF, CSV, Excel, JSON, "
+            "and image files). For images, displays the image inline in chat. "
             "For CSV/Excel/JSON, returns column schema, statistics, and a preview. "
             "For Excel, append '::SheetName' to the path to read a specific sheet. "
             "(WORKSPACE ONLY — file_path is relative to the workspace folder. "
@@ -356,17 +391,81 @@ def _make_export_to_pdf_tool(root_dir: str):
 
     def export_to_pdf(content: str, filename: str) -> str:
         """Render markdown/text content as a PDF in the workspace."""
+        import concurrent.futures
         import re as _re
         from pathlib import Path as _Path
-        try:
-            from fpdf import FPDF
-        except ImportError:
-            return "Error: fpdf2 is not installed. Run: pip install fpdf2"
 
         fname = filename.strip()
         if not fname.lower().endswith(".pdf"):
             fname += ".pdf"
         out_path = _Path(root_dir) / fname
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Try Playwright (headless Chromium) for full Unicode/styling
+        try:
+            from playwright.sync_api import sync_playwright
+            import markdown2
+
+            html_body = markdown2.markdown(
+                content,
+                extras=["fenced-code-blocks", "tables", "code-friendly"],
+            )
+            css = (
+                "@page { size: A4; margin: 20mm 18mm; }"
+                "body { font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;"
+                "  font-size: 11pt; line-height: 1.5; color: #222; margin: 0; padding: 0; }"
+                "pre { background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px;"
+                "  padding: 8px 10px; font-size: 9pt; white-space: pre-wrap; word-break: break-all;"
+                "  font-family: Consolas, 'Courier New', monospace; }"
+                "code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px;"
+                "  font-size: 9.5pt; font-family: Consolas, 'Courier New', monospace; }"
+                "pre code { background: none; padding: 0; }"
+                "table { border-collapse: collapse; margin: 8px 0; font-size: 10pt; }"
+                "th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; }"
+                "th { background: #f0f0f0; font-weight: 600; }"
+                "blockquote { border-left: 3px solid #ccc; margin: 8px 0; padding: 4px 12px; color: #555; }"
+                "img { max-width: 100%; height: auto; }"
+            )
+            html = (
+                f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                f"<style>{css}</style></head><body>{html_body}</body></html>"
+            )
+
+            def _render_in_worker() -> None:
+                pw = sync_playwright().start()
+                try:
+                    browser = pw.chromium.launch(headless=True)
+                    page = browser.new_page()
+                    page.set_content(html, wait_until="networkidle")
+                    page.pdf(
+                        path=str(out_path),
+                        format="A4",
+                        margin={
+                            "top": "20mm",
+                            "right": "18mm",
+                            "bottom": "20mm",
+                            "left": "18mm",
+                        },
+                        print_background=True,
+                    )
+                    page.close()
+                    browser.close()
+                finally:
+                    pw.stop()
+
+            # Playwright sync API must run outside the app's asyncio loop.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(_render_in_worker).result()
+            return f"PDF saved to: {out_path}"
+
+        except Exception:
+            pass  # fall through to fpdf2
+
+        # Fallback: fpdf2 (basic text, no Unicode emoji support)
+        try:
+            from fpdf import FPDF
+        except ImportError:
+            return "Error: fpdf2 is not installed. Run: pip install fpdf2"
 
         pdf = FPDF()
         pdf.set_auto_page_break(auto=True, margin=20)
@@ -375,7 +474,7 @@ def _make_export_to_pdf_tool(root_dir: str):
         def _safe(text: str) -> str:
             return text.encode("latin-1", errors="replace").decode("latin-1")
 
-        # Strip markdown syntax — same approach as conversation export
+        # Strip markdown syntax for plain-text fallback
         text = content
         text = _re.sub(r'\*\*(.*?)\*\*', r'\1', text)
         text = _re.sub(r'```[\s\S]*?```', '[code block]', text)
@@ -384,7 +483,6 @@ def _make_export_to_pdf_tool(root_dir: str):
         pdf.set_font("Helvetica", "", 10)
         pdf.multi_cell(0, 5, _safe(text))
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
         pdf.output(str(out_path))
         return f"PDF saved to: {out_path}"
 

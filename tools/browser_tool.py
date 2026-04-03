@@ -1032,8 +1032,8 @@ class BrowserTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Automate a real browser window the user can see. "
-            "Navigate websites, click buttons, fill forms, read page content. "
+            "Automate a real browser window for web tasks. "
+            "Navigate websites, click buttons, fill forms, read web page content. "
             "Uses a persistent profile so logins and cookies are preserved."
         )
 
@@ -1269,9 +1269,9 @@ class BrowserTool(BaseTool):
                 func=browser_snapshot,
                 name="browser_snapshot",
                 description=(
-                    "Take a fresh snapshot of the current page's interactive "
-                    "elements. Use after manual user interaction or when "
-                    "refs may be stale."
+                    "Refresh the current browser page's interactive elements "
+                    "and ref numbers. Use when refs may be stale after user "
+                    "interaction."
                 ),
             ),
             StructuredTool.from_function(

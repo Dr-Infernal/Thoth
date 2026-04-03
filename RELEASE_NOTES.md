@@ -2,6 +2,146 @@
 
 ---
 
+## v3.10.0 — Status Monitor, Mermaid Diagrams, Image Persistence, Vision Files & Rich PDF Export
+
+The home screen gets an interactive **status monitor panel** — a frosted-glass bar with an animated avatar, 14 health-check pills, and a one-click diagnosis button. Images now **survive thread reload** — pasted, captured, and attached images are persisted in per-thread sidecar files and rehydrated when you revisit a conversation. **Mermaid diagram rendering** brings flowcharts, sequence diagrams, and state diagrams to life inline in chat via mermaid.js. The **vision tool** gains `source='file'` for analyzing workspace image files by path, and the **filesystem tool** displays images inline when read. **PDF export** is upgraded to Playwright (headless Chromium) for full Unicode, emoji, chart, and styled markdown support. **OAuth token health checks** proactively validate Gmail and Calendar tokens at startup with silent refresh and periodic re-validation. A rewritten **Arxiv tool**, **clipboard image paste**, **right-click context menu** (pywebview), and a knowledge graph **opacity-based filter** round out the release.
+
+### 📊 Status Monitor Panel
+
+- **Animated avatar** — customizable emoji with conic-gradient spinning ring, ECG-synced glow pulses, and subtle wobble; ring color picker with 15 presets; config persisted in `~/.thoth/user_config.json`
+- **14 health-check pills** — two centered rows covering Ollama, Active Model, Cloud API, Email, Telegram, Gmail OAuth, Calendar OAuth, Task Scheduler, Memory Extraction, Disk Space, Threads DB, FAISS Index, Document Store, and Network; color-coded (green/amber/red/grey) with tooltip detail
+- **Click-to-settings** — clicking any pill opens the relevant settings tab
+- **Diagnosis button** — runs all 14 checks on demand (icon spins during execution), opens a dialog with expandable results per service and a copy-to-clipboard report
+- **ECG background** — animated heart-rate-monitor line scrolls behind the frosted-glass panel
+- **Light/heavy check split** — 4 instant checks (Ollama, Model, Cloud API, Memory Extraction) always fresh; 10 heavier checks (network, OAuth, disk, DB) cached for 5 minutes
+
+### 🖼️ Image Persistence
+
+Images in chat messages now survive thread reload and app restart.
+
+- **Per-thread sidecar files** — image payloads (base64) are saved to `~/.thoth/thread_ui/<thread_id>.images.json` alongside conversation checkpoints
+- **Signature-based hydration** — on reload, images are matched back to their messages using content signatures with index fallback for checkpoint-reconstructed user messages
+- **All image types covered** — pasted images, vision captures, browser screenshots, and file attachments are all persisted
+- **Cleanup on delete** — sidecar files are removed when a thread is deleted
+- **MIME-aware data URIs** — PNG, JPEG, GIF, and WebP images are detected by magic bytes and rendered with the correct MIME type
+
+### 📊 Mermaid Diagram Rendering
+
+Mermaid diagrams now render as interactive visual diagrams inline in chat.
+
+- **mermaid.js integration** — bundled `static/mermaid.min.js` loaded in head HTML with `securityLevel: 'strict'` and dark theme
+- **Auto-fence detection** — `_auto_fence_mermaid()` in `ui/render.py` detects unfenced Mermaid syntax (graph, flowchart, sequenceDiagram, classDiagram, erDiagram, stateDiagram, gantt, mindmap, timeline, pie) and wraps it in ` ```mermaid ` fences before rendering
+- **Streaming support** — `_format_assistant_markdown()` chains auto-fence + URL auto-linking on all streaming `set_content()` calls
+- **Post-render swap** — after markdown rendering, `<pre><code class="language-mermaid">` blocks are swapped to `<div class="mermaid-rendered">` and processed by `mermaid.run()`
+- **Chart tool guard** — requests for Mermaid diagram types (flow, sequence, state, ER, etc.) in `create_chart` are caught early with a helpful error message redirecting to fenced Mermaid blocks
+
+### 👁️ Vision: Image File Analysis
+
+The vision tool now analyzes image files in the workspace without needing a camera or screen capture.
+
+- **`source='file'` parameter** — new source option on `analyze_image` with `file_path` argument for workspace-relative or absolute paths
+- **Path resolution** — tries absolute path, then workspace root (from filesystem tool config), then current working directory
+- **Prompt routing** — system prompt updated to guide the model: use `source='file'` for workspace images, don't re-analyze already-attached images
+- **Filesystem inline display** — `workspace_read_file` on image files (PNG, JPEG, GIF, WebP, BMP, TIFF, SVG) displays the image inline in chat and returns a hint to use `analyze_image` for content analysis
+
+### 📄 Rich PDF Export
+
+PDF export upgraded from basic fpdf2 text to full-fidelity Playwright rendering.
+
+- **Playwright-first** — conversation export and `export_to_pdf` filesystem tool both use headless Chromium for full Unicode, emoji, embedded images, Plotly charts, styled markdown tables, and syntax-highlighted code blocks
+- **Automatic fallback** — if Playwright is unavailable, falls back to the basic fpdf2 text-only renderer
+- **Separate browser instance** — PDF rendering uses `headless=True` in a thread pool worker — does not interfere with the visible BrowserTool browser
+- **Professional styling** — A4 layout, system fonts, color-coded roles (blue for User, gold for Thoth), collapsible tool-result blocks, responsive images
+
+### 🔑 OAuth Token Health Checks
+
+Gmail and Calendar OAuth tokens are now proactively monitored.
+
+- **Startup check** — on launch, enabled Gmail/Calendar tools have their tokens validated; expired access tokens are silently refreshed
+- **Periodic re-check** — APScheduler job runs every 6 hours to catch tokens that expire mid-session
+- **Granular status** — `check_token_health()` on both tools returns `valid`, `refreshed`, `expired`, `missing`, or `error` with detail
+- **Settings UI feedback** — Gmail and Calendar settings tabs show token status (healthy, refreshed, expired, error) instead of a generic "✅ Authenticated"
+- **User-facing warnings** — expired tokens trigger desktop notifications and in-app toasts with re-authentication instructions
+
+### 📚 Arxiv Tool Rewrite
+
+The Arxiv tool is rewritten from scratch — no longer uses `ArxivRetriever`.
+
+- **Direct `arxiv` package** — uses `arxiv.Client` with rate-limiting (`delay_seconds=3.0`) and retries
+- **Newest-first sorting** — results sorted by `SubmittedDate` descending
+- **Rich output** — title, authors (truncated at 5 with "et al."), published date, primary category, abstract, full-text HTML link, PDF link, and source URL per result
+- **Version-stripped HTML URLs** — `arxiv.org/html/<id>` links strip the version suffix for clean access
+- **Query syntax hints** — tool description mentions `ti:`, `au:`, `abs:`, `cat:` arXiv query syntax
+
+### 📋 Clipboard Image Paste
+
+- **Ctrl+V paste support** — paste images directly from the clipboard into chat; images are converted to file uploads with timestamped names (e.g. `pasted_image_1712345678.png`)
+- **Singleton listener** — paste handler installs once and reads the dynamic upload widget ID, surviving thread switches without duplicate bindings
+
+### 🖱️ Right-Click Context Menu (pywebview)
+
+- **Custom context menu** — Cut, Copy, Paste, and Select All in the native desktop window, since pywebview suppresses the browser's default context menu
+- **pywebview-only** — only activates inside pywebview; normal browsers keep their native context menu
+- **Clipboard integration** — Paste reads from `navigator.clipboard` and inserts via `execCommand`
+
+### 🕸️ Knowledge Graph Filter Overhaul
+
+- **Opacity-based filtering** — search and entity-type filters now dim non-matching nodes/edges (opacity 0.12) instead of rebuilding the entire network, preserving layout stability and spatial context
+- **Edge dimming** — edges between non-matching nodes fade to 0.06 opacity; edges connecting two matching nodes stay fully visible
+
+### 🔧 Other Improvements
+
+- **Immediate user message rendering** — file attachments are now processed asynchronously; the user message (with 📎 badges and image thumbnails) appears instantly while vision analysis runs in the background with a "🔍 Analyzing image..." indicator
+- **Browser screenshot persistence** — browser screenshots taken during tool execution are added to `captured_images`, persisted via the image sidecar system, and restored on reload
+- **Terminal chevron fix** — inline terminal panel expand/collapse chevron direction corrected (was inverted)
+- **Drag-and-drop singleton** — drag-and-drop file handler installs once and reads the dynamic upload widget ID, preventing duplicate handlers across thread switches
+- **Context window minimum** — minimum context size raised from 4K to 16K tokens; legacy values below 16K auto-clamp
+- **Notify-only tasks** — tasks with `notify_only` flag skip thread creation, reducing clutter for simple timer/notification tasks
+- **Skill editor simplified** — removed tool-dependency checkboxes from the skill editor UI (tools declared in SKILL.md frontmatter are informational, not enforced)
+
+### 🧪 Tests
+
+- **886 PASS**, 0 FAIL, 1 WARN (up from 842 in v3.9.0)
+- New: Status monitor panel (20 tests), OAuth token health checks (7 tests), Arxiv tool rewrite (6 tests), image persistence & hydration, Mermaid auto-fence, PDF export (Playwright + fallback), filesystem image display, vision file analysis, streaming format pipeline, badge parsing
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`ui/status_checks.py`** | **New** — 14 health-check functions with `CheckResult` dataclass, `ALL_CHECKS`/`LIGHT_CHECKS`/`HEAVY_CHECKS` registries |
+| **`ui/status_bar.py`** | **New** — Status bar UI: avatar, pills, diagnosis dialog, ECG animation, avatar picker |
+| **`ui/home.py`** | Logo replaced with `build_status_bar()` call; `open_settings` callback wired in |
+| **`threads.py`** | Per-thread image sidecar I/O (`save_thread_ui_images`, `load_thread_ui_images`, `_thread_ui_images_path`); cleanup in `_delete_thread` |
+| **`ui/helpers.py`** | `persist_thread_image_state()`, `_hydrate_thread_images()` with signature + index matching; `strip_file_context` badge parsing for "ALREADY ANALYZED" markers; Playwright-based `_render_pdf_playwright()` conversation PDF export with `_build_conversation_html()`; fpdf2 fallback |
+| **`ui/render.py`** | `_img_data_uri()` MIME detection; `_auto_fence_mermaid()` with `_MERMAID_START_RE` and `_is_mermaid_continuation_line()`; Mermaid post-render JS swap; wired into `render_text_with_embeds` and `render_message_content` |
+| **`ui/streaming.py`** | `_format_assistant_markdown()` chains auto-fence + autolink on all streaming content; `_img_data_uri()` for screenshot display; `persist_thread_image_state` calls after user/assistant messages; filesystem image display via `get_and_clear_displayed_image()`; immediate user message rendering with async file processing; Mermaid post-render JS |
+| **`ui/chat.py`** | Clipboard image paste JS listener; drag-and-drop singleton fix; `persist_thread_image_state` on detached generation reattach; terminal chevron direction fix |
+| **`ui/head_html.py`** | `mermaid.min.js` script tag + `mermaid.initialize()` with dark theme and strict security; `.mermaid-rendered` CSS; right-click context menu JS (pywebview-only) |
+| **`ui/graph_panel.py`** | Opacity-based filter/search using `ds.update()` instead of network rebuild |
+| **`ui/settings.py`** | Gmail/Calendar token health status display; skill editor: removed tool-dependency checkboxes, moved Create button to top |
+| **`tools/arxiv_tool.py`** | Full rewrite — `execute()` using `arxiv.Client` directly; removed `get_retriever`/`ArxivRetriever`; newest-first sorting, HTML links, rate limiting |
+| **`tools/chart_tool.py`** | `_MERMAID_DIAGRAM_TYPES` guard in `_create_chart`; updated tool description to exclude Mermaid |
+| **`tools/filesystem_tool.py`** | Image file inline display via `_last_displayed_image` buffer + `get_and_clear_displayed_image()`; Playwright-first `export_to_pdf` with fpdf2 fallback |
+| **`tools/vision_tool.py`** | `source='file'` + `file_path` parameter on `analyze_image`; updated schema and description |
+| **`tools/gmail_tool.py`** | `_check_google_token()` with silent refresh; `check_token_health()` method |
+| **`tools/calendar_tool.py`** | `_check_google_token()` with silent refresh; `check_token_health()` method |
+| **`tools/memory_tool.py`** | `explore_connections` description updated to "Mermaid graph diagram" |
+| **`tools/browser_tool.py`** | Minor cleanup |
+| **`vision.py`** | `source='file'` support in `capture_and_analyze()`; `_analyze_from_file()` and `_resolve_image_path()` helpers; source-aware question prefixes |
+| **`app.py`** | `_check_oauth_tokens()` startup check; `_periodic_oauth_check()` scheduled every 6 h; passes `open_settings` to `build_home()` |
+| **`models.py`** | Removed 4K/8K context options; auto-clamp legacy values below 16K |
+| **`prompts.py`** | Vision `source='file'` routing; attached image "do NOT re-analyze" guidance; `workspace_read_file` image support mention |
+| **`tasks.py`** | `notify_only` tasks skip thread creation |
+| **`skills.py`** | Removed tool-dependency enforcement from `update_skill`/`create_skill` |
+| **`ui/export.py`** | Minor fix |
+| **`ui/sidebar.py`** | Minor update |
+| **`ui/setup_wizard.py`** | Minor fix |
+| **`static/mermaid.min.js`** | **New** — bundled Mermaid.js library |
+| **`test_suite.py`** | 46 new tests covering status monitor (20), OAuth, Arxiv, image persistence, Mermaid, PDF, filesystem images, vision files, streaming |
+| **`README.md`** | Updated for all new features; test badge 842→868; version references updated |
+
+---
+
 ## v3.9.0 — Modular UI, Thinking Models & Cloud Model Expansion
 
 Thoth's monolithic 6,500-line frontend is now a **clean modular architecture** — `app.py` + a `ui/` package of 15 focused modules. **Thinking model support** lands with full reasoning-token extraction, collapsible thinking bubbles, and persistence across thread reloads. **OpenRouter gets first-class support** via `ChatOpenRouter`, and a new **Data Analyst** bundled skill rounds out the skill library to 10. Multiple rendering fixes (URL auto-linking, YouTube embeds) and a privacy improvement round out the release.

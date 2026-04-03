@@ -1,6 +1,6 @@
 # Building the Thoth Windows Installer
 
-This guide explains how to build a distributable Windows installer for Thoth v3.9.0.
+This guide explains how to build a distributable Windows installer for Thoth v3.10.0.
 
 ## Architecture
 
@@ -76,6 +76,7 @@ C:\Program Files\Thoth\            # Installation directory
     ├── prompts.py                  # Centralized LLM prompts
     ├── notifications.py             # Unified notification system
     ├── launcher.py                 # System tray + native window + splash screen
+    ├── ui/                         # UI package (status bar, settings, sidebar, etc.)
     ├── sounds/                     # Notification sound effects
     │   ├── workflow.wav
     │   └── timer.wav
@@ -113,6 +114,7 @@ C:\Program Files\Thoth\            # Installation directory
 ├── tasks.db                        # Task definitions, schedules, run history & delivery config
 ├── channels_config.json            # Channel settings (Telegram, Email)
 ├── shell_history.json              # Shell command history per thread
+├── user_config.json                # Avatar emoji & ring color preferences
 ├── thoth_app.log                   # Application log
 ├── vector_store/                   # FAISS index for uploaded documents
 ├── gmail/                          # Gmail OAuth tokens

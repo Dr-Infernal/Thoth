@@ -8,7 +8,7 @@
   <a href="https://github.com/siddsachar/Thoth/releases"><img src="https://img.shields.io/github/v/release/siddsachar/Thoth?style=flat&label=release&color=c9a227" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/siddsachar/Thoth?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-c9a227?style=flat" alt="Platform">
-  <img src="https://img.shields.io/badge/tests-842%20unit%20%7C%20155%20integration-brightgreen?style=flat" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-868%20unit%20%7C%20155%20integration-brightgreen?style=flat" alt="Tests">
 </p>
 
 Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 23 integrated tools (61 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory with a personal knowledge graph, scheduled tasks, habit tracking, and more — plus Telegram and Email messaging channels. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
@@ -92,7 +92,7 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 - **39 curated local models** — Qwen, Llama, Mistral, Nemotron, and more — only models that support tool calling are included
 - **Tool-support validation** — downloaded local models not in the curated list are flagged with a ⚠️ warning; selecting one triggers a live tool-call check and auto-reverts if the model can't use tools
 - **Download buttons** — local models not yet downloaded show a Download button with live progress
-- **Configurable context window** — 4K to 256K tokens via selector; if you choose a value that exceeds the model's native maximum, trimming and the token counter automatically use the model's actual limit
+- **Configurable context window** — 16K to 256K tokens via selector; if you choose a value that exceeds the model's native maximum, trimming and the token counter automatically use the model's actual limit
 - **Local & cloud indicators** — local models show ✅ (downloaded) or ⬇️ (needs download); cloud models show ☁️
 
 ### 🎤 Voice Input & 🔊 Text-to-Speech
@@ -132,9 +132,10 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 ### 👁️ Vision
 - **Camera analysis** — capture and analyze images from your webcam in real-time
 - **Screen capture** — take screenshots and ask questions about what's on your screen
+- **Image file analysis** — analyze image files in the workspace by path without needing a camera or screen capture
 - **Configurable vision model** — choose from popular vision models (gemma3, llava, etc.)
 - **Camera selection** — pick which camera to use if you have multiple
-- **Inline image display** — captured images are shown inline in the chat
+- **Inline image display** — captured and workspace images are shown inline in the chat
 - **Cloud vision models** — cloud models with vision capability (GPT, Claude, etc.) are auto-detected and work seamlessly alongside local vision models
 
 ### ⚡ Tasks & Scheduling
@@ -147,7 +148,7 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 - **Always-background execution** — tasks always run in the background so you can keep chatting; the sidebar shows a ⏳ indicator while running
 - **Background permissions** — background tasks use a tiered permission system: safe operations always run, low-risk operations (move file, send email) are allowed with optional per-task allowlists, and irreversible operations (file delete, memory delete) are always blocked; configure allowed shell command prefixes and email recipients per-task in the "🔒 Background permissions" section of the task editor
 - **Pre-built templates** — ships with 5 starter tasks (Daily Briefing, Research Summary, Email Digest, Weekly Review, Quick Reminder)
-- **Home screen dashboard** — manage tasks from the home screen with a tabbed layout: ⚡ Tasks (tiles with edit/run/delete) and 📋 Activity (monitoring panel with upcoming runs, recent history, channel status)
+- **Home screen dashboard** — manage tasks from the home screen with a tabbed layout: ⚡ Tasks (tiles with edit/run/delete) and 📋 Activity (monitoring panel with upcoming runs, recent history, channel status); the home screen's status monitor panel shows 14 health-check pills at a glance with a diagnosis button
 - **Persistent run history** — task execution history survives task deletion; displayed in the Activity tab with ✅/❌/⏳ status icons
 - **Monitoring / polling** — use interval schedules with conditional prompts to monitor conditions (stock availability, price drops, new releases); the agent checks periodically, reports when the condition is met, and self-disables the task via `{{task_id}}` — no manual intervention needed
 - **Task stop / cancel** — stop a running task from the chat header, activity panel, or task card; stopped tasks skip delivery and auto-delete, and are recorded in run history
@@ -171,6 +172,7 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 
 ### 🖥️ Desktop App
 - **Native window** — runs in a native OS window via pywebview instead of a browser, a real desktop application
+- **Right-click context menu** — Cut, Copy, Paste, and Select All in the native desktop window (pywebview), since the default webview suppresses the browser context menu
 - **Splash screen** — two-tier startup splash: tkinter GUI (dark background, gold Thoth logo, animated loading indicator) with automatic console fallback for environments where tkinter isn't available; self-closes when the server is ready
 - **First-launch setup wizard** — on first install, a guided wizard offers two paths: **Local** (select and download Ollama models) or **Cloud** (enter an API key and pick a cloud model); vision model selection included for local setups
 - **System tray** — `launcher.py` runs a pystray system tray icon showing app status (green = running, grey = stopped) with Open / Quit menu
@@ -183,13 +185,18 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 - **Thread switching** — resume any previous conversation seamlessly
 - **Thread deletion** — remove individual conversations or delete all at once with confirmation
 - **Per-thread model switching** — pick a different model (local or cloud) for each conversation from the chat header dropdown; overrides persist across app restarts; cloud threads show a banner indicating the active provider
-- **Conversation export** — export any thread as Markdown (.md), plain text (.txt), or PDF (.pdf)
-- **File attachments** — attach images (analyzed via vision model), PDFs (text extracted), CSV, Excel, JSON, and text files directly in chat; structured data files return schema + stats + preview via pandas
+- **Conversation export** — export any thread as Markdown (.md), plain text (.txt), or PDF (.pdf); PDF export uses Playwright (headless Chromium) for full Unicode/emoji support, embedded images, charts, and styled markdown with automatic fpdf2 fallback
+- **File attachments** — attach images (analyzed via vision model), PDFs (text extracted), CSV, Excel, JSON, and text files directly in chat; paste images from the clipboard (Ctrl+V); drag-and-drop files onto the chat window; structured data files return schema + stats + preview via pandas
+- **Image persistence** — pasted, captured, and attached images survive thread reload; stored as per-thread sidecar files alongside conversation checkpoints
+- **Inline image display** — reading an image file via the filesystem tool displays it inline in chat; the agent can then analyze the image contents via the vision tool
 - **Inline charts** — interactive Plotly charts rendered inline when the agent visualises data (zoom, hover, pan)
+- **Mermaid diagram rendering** — flowcharts, sequence diagrams, state diagrams, and other Mermaid diagrams render as interactive visual diagrams inline in chat
 - **Inline YouTube embeds** — YouTube links in responses are rendered as playable embedded videos
 - **Syntax-highlighted code blocks** — fenced code blocks render with language-aware highlighting and a built-in copy button
 - **Onboarding guide** — first-run welcome message with tool overview and clickable example prompts; `👋` button in sidebar to re-show anytime
+- **Status monitor panel** — replaces the home-screen logo with a frosted-glass panel containing an animated avatar (customizable emoji + ring color), 14 health-check pills in two rows (Ollama, Model, Cloud API, Email, Telegram, Gmail OAuth, Calendar OAuth, Task Scheduler, Memory Extraction, Disk, Threads DB, FAISS Index, Documents, Network), and a diagnosis button that runs all checks on demand with a copy-to-clipboard report; click any pill to jump to the relevant settings tab; ECG heartbeat animation scrolls behind the panel
 - **Startup health check** — verifies model availability on launch; skips Ollama check when using a cloud brain model
+- **OAuth token health** — Gmail and Calendar tokens are proactively checked at startup with silent refresh; periodic re-validation every 6 hours with user-facing warnings when tokens expire
 
 ### 🔔 Notifications
 - **Desktop notifications** — task completions and timer expirations trigger a desktop notification with timestamp
@@ -216,7 +223,7 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 
 - **10 bundled skills** cover data analysis, research, automation, meeting notes, daily briefings, and more
 - **User skills** — create your own skills in `~/.thoth/skills/<name>/SKILL.md`; user skills with the same name as a bundled skill override it
-- **In-app skill editor** — create and edit skills directly from Settings → Skills with a visual editor — set the name, icon, description, required tools, and write instructions without touching any files
+- **In-app skill editor** — create and edit skills directly from Settings → Skills with a visual editor — set the name, icon, description, and write instructions without touching any files
 - **Enable/disable per-skill** — toggle individual skills from Settings; only enabled skills are injected into the system prompt
 - **Tool-aware** — each skill declares which tools it needs; the agent knows what capabilities are available for each skill
 - **Versioned & tagged** — skills carry version numbers and tags for organization
@@ -234,7 +241,7 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 | **🔍 Web Search** | Live web search via Tavily for current events, news, real-time data | `TAVILY_API_KEY` |
 | **🦆 DuckDuckGo** | Free web search — no API key needed | None |
 | **🌐 Wikipedia** | Encyclopedic knowledge with contextual compression | None |
-| **📚 Arxiv** | Academic/scientific paper search | None |
+| **📚 Arxiv** | Academic paper search — newest-first sorting, full-text HTML links, arXiv query syntax (`ti:`, `au:`, `abs:`, `cat:`) | None |
 | **▶️ YouTube** | Search videos + fetch full transcripts/captions | None |
 | **🔗 URL Reader** | Fetch and extract text content from any URL | None |
 | **📄 Documents** | Semantic search over your uploaded files (FAISS vector store) | None |
@@ -245,7 +252,7 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 |------|-------------|----------|
 | **📧 Gmail** | Search, read, draft, and send emails with file attachments (Google OAuth) | OAuth credentials |
 | **📅 Google Calendar** | View, create, update, move, and delete events (Google OAuth) | OAuth credentials |
-| **📁 Filesystem** | Sandboxed file operations — read, write, copy, move, delete within a workspace folder; reads PDF, CSV, Excel (.xlsx/.xls), JSON/JSONL, and TSV files; structured data files return schema + stats + preview via pandas; PDF export via `export_to_pdf` | None |
+| **📁 Filesystem** | Sandboxed file operations — read, write, copy, move, delete within a workspace folder; reads PDF, CSV, Excel (.xlsx/.xls), JSON/JSONL, TSV, and image files; images displayed inline in chat; structured data files return schema + stats + preview via pandas; PDF export via `export_to_pdf` (Playwright with fpdf2 fallback) | None |
 | **🖥️ Shell** | Execute shell commands with 3-tier safety (safe/moderate/blocked); persistent sessions per thread; user approval for destructive commands; inline terminal panel | None |
 | **🌐 Browser** | Autonomous web browsing in a visible Chromium window — navigate, click, type, scroll, snapshot, back, tab management; accessibility-tree snapshots with numbered element references; persistent profile for logins | None |
 | **📋 Tasks** | Create, list, update, delete, and run scheduled tasks — 7 trigger types (daily, weekly, weekdays, weekends, interval, cron, delay), channel delivery, per-task model override | None |
@@ -259,7 +266,7 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 | **🧮 Calculator** | Safe math evaluation — arithmetic, trig, logs, factorials, combinatorics | None |
 | **🔢 Wolfram Alpha** | Advanced computation, symbolic math, unit conversion, scientific data | `WOLFRAM_ALPHA_APPID` |
 | **🌤️ Weather** | Current conditions and multi-day forecasts via Open-Meteo | None |
-| **👁️ Vision** | Camera/screen capture and analysis via vision model | None |
+| **👁️ Vision** | Camera capture, screen capture, and workspace image file analysis via vision model | None |
 | **🧠 Memory** | Save, search, update, delete, **link**, and **explore** memories in the knowledge graph | None |
 | **🔍 Conversation Search** | Search past conversations by keyword or list all saved threads | None |
 | **🖥️ System Info** | OS, CPU, RAM, disk space, IP addresses, battery, and top processes | None |
@@ -288,6 +295,9 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 │  │  Controls  │  │   Tool Status        │  │   Tool Config     │   │
 │  │  Memory Tab│  │   Memory Graph View  │  │   Cloud Settings  │   │
 │  └────────────┘  └──────────────────────┘  └───────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  Status Monitor — Avatar · 14 Health Pills · Diagnosis Btn  │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 └──────────────────────────┬───────────────────────────────────────────┘
                            │
                            ▼
@@ -363,16 +373,16 @@ Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI,
 
 | File | Purpose |
 |------|---------|
-| **`app.py`** + **`ui/`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (12 tabs including Cloud), tabbed home screen (Tasks + Activity + Memory graph), Task Edit dialog, file attachment handling, streaming event loop with error recovery, export, voice bar, first-launch setup wizard (Local/Cloud paths), per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network), centralized logging configuration |
+| **`app.py`** + **`ui/`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (12 tabs including Cloud), tabbed home screen (Tasks + Activity + Memory graph), status monitor panel with animated avatar, 14 health-check pills, and diagnosis button (`status_bar.py` + `status_checks.py`), Task Edit dialog, file attachment handling with clipboard paste and drag-and-drop, streaming event loop with error recovery, Playwright PDF export, voice bar, first-launch setup wizard (Local/Cloud paths), per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network), Mermaid diagram rendering (mermaid.js), OAuth token health checks (startup + periodic 6 h re-check), right-click context menu (pywebview), centralized logging configuration |
 | **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator with thinking/reasoning token extraction, interrupt handling for destructive actions, live token usage reporting, graph-enhanced auto-recall with memory IDs and relation context, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off), task cancellation via stop_event, displaced tool-call auto-repair |
-| **`threads.py`** | SQLite-backed thread metadata and `SqliteSaver` checkpointer for persisting LangGraph conversation state |
+| **`threads.py`** | SQLite-backed thread metadata, `SqliteSaver` checkpointer for persisting LangGraph conversation state, and per-thread image sidecar persistence (`thread_ui/`) |
 | **`memory.py`** | Backward-compatible memory wrapper — delegates all operations to `knowledge_graph.py`, mapping legacy column names (`category`/`content` to `entity_type`/`description`); provides `save_memory`, `find_by_subject`, `update_memory`, `delete_memory`, `semantic_search`, and `count_memories` with unchanged signatures |
 | **`knowledge_graph.py`** | Personal knowledge graph engine — SQLite entity + relation tables (WAL mode), NetworkX DiGraph for traversal, FAISS vector index for semantic search; entity CRUD with alias resolution, relation CRUD with cascade delete, `graph_enhanced_recall()` for semantic + graph expansion, `graph_to_vis_json()` for visualization; deterministic dedup via normalized subject matching |
 | **`models.py`** | Ollama + cloud model management — local model listing/downloading/switching, cloud provider support (OpenAI direct, OpenRouter via ChatOpenRouter), starred models, context-size catalog with heuristics, model override routing, cloud vision detection, reasoning model support (`reasoning=True` for thinking models) |
 | **`documents.py`** | Document ingestion — PDF/DOCX/TXT loading, chunking, FAISS embedding and storage |
 | **`voice.py`** | Local STT pipeline — toggle-based 4-state machine (stopped/listening/transcribing/muted) with faster-whisper CPU-only int8 transcription |
 | **`tts.py`** | Kokoro TTS integration — cross-platform neural TTS, model auto-downloaded on first use (~169 MB), 10 built-in voices, streaming sentence-by-sentence playback |
-| **`vision.py`** | Camera/screen capture via OpenCV/MSS, image analysis via local or cloud vision models |
+| **`vision.py`** | Camera/screen capture via OpenCV/MSS, workspace image file analysis, image analysis via local or cloud vision models |
 | **`data_reader.py`** | Shared pandas-based reader for CSV, TSV, Excel, JSON, JSONL — returns schema + stats + preview rows |
 | **`launcher.py`** | Desktop launcher — system tray (pystray), native window management (pywebview), two-tier splash screen (tkinter with console fallback), manages NiceGUI server lifecycle; structured logging to `~/.thoth/thoth_app.log` |
 | **`api_keys.py`** | API key management — tool keys from `~/.thoth/api_keys.json`, cloud LLM provider keys and starred models from `~/.thoth/cloud_config.json` |
@@ -384,7 +394,7 @@ Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI,
 | **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue with `toast_type` support (positive/negative); error toasts render as persistent red banners; coordinates task completion chimes and timer alerts |
 | **`channels/`** | Messaging channel adapters — Telegram bot (long polling, interrupt approval, corrupt thread recovery, HTML formatting) and Email channel (Gmail polling, interrupt approval, corrupt thread recovery, sender-only filter), with shared config store |
 | **`tools/`** | 23 self-registering tool modules + base class + registry |
-| **`static/`** | Bundled JS libraries — `vis-network.min.js` for knowledge graph visualization |
+| **`static/`** | Bundled JS libraries — `vis-network.min.js` for knowledge graph visualization, `mermaid.min.js` for diagram rendering |
 
 ### Data Storage
 
@@ -393,6 +403,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ```
 ~/.thoth/
 ├── threads.db              # Conversation history & LangGraph checkpoints
+├── thread_ui/              # Per-thread image sidecar files for reload persistence
 ├── memory.db               # Knowledge graph — entities, relations, and memory data
 ├── memory_vectors/         # FAISS vector index for semantic memory search
 ├── memory_extraction_state.json  # Tracks last extraction run timestamp
@@ -409,6 +420,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── channels_config.json    # Channel settings (Telegram, Email auto-start)
 ├── shell_history.json      # Shell command history per thread
 ├── skills_config.json      # Skill enable/disable state
+├── user_config.json        # Avatar emoji & ring color preferences
 ├── thoth_app.log           # Application log (structured, timestamped)
 ├── splash.log              # Splash screen diagnostic log
 ├── tracker/
@@ -462,13 +474,13 @@ If you don't plan to run local models, Thoth's requirements drop significantly:
 
 ### Windows
 
-1. Download **[ThothSetup_3.9.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.10.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.9.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.10.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Open the DMG and drag **Thoth.app** into the **Applications** folder
 3. Launch **Thoth** from Applications or Launchpad
    - First run may prompt "Thoth is an app downloaded from the internet" → click **Open**

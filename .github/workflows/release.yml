@@ -46,7 +46,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DEFAULT_VERSION: "3.9.0"
+  DEFAULT_VERSION: "3.10.0"
 
 jobs:
   # ════════════════════════════════════════════════════════════════════════════

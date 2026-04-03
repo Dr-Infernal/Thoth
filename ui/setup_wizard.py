@@ -58,7 +58,7 @@ async def show_setup_wizard(
     )
 
     with setup_dlg:
-        with ui.card().classes("w-full max-w-2xl mx-auto q-pa-lg"):
+        with ui.card().classes("w-full max-w-4xl mx-auto q-pa-lg"):
             # ── Header ───────────────────────────────────────────────
             ui.html(
                 '<div style="text-align:center;">'

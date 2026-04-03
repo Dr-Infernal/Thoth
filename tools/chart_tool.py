@@ -49,6 +49,21 @@ _CHART_ALIASES: dict[str, str] = {
     "correlation": "heatmap",
 }
 
+# Diagram types that should be rendered as Mermaid text, not Plotly charts.
+_MERMAID_DIAGRAM_TYPES = {
+    "flow",
+    "flowchart",
+    "mermaid",
+    "sequence",
+    "state",
+    "er",
+    "entity_relationship",
+    "mindmap",
+    "architecture",
+    "graphviz",
+    "sankey",
+}
+
 # ── Maximum rows to plot (guard against huge datasets) ───────────────────
 _MAX_PLOT_ROWS = 10_000
 
@@ -413,6 +428,14 @@ def _create_chart(
     """Create a chart and return a JSON marker for the UI to render."""
 
     chart_type = chart_type.strip().lower()
+    if chart_type in _MERMAID_DIAGRAM_TYPES:
+        return (
+            "This tool creates Plotly data charts, not Mermaid diagrams. "
+            "For flowcharts/process/relationship diagrams, respond directly "
+            "with a fenced Mermaid block (```mermaid ... ```). "
+            "For memory relationship graphs, use explore_connections first "
+            "(it already returns Mermaid)."
+        )
     chart_type = _CHART_ALIASES.get(chart_type, chart_type)
     if chart_type not in _CHART_TYPES:
         return (
@@ -526,7 +549,8 @@ class ChartTool(BaseTool):
         return (
             "Create interactive charts and visualisations from data files. "
             "Supports bar, line, scatter, pie, donut, histogram, box, area, "
-            "and heatmap charts from CSV, Excel, JSON, and TSV files."
+            "and heatmap charts from CSV, Excel, JSON, and TSV files. "
+            "Not for Mermaid flowcharts or relationship diagrams."
         )
 
     @property
@@ -544,6 +568,8 @@ class ChartTool(BaseTool):
                     "donut, histogram, box, area, heatmap. Reads data from "
                     "CSV, Excel (XLSX/XLS), JSON, JSONL, or TSV files. "
                     "The tool auto-picks columns if x/y are not specified. "
+                    "Do NOT use this for Mermaid flowcharts/process diagrams/"
+                    "relationship graphs — output Mermaid code directly instead. "
                     "Use save_to_file to save the chart as a PNG image "
                     "(e.g. for sending via Telegram or email). "
                     "Use this when the user asks to visualise, plot, chart, "

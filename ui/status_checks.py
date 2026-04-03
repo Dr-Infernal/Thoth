@@ -1,0 +1,363 @@
+"""Thoth UI — system health checks for the status bar.
+
+Each check returns a ``CheckResult`` with a uniform interface.
+All checks are read-only and non-destructive.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import pathlib
+import sqlite3
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+_DATA_DIR = pathlib.Path(
+    os.environ.get("THOTH_DATA_DIR", pathlib.Path.home() / ".thoth")
+)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CHECK RESULT
+# ═════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class CheckResult:
+    """Uniform result from a single health check."""
+
+    name: str
+    status: str  # "ok" | "warn" | "error" | "inactive"
+    detail: str = ""
+    checked_at: float = field(default_factory=time.time)
+    settings_tab: str = ""  # which settings tab to open on click
+
+    @property
+    def dot_color(self) -> str:
+        return {
+            "ok": "#4caf50",      # green
+            "warn": "#ff9800",    # amber
+            "error": "#f44336",   # red
+            "inactive": "#666",   # grey
+        }.get(self.status, "#666")
+
+    @property
+    def icon(self) -> str:
+        return {
+            "ok": "check_circle",
+            "warn": "warning",
+            "error": "error",
+            "inactive": "radio_button_unchecked",
+        }.get(self.status, "help")
+
+    @property
+    def status_label(self) -> str:
+        return {
+            "ok": "Healthy",
+            "warn": "Warning",
+            "error": "Error",
+            "inactive": "Not configured",
+        }.get(self.status, "Unknown")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# INDIVIDUAL CHECKS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def check_ollama() -> CheckResult:
+    """Check if Ollama server is reachable."""
+    try:
+        from models import _ollama_reachable
+        if _ollama_reachable(timeout=1.0):
+            return CheckResult("Ollama", "ok", "Server reachable", settings_tab="Models")
+        return CheckResult("Ollama", "error", "Server unreachable", settings_tab="Models")
+    except Exception as exc:
+        return CheckResult("Ollama", "error", str(exc), settings_tab="Models")
+
+
+def check_active_model() -> CheckResult:
+    """Check if the configured model is available."""
+    try:
+        from models import get_current_model
+        model = get_current_model()
+        if model:
+            return CheckResult("Model", "ok", model, settings_tab="Models")
+        return CheckResult("Model", "warn", "No model selected", settings_tab="Models")
+    except Exception as exc:
+        return CheckResult("Model", "error", str(exc), settings_tab="Models")
+
+
+def check_cloud_api() -> CheckResult:
+    """Check if cloud API keys are configured."""
+    try:
+        from models import is_cloud_available
+        if is_cloud_available():
+            return CheckResult("Cloud API", "ok", "Keys configured", settings_tab="Cloud")
+        return CheckResult("Cloud API", "inactive", "No API keys", settings_tab="Cloud")
+    except Exception as exc:
+        return CheckResult("Cloud API", "error", str(exc), settings_tab="Cloud")
+
+
+def check_gmail_channel() -> CheckResult:
+    """Check Gmail email channel status."""
+    try:
+        from channels.email import is_configured, is_running, get_last_error
+        if not is_configured():
+            return CheckResult("Email", "inactive", "Not configured", settings_tab="Channels")
+        if is_running():
+            return CheckResult("Email", "ok", "Polling", settings_tab="Channels")
+        err = get_last_error()
+        detail = f"Stopped — {err}" if err else "Stopped"
+        return CheckResult("Email", "warn", detail, settings_tab="Channels")
+    except Exception as exc:
+        return CheckResult("Email", "error", str(exc), settings_tab="Channels")
+
+
+def check_telegram() -> CheckResult:
+    """Check Telegram bot status."""
+    try:
+        from channels.telegram import is_configured, is_running
+        if not is_configured():
+            return CheckResult("Telegram", "inactive", "Not configured", settings_tab="Channels")
+        if is_running():
+            return CheckResult("Telegram", "ok", "Running", settings_tab="Channels")
+        return CheckResult("Telegram", "warn", "Stopped", settings_tab="Channels")
+    except Exception as exc:
+        return CheckResult("Telegram", "error", str(exc), settings_tab="Channels")
+
+
+def check_gmail_oauth() -> CheckResult:
+    """Check Gmail OAuth token health."""
+    try:
+        from tools import registry
+        if not registry.is_enabled("gmail"):
+            return CheckResult("Gmail OAuth", "inactive", "Tool disabled", settings_tab="Gmail")
+        tool = registry.get_tool("gmail")
+        if tool is None or not tool.is_authenticated():
+            return CheckResult("Gmail OAuth", "inactive", "Not authenticated", settings_tab="Gmail")
+        status, detail = tool.check_token_health()
+        if status in ("valid", "refreshed"):
+            label = "Valid" if status == "valid" else "Refreshed"
+            return CheckResult("Gmail OAuth", "ok", label, settings_tab="Gmail")
+        if status == "expired":
+            return CheckResult("Gmail OAuth", "warn", "Token expired", settings_tab="Gmail")
+        return CheckResult("Gmail OAuth", "error", detail, settings_tab="Gmail")
+    except Exception as exc:
+        return CheckResult("Gmail OAuth", "error", str(exc), settings_tab="Gmail")
+
+
+def check_calendar_oauth() -> CheckResult:
+    """Check Calendar OAuth token health."""
+    try:
+        from tools import registry
+        if not registry.is_enabled("calendar"):
+            return CheckResult("Calendar OAuth", "inactive", "Tool disabled", settings_tab="Calendar")
+        tool = registry.get_tool("calendar")
+        if tool is None or not tool.is_authenticated():
+            return CheckResult("Calendar OAuth", "inactive", "Not authenticated", settings_tab="Calendar")
+        status, detail = tool.check_token_health()
+        if status in ("valid", "refreshed"):
+            label = "Valid" if status == "valid" else "Refreshed"
+            return CheckResult("Calendar OAuth", "ok", label, settings_tab="Calendar")
+        if status == "expired":
+            return CheckResult("Calendar OAuth", "warn", "Token expired", settings_tab="Calendar")
+        return CheckResult("Calendar OAuth", "error", detail, settings_tab="Calendar")
+    except Exception as exc:
+        return CheckResult("Calendar OAuth", "error", str(exc), settings_tab="Calendar")
+
+
+def check_task_scheduler() -> CheckResult:
+    """Check APScheduler health."""
+    try:
+        from tasks import _scheduler
+        if _scheduler is None:
+            return CheckResult("Scheduler", "warn", "Not started")
+        jobs = _scheduler.get_jobs()
+        return CheckResult("Scheduler", "ok", f"{len(jobs)} job{'s' if len(jobs) != 1 else ''}")
+    except Exception as exc:
+        return CheckResult("Scheduler", "error", str(exc))
+
+
+def check_memory_extraction() -> CheckResult:
+    """Check memory extraction pipeline status."""
+    try:
+        from memory_extraction import get_extraction_status
+        status = get_extraction_status()
+        last = status.get("last_extraction")
+        interval = int(status.get("interval_hours", 6))
+        if last:
+            try:
+                dt = datetime.fromisoformat(last)
+                age_h = (datetime.now() - dt).total_seconds() / 3600
+                if age_h < interval * 2:
+                    return CheckResult(
+                        "Memory", "ok",
+                        f"Last: {dt.strftime('%b %d, %I:%M %p')}",
+                        settings_tab="Memory",
+                    )
+                return CheckResult(
+                    "Memory", "warn",
+                    f"Overdue — last: {dt.strftime('%b %d')}",
+                    settings_tab="Memory",
+                )
+            except (ValueError, TypeError):
+                return CheckResult("Memory", "ok", f"Last: {last}", settings_tab="Memory")
+        return CheckResult("Memory", "ok", "Not yet run", settings_tab="Memory")
+    except Exception as exc:
+        return CheckResult("Memory", "error", str(exc), settings_tab="Memory")
+
+
+def check_disk_space() -> CheckResult:
+    """Check free disk space on the data directory drive."""
+    try:
+        import shutil
+        usage = shutil.disk_usage(str(_DATA_DIR))
+        free_gb = usage.free / (1024 ** 3)
+        pct_used = (usage.used / usage.total) * 100
+        if pct_used > 95:
+            return CheckResult("Disk", "error", f"{free_gb:.1f} GB free ({pct_used:.0f}% used)")
+        if pct_used > 85:
+            return CheckResult("Disk", "warn", f"{free_gb:.1f} GB free ({pct_used:.0f}% used)")
+        return CheckResult("Disk", "ok", f"{free_gb:.1f} GB free")
+    except Exception as exc:
+        return CheckResult("Disk", "error", str(exc))
+
+
+def check_threads_db() -> CheckResult:
+    """Quick SQLite integrity check on threads.db."""
+    db_path = _DATA_DIR / "threads.db"
+    try:
+        if not db_path.exists():
+            return CheckResult("Threads DB", "ok", "No database yet")
+        conn = sqlite3.connect(str(db_path), timeout=2)
+        conn.execute("SELECT 1 FROM thread_meta LIMIT 1")
+        count = conn.execute("SELECT COUNT(*) FROM thread_meta").fetchone()[0]
+        conn.close()
+        return CheckResult("Threads DB", "ok", f"{count} thread{'s' if count != 1 else ''}")
+    except Exception as exc:
+        return CheckResult("Threads DB", "error", str(exc))
+
+
+def check_faiss_index() -> CheckResult:
+    """Check if the FAISS memory vector index exists and is readable."""
+    vector_dir = _DATA_DIR / "memory_vectors"
+    try:
+        index_file = vector_dir / "index.faiss"
+        map_file = vector_dir / "id_map.json"
+        if not vector_dir.exists():
+            return CheckResult("FAISS Index", "ok", "Not yet created", settings_tab="Memory")
+        if not index_file.exists():
+            return CheckResult("FAISS Index", "ok", "Empty index", settings_tab="Memory")
+        size_kb = index_file.stat().st_size / 1024
+        entities = 0
+        if map_file.exists():
+            try:
+                data = json.loads(map_file.read_text())
+                entities = len(data) if isinstance(data, list) else 0
+            except (json.JSONDecodeError, OSError):
+                pass
+        return CheckResult(
+            "FAISS Index", "ok",
+            f"{entities} vectors · {size_kb:.0f} KB",
+            settings_tab="Memory",
+        )
+    except Exception as exc:
+        return CheckResult("FAISS Index", "error", str(exc), settings_tab="Memory")
+
+
+def check_document_store() -> CheckResult:
+    """Check if the document vector store directory exists."""
+    store_dir = _DATA_DIR / "vector_store"
+    try:
+        if not store_dir.exists():
+            return CheckResult("Documents", "ok", "No documents indexed", settings_tab="Documents")
+        files = list(store_dir.iterdir())
+        if files:
+            return CheckResult("Documents", "ok", f"{len(files)} index file{'s' if len(files) != 1 else ''}", settings_tab="Documents")
+        return CheckResult("Documents", "ok", "Empty store", settings_tab="Documents")
+    except Exception as exc:
+        return CheckResult("Documents", "error", str(exc), settings_tab="Documents")
+
+
+def check_network() -> CheckResult:
+    """Quick outbound connectivity check."""
+    try:
+        import socket as _sock
+        s = _sock.create_connection(("1.1.1.1", 53), timeout=2)
+        s.close()
+        return CheckResult("Network", "ok", "Connected")
+    except OSError:
+        return CheckResult("Network", "warn", "No internet")
+    except Exception as exc:
+        return CheckResult("Network", "error", str(exc))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CHECK REGISTRY
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Ordered list of all checks — determines display order in status bar
+ALL_CHECKS = [
+    check_ollama,
+    check_active_model,
+    check_cloud_api,
+    check_gmail_channel,
+    check_telegram,
+    check_gmail_oauth,
+    check_calendar_oauth,
+    check_task_scheduler,
+    check_memory_extraction,
+    check_disk_space,
+    check_threads_db,
+    check_faiss_index,
+    check_document_store,
+    check_network,
+]
+
+# Lightweight checks (just reading Python booleans — near zero cost)
+LIGHT_CHECKS = [
+    check_active_model,
+    check_gmail_channel,
+    check_telegram,
+    check_task_scheduler,
+]
+
+# Heavier checks (I/O, network, OAuth token probing)
+HEAVY_CHECKS = [
+    check_ollama,
+    check_cloud_api,
+    check_gmail_oauth,
+    check_calendar_oauth,
+    check_memory_extraction,
+    check_disk_space,
+    check_threads_db,
+    check_faiss_index,
+    check_document_store,
+    check_network,
+]
+
+
+def run_all_checks() -> list[CheckResult]:
+    """Run every registered check and return results."""
+    results = []
+    for fn in ALL_CHECKS:
+        try:
+            results.append(fn())
+        except Exception as exc:
+            results.append(CheckResult(fn.__name__, "error", str(exc)))
+    return results
+
+
+def run_light_checks() -> list[CheckResult]:
+    """Run only lightweight (instant) checks."""
+    results = []
+    for fn in LIGHT_CHECKS:
+        try:
+            results.append(fn())
+        except Exception as exc:
+            results.append(CheckResult(fn.__name__, "error", str(exc)))
+    return results

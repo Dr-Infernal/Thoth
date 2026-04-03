@@ -92,6 +92,57 @@ state.show_onboarding = is_first_run()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# OAUTH TOKEN HEALTH
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _check_oauth_tokens(_st=None) -> list[str]:
+    """Check Gmail & Calendar OAuth tokens if those tools are enabled.
+
+    Attempts silent refresh when possible.  Returns a list of warning
+    strings (empty if everything is healthy).  If *_st* is provided,
+    warnings are also appended to ``_st.startup_warnings``.
+    """
+    from tools import registry as _reg
+    warnings: list[str] = []
+
+    for tool_name, display in [("gmail", "Gmail"), ("calendar", "Calendar")]:
+        if not _reg.is_enabled(tool_name):
+            continue
+        tool = _reg.get_tool(tool_name)
+        if tool is None or not tool.is_authenticated():
+            continue
+        try:
+            status, detail = tool.check_token_health()
+            if status in ("valid", "refreshed"):
+                label = "token healthy" if status == "valid" else "token refreshed"
+                print(f"[oauth] ✅ {display} {label}")
+            elif status == "expired":
+                msg = f"⚠️ {display} token expired — re-authenticate in Settings → Tools → {display}"
+                warnings.append(msg)
+                print(f"[oauth] {msg}")
+            elif status == "error":
+                msg = f"⚠️ {display} token error: {detail}"
+                warnings.append(msg)
+                print(f"[oauth] {msg}")
+        except Exception as exc:
+            logger.warning("OAuth check failed for %s: %s", display, exc)
+
+    if _st is not None:
+        _st.startup_warnings.extend(warnings)
+    return warnings
+
+
+def _periodic_oauth_check():
+    """Background OAuth health check — runs every 6 hours."""
+    warnings = _check_oauth_tokens()
+    if warnings:
+        from notifications import notify as _oauth_notify
+        for msg in warnings:
+            _oauth_notify("Token Expired", msg, sound="default",
+                          icon="⚠️", toast_type="warning")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # STARTUP / SHUTDOWN
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -151,6 +202,26 @@ async def on_startup():
                 _st.startup_warnings.append("⚠️ Email polling failed to auto-start — check Settings → Channels")
         except Exception as exc:
             _st.startup_warnings.append(f"⚠️ Email polling failed to auto-start: {exc}")
+
+    # ── Proactive OAuth token health check ───────────────────────────
+    await asyncio.to_thread(_check_oauth_tokens, _st)
+
+    # Schedule periodic re-check every 6 hours
+    try:
+        from tasks import _get_scheduler
+        _sched = _get_scheduler()
+        _sched.add_job(
+            _periodic_oauth_check,
+            trigger="interval",
+            hours=6,
+            id="oauth_token_health",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+        print("[startup] ⏱️ OAuth periodic check scheduled (every 6 h)")
+    except Exception as exc:
+        logger.warning("Could not schedule periodic OAuth check: %s", exc)
 
     _set("✅ Ready")
     _st.startup_ready = True
@@ -297,6 +368,7 @@ async def index():
                     build_graph_panel=build_graph_panel,
                     is_first_run=is_first_run,
                     mark_onboarding_seen=mark_onboarding_seen,
+                    open_settings=_open_settings,
                 )
             else:
                 build_chat(

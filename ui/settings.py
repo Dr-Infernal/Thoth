@@ -635,6 +635,9 @@ def open_settings(
         ).classes("text-grey-6 text-sm")
         ui.separator().classes("q-my-md")
 
+        with ui.row().classes("w-full justify-end q-mb-md"):
+            ui.button("Create Skill", icon="add", on_click=lambda: _open_skill_editor()).props("color=primary")
+
         skills_container = ui.column().classes("w-full gap-2")
 
         def _refresh_skills_list():
@@ -666,14 +669,6 @@ def open_settings(
                                     "outline"
                                 ).tooltip("Approximate tokens added to context when enabled")
                         ui.label(sk.description).classes("text-grey-6 text-sm q-pl-lg")
-
-                        if sk.tools:
-                            with ui.row().classes("q-pl-lg gap-1 q-mt-xs"):
-                                ui.label("Tools:").classes("text-grey-5 text-xs")
-                                for t in sk.tools:
-                                    _enabled = tool_registry.is_enabled(t)
-                                    _color = "positive" if _enabled else "warning"
-                                    ui.badge(t, color=_color).props("outline dense")
 
                         with ui.row().classes("q-pl-lg q-mt-xs gap-1"):
                             if sk.source == "user":
@@ -721,15 +716,6 @@ def open_settings(
                         "Description (one line)", value=skill.description if skill else "",
                     ).classes("flex-grow")
 
-                ui.label("Tool Dependencies (optional)").classes("text-sm font-bold mt-2")
-                _all_tools = [t.name for t in tool_registry.get_all_tools()]
-                _selected_tools = list(skill.tools) if skill else []
-                tool_checkboxes = {}
-                with ui.row().classes("w-full gap-4 flex-wrap"):
-                    for tname in _all_tools:
-                        cb = ui.checkbox(tname, value=tname in _selected_tools)
-                        tool_checkboxes[tname] = cb
-
                 tags_input = ui.input(
                     "Tags (comma-separated)",
                     value=", ".join(skill.tags) if skill and skill.tags else "",
@@ -759,7 +745,6 @@ def open_settings(
                         _desc = desc_input.value.strip()
                         _icon_val = icon_sel.value
                         _instr = instructions_input.value.strip()
-                        _tools = [n for n, cb in tool_checkboxes.items() if cb.value]
                         _tags = [t.strip() for t in tags_input.value.split(",") if t.strip()]
                         if not _name:
                             ui.notify("Name is required", type="warning")
@@ -770,13 +755,13 @@ def open_settings(
                         if is_edit:
                             skills_mod.update_skill(
                                 name=_name, display_name=_display, icon=_icon_val,
-                                description=_desc, instructions=_instr, tools=_tools, tags=_tags,
+                                description=_desc, instructions=_instr, tags=_tags,
                             )
                             ui.notify(f"✅ Skill '{_display}' updated", type="positive")
                         else:
                             skills_mod.create_skill(
                                 name=_name, display_name=_display, icon=_icon_val,
-                                description=_desc, instructions=_instr, tools=_tools, tags=_tags,
+                                description=_desc, instructions=_instr, tags=_tags,
                             )
                             ui.notify(f"✅ Skill '{_display}' created", type="positive")
                         dlg.close()
@@ -810,9 +795,6 @@ def open_settings(
                 _refresh_skills_list()
             else:
                 ui.notify("Failed to duplicate skill", type="negative")
-
-        with ui.row().classes("w-full justify-end q-mb-md"):
-            ui.button("Create Skill", icon="add", on_click=lambda: _open_skill_editor()).props("color=primary")
 
         skills_mod.load_skills()
         _refresh_skills_list()
@@ -1070,7 +1052,19 @@ def open_settings(
 
         if gmail_tool.has_credentials_file():
             if gmail_tool.is_authenticated():
-                ui.label("✅ Authenticated with Gmail").classes("text-positive")
+                try:
+                    _g_status, _g_detail = gmail_tool.check_token_health()
+                except Exception:
+                    _g_status, _g_detail = "valid", ""
+                if _g_status in ("valid", "refreshed"):
+                    _g_lbl = "token healthy" if _g_status == "valid" else "token refreshed"
+                    ui.label(f"✅ Gmail connected — {_g_lbl}").classes("text-positive")
+                elif _g_status == "expired":
+                    ui.label("⚠️ Gmail token expired — re-authenticate below").classes("text-warning")
+                elif _g_status == "error":
+                    ui.label(f"⚠️ Gmail token error — {_g_detail}").classes("text-warning")
+                else:
+                    ui.label("✅ Authenticated with Gmail").classes("text-positive")
 
                 async def _reauth_gmail():
                     try:
@@ -1162,7 +1156,19 @@ def open_settings(
 
         if cal_tool.has_credentials_file():
             if cal_tool.is_authenticated():
-                ui.label("✅ Authenticated with Calendar").classes("text-positive")
+                try:
+                    _c_status, _c_detail = cal_tool.check_token_health()
+                except Exception:
+                    _c_status, _c_detail = "valid", ""
+                if _c_status in ("valid", "refreshed"):
+                    _c_lbl = "token healthy" if _c_status == "valid" else "token refreshed"
+                    ui.label(f"✅ Calendar connected — {_c_lbl}").classes("text-positive")
+                elif _c_status == "expired":
+                    ui.label("⚠️ Calendar token expired — re-authenticate below").classes("text-warning")
+                elif _c_status == "error":
+                    ui.label(f"⚠️ Calendar token error — {_c_detail}").classes("text-warning")
+                else:
+                    ui.label("✅ Authenticated with Calendar").classes("text-positive")
 
                 async def _reauth_cal():
                     try:

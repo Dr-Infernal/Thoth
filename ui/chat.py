@@ -48,6 +48,7 @@ def build_chat(
     )
     from tasks import get_running_tasks, stop_task
     from tools import registry as tool_registry
+    from ui.helpers import persist_thread_image_state
 
     # ── Header ───────────────────────────────────────────────────────
     running_wfs = get_running_tasks()
@@ -303,6 +304,7 @@ def build_chat(
             if _reattach_gen.captured_images:
                 a_msg["images"] = _reattach_gen.captured_images
             state.messages.append(a_msg)
+            persist_thread_image_state(state.thread_id, state.messages)
             add_chat_message(a_msg)
         _active_generations.pop(state.thread_id, None)
 
@@ -351,7 +353,7 @@ def build_chat(
                 if p.terminal_visible and p.terminal_scroll:
                     p.terminal_scroll.scroll_to(percent=1.0)
             if p.terminal_toggle_bar is not None:
-                _chevron = "expand_less" if p.terminal_visible else "expand_more"
+                _chevron = "expand_more" if p.terminal_visible else "expand_less"
                 p.terminal_chevron.props(f"icon={_chevron}")
 
         p.terminal_toggle_bar = ui.row().classes(
@@ -374,7 +376,7 @@ def build_chat(
             ui.button(icon="delete_sweep", on_click=_clear_terminal).props(
                 "flat round dense size=xs"
             ).classes("text-grey-5").tooltip("Clear terminal history")
-            p.terminal_chevron = ui.button(icon="expand_more").props(
+            p.terminal_chevron = ui.button(icon="expand_less").props(
                 "flat round dense size=xs"
             ).classes("text-grey-5")
             p.terminal_chevron.on("click.stop", lambda: _toggle_terminal())
@@ -427,10 +429,12 @@ def build_chat(
 
     _hidden_upload = ui.upload(on_upload=_on_upload, auto_upload=True, multiple=True).classes("hidden")
 
-    # Drag-and-drop
+    # Drag-and-drop (singleton listener — reads dynamic upload ID)
     ui.run_javascript(f'''
         (() => {{
-            const uid = {_hidden_upload.id};
+            window._thothUploadId = {_hidden_upload.id};
+            if (window._thothDragInstalled) return;
+            window._thothDragInstalled = true;
             const body = document.body;
             let overlay = null;
             function showOverlay() {{
@@ -453,8 +457,37 @@ def build_chat(
                 e.preventDefault(); hideOverlay();
                 const files = e.dataTransfer?.files;
                 if (!files || files.length === 0) return;
-                const vue = getElement(uid);
+                const vue = getElement(window._thothUploadId);
                 if (vue && vue.$refs.qRef) vue.$refs.qRef.addFiles(files);
+            }});
+        }})();
+    ''')
+
+    # Clipboard image paste (singleton listener — reads dynamic upload ID)
+    ui.run_javascript(f'''
+        (() => {{
+            window._thothUploadId = {_hidden_upload.id};
+            if (window._thothPasteInstalled) return;
+            window._thothPasteInstalled = true;
+            document.addEventListener("paste", (e) => {{
+                const items = e.clipboardData?.items;
+                if (!items) return;
+                const imageFiles = [];
+                for (const item of items) {{
+                    if (item.type.startsWith("image/")) {{
+                        const file = item.getAsFile();
+                        if (file) {{
+                            const ext = file.type.split("/")[1] || "png";
+                            const ts = Date.now();
+                            const named = new File([file], "pasted_image_" + ts + "." + ext, {{type: file.type}});
+                            imageFiles.push(named);
+                        }}
+                    }}
+                }}
+                if (imageFiles.length === 0) return;
+                e.preventDefault();
+                const vue = getElement(window._thothUploadId);
+                if (vue && vue.$refs.qRef) vue.$refs.qRef.addFiles(imageFiles);
             }});
         }})();
     ''')

@@ -307,8 +307,6 @@ def create_skill(
         "author": "User",
         "enabled_by_default": enabled,
     }
-    if tools:
-        meta["tools"] = tools
     if tags:
         meta["tags"] = tags
 
@@ -353,9 +351,6 @@ def update_skill(
         "author": skill.author,
         "enabled_by_default": skill.enabled_by_default,
     }
-    new_tools = tools if tools is not None else skill.tools
-    if new_tools:
-        meta["tools"] = new_tools
     new_tags = tags if tags is not None else skill.tags
     if new_tags:
         meta["tags"] = new_tags
@@ -413,7 +408,6 @@ def duplicate_skill(name: str, new_name: Optional[str] = None) -> Optional[Skill
         icon=original.icon,
         description=original.description,
         instructions=original.instructions,
-        tools=list(original.tools),
         tags=list(original.tags),
         enabled=True,
     )

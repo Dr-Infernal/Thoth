@@ -41,6 +41,37 @@ DEFAULT_OPERATIONS = _READ_OPS + _WRITE_OPS  # Safe default — no delete/move
 CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
+def _check_google_token(token_path: str) -> tuple[str, str]:
+    """Probe a Google OAuth *token_path* and attempt silent refresh.
+
+    Returns ``(status, detail)`` — see ``CalendarTool.check_token_health``.
+    """
+    if not os.path.isfile(token_path):
+        return ("missing", "No token file found")
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+
+        creds = Credentials.from_authorized_user_file(token_path)
+        if creds.valid:
+            return ("valid", "Token is valid")
+        # Access token expired — try silent refresh
+        if creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+                # Persist the refreshed token
+                pathlib.Path(token_path).write_text(creds.to_json())
+                return ("refreshed", "Token refreshed successfully")
+            except Exception as exc:
+                err = str(exc).lower()
+                if "invalid_grant" in err or "revoked" in err:
+                    return ("expired", "Refresh token expired or revoked — re-authenticate in Settings")
+                return ("error", f"Refresh failed: {exc}")
+        return ("expired", "Token expired and no refresh token available")
+    except Exception as exc:
+        return ("error", f"Token check failed: {exc}")
+
+
 class CalendarTool(BaseTool):
 
     @property
@@ -100,6 +131,20 @@ class CalendarTool(BaseTool):
     def is_authenticated(self) -> bool:
         return os.path.isfile(self._get_token_path())
 
+    def check_token_health(self) -> tuple[str, str]:
+        """Probe the OAuth token and attempt silent refresh if needed.
+
+        Returns
+        -------
+        (status, detail) where status is one of:
+        - ``"valid"``   — token is fresh, no action needed
+        - ``"refreshed"`` — access token was expired, silently refreshed
+        - ``"expired"`` — refresh token is revoked; user must re-authenticate
+        - ``"missing"`` — no token.json found
+        - ``"error"``   — unexpected error during check
+        """
+        return _check_google_token(self._get_token_path())
+
     def authenticate(self):
         """Run the OAuth consent flow (opens browser).  Must be called
         when ``credentials.json`` exists but ``token.json`` does not."""
@@ -138,8 +183,8 @@ class CalendarTool(BaseTool):
 
         try:
             api_resource = self._build_api_resource()
-        except Exception:
-            logger.warning("Calendar API resource build failed (OAuth issue?)", exc_info=True)
+        except Exception as exc:
+            logger.warning("Calendar tools unavailable — %s", exc)
             return []
 
         from langchain_google_community.calendar.toolkit import CalendarToolkit

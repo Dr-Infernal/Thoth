@@ -14,6 +14,7 @@ dist/
 
 # Signing keys and CSR (NEVER commit)
 installer/apple_signing/
+installer/windows_signing/
 
 # User data (created at runtime)
 vector_store/

@@ -30,10 +30,27 @@ from ui.constants import (
     SENTENCE_SPLIT,
     MAX_STREAM_SENTENCES,
     YT_URL_PATTERN,
+    IMAGE_EXTENSIONS,
 )
-from ui.render import autolink_urls
+from ui.render import autolink_urls, _auto_fence_mermaid
 
 logger = logging.getLogger(__name__)
+
+
+def _format_assistant_markdown(text: str) -> str:
+    """Normalise assistant markdown before rendering in streaming UI."""
+    return autolink_urls(_auto_fence_mermaid(text or ""))
+
+
+def _img_data_uri(b64: str) -> str:
+    """Return a data URI with the correct MIME type for a base64-encoded image."""
+    if b64.startswith("iVBOR"):
+        return f"data:image/png;base64,{b64}"
+    if b64.startswith("UklGR"):
+        return f"data:image/webp;base64,{b64}"
+    if b64.startswith("R0lGO"):
+        return f"data:image/gif;base64,{b64}"
+    return f"data:image/jpeg;base64,{b64}"
 
 
 # ── Type alias for the callback bundle ───────────────────────────────
@@ -79,6 +96,7 @@ async def consume_generation(
     """
     from agent import get_agent_graph, repair_orphaned_tool_calls
     from langchain_core.messages import AIMessage
+    from ui.helpers import persist_thread_image_state
 
     _stopped_shown = False
     _drain_deadline = 0.0
@@ -101,7 +119,7 @@ async def consume_generation(
                     if gen.assistant_md:
                         gen.assistant_md.set_visibility(True)
                         gen.accumulated += "\n\n\u23f9\ufe0f *[Stopped]*"
-                        gen.assistant_md.set_content(gen.accumulated)
+                        gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
                 except Exception:
                     pass
             if gen.tts_active:
@@ -161,7 +179,7 @@ async def consume_generation(
                         gen.thinking_label.delete()
                     if gen.assistant_md:
                         gen.assistant_md.set_visibility(True)
-                        gen.assistant_md.set_content(gen.accumulated)
+                        gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
                 except Exception:
                     pass
             try:
@@ -236,7 +254,7 @@ async def consume_generation(
             gen.accumulated += payload
             if not gen.detached and gen.assistant_md:
                 try:
-                    gen.assistant_md.set_content(autolink_urls(gen.accumulated))
+                    gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
                     if p.chat_scroll:
                         p.chat_scroll.scroll_to(percent=1.0)
                 except Exception:
@@ -292,7 +310,7 @@ async def consume_generation(
                         gen.thinking_md = None
                     if gen.assistant_md:
                         gen.assistant_md.set_visibility(True)
-                        gen.assistant_md.set_content(autolink_urls(gen.accumulated))
+                        gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
                 except Exception:
                     pass
 
@@ -323,6 +341,16 @@ async def consume_generation(
                 ui.run_javascript(
                     "document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));"
                 )
+                ui.run_javascript(
+                    "document.querySelectorAll('pre code.language-mermaid').forEach(function(el) {"
+                    "  var pre = el.parentElement;"
+                    "  var div = document.createElement('div');"
+                    "  div.className = 'mermaid-rendered';"
+                    "  div.textContent = el.textContent;"
+                    "  pre.replaceWith(div);"
+                    "});"
+                    "if (typeof mermaid !== 'undefined') { mermaid.run({nodes: document.querySelectorAll('.mermaid-rendered')}); }"
+                )
             except RuntimeError:
                 pass
     except Exception:
@@ -339,6 +367,7 @@ async def consume_generation(
             a_msg["images"] = gen.captured_images
         if state.thread_id == gen.thread_id:
             state.messages.append(a_msg)
+            persist_thread_image_state(state.thread_id, state.messages)
 
     # Cleanup
     _active_generations.pop(gen.thread_id, None)
@@ -454,7 +483,7 @@ def _handle_tool_done(
                 if p.terminal_panel is not None:
                     p.terminal_panel.set_visibility(True)
                 if hasattr(p, "terminal_chevron") and p.terminal_chevron:
-                    p.terminal_chevron.props("icon=expand_less")
+                    p.terminal_chevron.props("icon=expand_more")
             if p.terminal_scroll:
                 p.terminal_scroll.scroll_to(percent=1.0)
         except Exception:
@@ -484,11 +513,29 @@ def _handle_tool_done(
                 _screenshot_bytes = _bs.take_screenshot(thread_id=gen.thread_id)
                 if _screenshot_bytes:
                     _b64_ss = _b64.b64encode(_screenshot_bytes).decode("ascii")
+                    gen.captured_images.append(_b64_ss)
                     if gen.tool_col:
                         with gen.tool_col:
-                            ui.image(f"data:image/png;base64,{_b64_ss}").classes(
+                            ui.image(
+                                f"data:image/png;base64,{_b64_ss}"
+                            ).classes(
                                 "w-80 rounded"
                             ).style("border: 1px solid #333; margin-top: 4px;")
+        except Exception:
+            pass
+
+    # Filesystem image display (workspace_read_file on image files)
+    if tool_name in ("workspace_read_file",):
+        try:
+            from tools.filesystem_tool import get_and_clear_displayed_image
+            _fs_img = get_and_clear_displayed_image()
+            if _fs_img:
+                gen.captured_images.append(_fs_img["b64"])
+                if not gen.detached and gen.tool_col:
+                    with gen.tool_col:
+                        ui.image(
+                            _img_data_uri(_fs_img["b64"])
+                        ).classes("w-80 rounded")
         except Exception:
             pass
 
@@ -509,7 +556,7 @@ async def send_message(
     from agent import stream_agent, repair_orphaned_tool_calls, RECURSION_LIMIT_CHAT
     from threads import _save_thread_meta
     from tools import registry as tool_registry
-    from ui.helpers import process_attached_files
+    from ui.helpers import process_attached_files, persist_thread_image_state
 
     if not text.strip() and not p.pending_files:
         return
@@ -530,28 +577,72 @@ async def send_message(
 
     gen_thread_id = state.thread_id
 
-    # ── Process attached files ───────────────────────────────────────
-    file_context = ""
+    # ── Snapshot & clear attached files immediately ──────────────────
+    _files_snapshot: list[dict] = list(p.pending_files)
+    file_names: list[str] = [f["name"] for f in _files_snapshot]
+    if _files_snapshot:
+        p.pending_files.clear()
+        if p.file_chips_row:
+            p.file_chips_row.clear()
+
+    # ── Extract image thumbnails so the user message renders NOW ─────
+    import pathlib as _plib
     user_images: list[str] = []
+    for f in _files_snapshot:
+        if _plib.Path(f["name"]).suffix.lower() in IMAGE_EXTENSIONS:
+            user_images.append(_b64.b64encode(f["data"]).decode("ascii"))
+
+    # ── Build display and render user message immediately ────────────
+    if file_names:
+        badge_text = ", ".join(f"\U0001f4ce {n}" for n in file_names)
+        display_content = f"{badge_text}\n\n{text}" if text.strip() else badge_text
+    else:
+        display_content = text
+
+    user_msg: dict = {"role": "user", "content": display_content}
+    if user_images:
+        user_msg["images"] = user_images
+    state.messages.append(user_msg)
+    persist_thread_image_state(state.thread_id, state.messages)
+    cb.add_chat_message(user_msg)
+
+    # ── Process attached files (slow — vision analysis etc.) ─────────
+    file_context = ""
     file_warnings: list[str] = []
-    file_names: list[str] = [f["name"] for f in p.pending_files] if p.pending_files else []
-    if p.pending_files:
-        # Use the effective model for file budget calculation
+    if _files_snapshot:
+        _has_images = any(
+            _plib.Path(f["name"]).suffix.lower() in IMAGE_EXTENSIONS
+            for f in _files_snapshot
+        )
+        _processing_note = None
+        if _has_images and p.chat_container:
+            with p.chat_container:
+                _processing_note = ui.html(
+                    '<div style="opacity:0.6; font-size:0.85rem; padding:4px 0 4px 48px;">'
+                    '\U0001f50d Analyzing image<span class="dots">'
+                    '<span>.</span><span>.</span><span>.</span></span></div>',
+                    sanitize=False,
+                )
+            if p.chat_scroll:
+                p.chat_scroll.scroll_to(percent=1.0)
+
         _effective_model = state.thread_model_override or None
         try:
-            file_context, user_images, file_warnings = await run.io_bound(
-                process_attached_files, list(p.pending_files), state.vision_service,
+            file_context, _, file_warnings = await run.io_bound(
+                process_attached_files, _files_snapshot, state.vision_service,
                 state.attached_data_cache, _effective_model,
             )
         except Exception as exc:
             logger.error("process_attached_files failed: %s", exc, exc_info=True)
             ui.notify(f"Failed to process attached files: {exc}", type="negative",
                       position="top", close_button=True, timeout=10000)
-        p.pending_files.clear()
-        if p.file_chips_row:
-            p.file_chips_row.clear()
         for fw in file_warnings:
             ui.notify(fw, type="warning", position="top", close_button=True, timeout=8000)
+        if _processing_note:
+            try:
+                _processing_note.delete()
+            except Exception:
+                pass
 
     # ── Build agent input ────────────────────────────────────────────
     agent_input = text
@@ -559,19 +650,6 @@ async def send_message(
         agent_input = f"{file_context}\n\n{text}" if text else file_context
     logger.info("send_message: file_names=%s, file_context_len=%d, agent_input_len=%d",
                 file_names, len(file_context), len(agent_input))
-
-    if file_names:
-        badge_text = ", ".join(f"\U0001f4ce {n}" for n in file_names)
-        display_content = f"{badge_text}\n\n{text}" if text.strip() else badge_text
-    else:
-        display_content = text
-
-    # ── Append user message ──────────────────────────────────────────
-    user_msg: dict = {"role": "user", "content": display_content}
-    if user_images:
-        user_msg["images"] = user_images
-    state.messages.append(user_msg)
-    cb.add_chat_message(user_msg)
 
     # Auto-name thread
     if state.thread_name and (
