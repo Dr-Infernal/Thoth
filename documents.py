@@ -4,6 +4,19 @@ from langchain_community.document_loaders import (
     TextLoader
 )
 
+# Optional loaders — graceful degradation if deps missing
+try:
+    from langchain_community.document_loaders import BSHTMLLoader
+    _HTML_LOADER = BSHTMLLoader
+except Exception:
+    _HTML_LOADER = None
+
+try:
+    from langchain_community.document_loaders import UnstructuredEPubLoader
+    _EPUB_LOADER = UnstructuredEPubLoader
+except Exception:
+    _EPUB_LOADER = None
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 import logging
@@ -54,13 +67,66 @@ def reset_vector_store():
     _vector_store = FAISS.from_texts([" "], embedding=get_embedding_model())
     _vector_store.save_local(str(VECTOR_STORE_DIR))
 
+
+def remove_document(display_name: str) -> bool:
+    """Remove a single document from the FAISS vector store and processed list.
+
+    Finds all chunks whose ``metadata["source"]`` matches *display_name*,
+    deletes them from the vector store, and removes the entry from the
+    processed-files list.  Returns True if anything was removed.
+    """
+    global _vector_store
+    vs = get_vector_store()
+
+    # Find docstore IDs whose source matches this document
+    ids_to_delete: list[str] = []
+    if hasattr(vs, "docstore") and hasattr(vs.docstore, "_dict"):
+        for doc_id, doc in vs.docstore._dict.items():
+            if getattr(doc, "metadata", {}).get("source") == display_name:
+                ids_to_delete.append(doc_id)
+
+    if ids_to_delete:
+        try:
+            vs.delete(ids_to_delete)
+            vs.save_local(str(VECTOR_STORE_DIR))
+        except Exception as exc:
+            logger.warning("Failed to delete FAISS chunks for %s: %s", display_name, exc)
+
+    # Remove from processed files list
+    processed = load_processed_files()
+    if display_name in processed:
+        processed.discard(display_name)
+        with open(PROCESSED_FILES_PATH, "w") as f:
+            json.dump(list(processed), f, indent=2)
+
+    # Remove vault/raw/ copy
+    try:
+        import wiki_vault
+        if wiki_vault.is_enabled():
+            raw_file = wiki_vault.get_vault_path() / "raw" / display_name
+            if raw_file.exists():
+                raw_file.unlink()
+    except Exception:
+        pass
+
+    return bool(ids_to_delete) or display_name in load_processed_files()
+
 class DocumentLoader(object):
     supported_file_types = {
         ".pdf": PyPDFLoader,
         ".docx": UnstructuredWordDocumentLoader,
         ".doc": UnstructuredWordDocumentLoader,
-        ".txt": TextLoader
+        ".txt": TextLoader,
+        ".md": TextLoader,
     }
+
+
+# Dynamically add optional loaders if their dependencies are available
+if _HTML_LOADER is not None:
+    DocumentLoader.supported_file_types[".html"] = _HTML_LOADER
+    DocumentLoader.supported_file_types[".htm"] = _HTML_LOADER
+if _EPUB_LOADER is not None:
+    DocumentLoader.supported_file_types[".epub"] = _EPUB_LOADER
 
 text_splitter = RecursiveCharacterTextSplitter(
     separators = ["\n\n", "\n", " ", ""],
@@ -159,4 +225,33 @@ def load_and_vectorize_document(file_path, skip_if_processed=True, display_name=
 
     else:
         raise ValueError(f"Unsupported file type: {file_extension}")
+
+
+def load_document_text(file_path: str) -> tuple[str, str]:
+    """Load full text from a document file (no chunking).
+
+    Returns ``(full_text, title)`` where *title* is derived from the
+    filename.  Uses the same loader classes as ``DocumentLoader`` but
+    joins all pages instead of splitting into chunks.
+    """
+    p = pathlib.Path(file_path)
+    ext = p.suffix.lower()
+    if ext not in DocumentLoader.supported_file_types:
+        raise ValueError(f"Unsupported file type: {ext}")
+    loader_class = DocumentLoader.supported_file_types[ext]
+    loader = loader_class(str(p))
+    pages = loader.load()
+    parts = [
+        doc.page_content
+        for doc in pages
+        if isinstance(doc.page_content, str) and doc.page_content.strip()
+    ]
+    if not parts:
+        raise ValueError(f"No text content found in: {file_path}")
+    full_text = "\n\n".join(parts)
+    # Strip UTF-16 surrogates that can appear in PDF text extraction —
+    # they crash orjson serialisation downstream (NiceGUI socketio emit).
+    full_text = full_text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="replace")
+    title = p.stem  # filename without extension
+    return full_text, title
     

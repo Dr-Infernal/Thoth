@@ -2355,6 +2355,349 @@ def section_16_skills():
                 pass
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 17 · Wiki Vault integration
+# ═════════════════════════════════════════════════════════════════════════════
+
+def section_17_wiki_vault():
+    print("\nSECTION 17 · Wiki Vault")
+    print("-" * 40)
+
+    import pathlib
+    import tempfile
+
+    try:
+        import wiki_vault as wv
+        import knowledge_graph as kg
+        import memory as mem
+    except Exception as e:
+        record("FAIL", "wiki_vault: module import", str(e))
+        return
+
+    record("PASS", "wiki_vault: module imports")
+
+    # Use a temp dir for vault + config so we don't touch real data
+    with tempfile.TemporaryDirectory() as td:
+        td_path = pathlib.Path(td)
+        orig_data_dir = wv._DATA_DIR
+        orig_cfg_path = wv._CONFIG_PATH
+
+        wv._DATA_DIR = td_path
+        wv._CONFIG_PATH = td_path / "wiki_config.json"
+        vault_root = td_path / "vault"
+        wv.set_vault_path(str(vault_root))
+        wv.set_enabled(True)
+
+        try:
+            # --- 17a. Create entity → verify .md exported ---
+            subj = f"{_PREFIX}WikiAlice_{_gen_id()}"
+            desc = f"{subj} is a wiki integration test entity with enough content to export as a full article"
+            try:
+                result = mem.save_memory("person", subj, desc, tags="wiki_test")
+                _cleanup_entity_ids.append(result["id"])
+                entity_id = result["id"]
+
+                # Manually trigger export (hooks may call export_entity)
+                entity = kg.get_entity(entity_id)
+                if entity:
+                    md_path = wv.export_entity(entity)
+                    if md_path and md_path.exists():
+                        content = md_path.read_text(encoding="utf-8")
+                        assert f"# {subj}" in content
+                        assert f"id: {entity_id}" in content
+                        record("PASS", "wiki_vault: create entity → .md exported")
+                    else:
+                        record("FAIL", "wiki_vault: export_entity returned no path")
+                else:
+                    record("FAIL", "wiki_vault: get_entity returned None after save")
+            except Exception as e:
+                record("FAIL", "wiki_vault: create + export", str(e))
+
+            # --- 17b. Update entity → verify .md updated ---
+            try:
+                new_desc = f"{subj} has been updated with additional information for wiki integration testing"
+                mem.update_memory(entity_id, new_desc, aliases="WikiAlias")
+                entity = kg.get_entity(entity_id)
+                if entity:
+                    md_path = wv.export_entity(entity)
+                    if md_path and md_path.exists():
+                        content = md_path.read_text(encoding="utf-8")
+                        assert "updated" in content.lower()
+                        assert "WikiAlias" in content or "aliases" in content.lower()
+                        record("PASS", "wiki_vault: update entity → .md updated")
+                    else:
+                        record("FAIL", "wiki_vault: export after update returned no path")
+                else:
+                    record("FAIL", "wiki_vault: get_entity after update returned None")
+            except Exception as e:
+                record("FAIL", "wiki_vault: update + re-export", str(e))
+
+            # --- 17c. search_vault finds the entity ---
+            try:
+                hits = wv.search_vault(subj[:20])
+                if hits and any(h.get("entity_id") == entity_id for h in hits):
+                    record("PASS", "wiki_vault: search_vault finds entity with entity_id")
+                elif hits:
+                    record("WARN", "wiki_vault: search_vault found results but entity_id mismatch")
+                else:
+                    record("FAIL", "wiki_vault: search_vault returned no results")
+            except Exception as e:
+                record("FAIL", "wiki_vault: search_vault", str(e))
+
+            # --- 17d. read_article by subject ---
+            try:
+                article = wv.read_article(subj)
+                if article and subj in article:
+                    record("PASS", "wiki_vault: read_article returns content")
+                else:
+                    record("FAIL", "wiki_vault: read_article returned None or missing subject")
+            except Exception as e:
+                record("FAIL", "wiki_vault: read_article", str(e))
+
+            # --- 17e. export_conversation ---
+            try:
+                msgs = [
+                    {"role": "user", "content": "Test question"},
+                    {"role": "assistant", "content": "Test answer"},
+                ]
+                conv_path = wv.export_conversation("test-conv-001", msgs, "Integration Test Chat")
+                if conv_path and conv_path.exists():
+                    conv_text = conv_path.read_text(encoding="utf-8")
+                    assert "Test question" in conv_text
+                    assert "Test answer" in conv_text
+                    record("PASS", "wiki_vault: export_conversation creates .md")
+                else:
+                    record("FAIL", "wiki_vault: export_conversation returned no path")
+            except Exception as e:
+                record("FAIL", "wiki_vault: export_conversation", str(e))
+
+            # --- 17f. get_vault_stats ---
+            try:
+                stats = wv.get_vault_stats()
+                assert stats["articles"] >= 1, f"articles={stats['articles']}"
+                assert stats["conversations"] >= 1, f"conversations={stats['conversations']}"
+                assert stats["enabled"] is True
+                record("PASS", f"wiki_vault: get_vault_stats — {stats['articles']} articles, {stats['conversations']} convs")
+            except Exception as e:
+                record("FAIL", "wiki_vault: get_vault_stats", str(e))
+
+            # --- 17g. Delete entity → verify .md removed ---
+            try:
+                entity = kg.get_entity(entity_id)
+                if entity:
+                    md_before = wv._entity_md_path(entity)
+                    wv.delete_entity_md(entity)
+                    if not md_before.exists():
+                        record("PASS", "wiki_vault: delete_entity_md removes .md file")
+                    else:
+                        record("FAIL", "wiki_vault: .md file still exists after delete")
+                else:
+                    record("WARN", "wiki_vault: entity already deleted, skipping delete test")
+            except Exception as e:
+                record("FAIL", "wiki_vault: delete_entity_md", str(e))
+
+            # --- 17h. rebuild_vault ---
+            try:
+                rebuild_stats = wv.rebuild_vault()
+                assert "total" in rebuild_stats
+                assert "exported" in rebuild_stats
+                assert "types" in rebuild_stats
+                record("PASS", f"wiki_vault: rebuild_vault — total={rebuild_stats['total']}, exported={rebuild_stats['exported']}")
+            except Exception as e:
+                record("FAIL", "wiki_vault: rebuild_vault", str(e))
+
+            # --- 17i. WikiTool instantiation ---
+            try:
+                from tools.wiki_tool import WikiTool
+                wt = WikiTool()
+                tools = wt.as_langchain_tools()
+                assert len(tools) == 5
+                names = {t.name for t in tools}
+                assert "wiki_search" in names
+                assert "wiki_read" in names
+                record("PASS", f"wiki_tool: WikiTool returns {len(tools)} tools")
+            except Exception as e:
+                record("FAIL", "wiki_tool: WikiTool instantiation", str(e))
+
+        finally:
+            wv._DATA_DIR = orig_data_dir
+            wv._CONFIG_PATH = orig_cfg_path
+
+    _cleanup_entities()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 18 · Document Knowledge Extraction Pipeline
+# ═════════════════════════════════════════════════════════════════════════════
+
+def section_18_document_extraction():
+    print("\nSECTION 18 · Document Knowledge Extraction Pipeline")
+    print("-" * 40)
+
+    if _fast_mode:
+        record("SKIP", "document extraction pipeline (fast mode)")
+        return
+
+    import tempfile
+    from pathlib import Path
+    from document_extraction import (
+        _split_into_windows,
+        _map_summarize_window,
+        _reduce_summaries,
+        _extract_from_summary,
+        _cross_window_dedup,
+        extract_from_document,
+        get_extraction_status,
+        stop_extraction,
+    )
+    from documents import load_document_text
+    import knowledge_graph as kg
+    import memory as mem
+
+    tag = _gen_id()
+
+    # --- 18a. Mock document → summarize window ---
+    try:
+        doc_text = (
+            f"Dr. {_PREFIX}Helen_{tag} is a professor at {_PREFIX}StanfordUniv_{tag}. "
+            f"She published a paper on {_PREFIX}QuantumML_{tag}, a novel approach "
+            f"combining quantum computing with machine learning. The paper was "
+            f"presented at NeurIPS 2025 in {_PREFIX}Vienna_{tag}."
+        )
+        summary = _map_summarize_window(
+            text=doc_text,
+            title=f"{_PREFIX}TestDoc_{tag}",
+            section_num=1,
+            total_sections=1,
+        )
+        if summary and len(summary) > 20:
+            record("PASS", f"doc-extract: map summarize → {len(summary)} chars")
+        else:
+            record("WARN", "doc-extract: map summarize returned short/empty (LLM may be slow)")
+    except Exception as e:
+        record("FAIL", "doc-extract: _map_summarize_window", str(e))
+        summary = ""
+
+    # --- 18b. Verify source tagging in extract_from_document ---
+    try:
+        # Create a temp .txt file to test the full pipeline
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8",
+        ) as f:
+            f.write(
+                f"{_PREFIX}Carlos_{tag} is the CEO of {_PREFIX}AcmeAI_{tag}, "
+                f"a startup based in {_PREFIX}Austin_{tag} that builds "
+                f"autonomous agents for enterprise workflows. "
+                f"He previously worked at Google Brain on transformer architectures."
+            )
+            tmp_path = f.name
+
+        display_name = f"{_PREFIX}testreport_{tag}.txt"
+        result = extract_from_document(
+            file_path=tmp_path,
+            display_name=display_name,
+        )
+        assert result["status"] in ("completed", "stopped"), f"unexpected status: {result['status']}"
+        record(
+            "PASS",
+            f"doc-extract: full pipeline → {result['entities_saved']} entities, "
+            f"status={result['status']}",
+        )
+
+        # Check entities are tagged with source="document:<name>"
+        all_entities = kg.list_entities(limit=200)
+        doc_source = f"document:{display_name}"
+        tagged = [
+            e for e in all_entities
+            if e.get("source", "").startswith("document:") and _PREFIX in e.get("subject", "")
+        ]
+        for te in tagged:
+            _cleanup_entity_ids.append(te["id"])
+
+        if tagged:
+            record("PASS", f"doc-extract: {len(tagged)} entities tagged with document source")
+        else:
+            record("WARN", "doc-extract: no tagged entities found (LLM may have renamed)")
+
+        # Cleanup temp file
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    except Exception as e:
+        record("FAIL", "doc-extract: full pipeline", str(e))
+
+    # --- 18c. Document hub entity (category=media) created by map-reduce ---
+    try:
+        if tagged:
+            media_entities = [e for e in tagged if e.get("entity_type") == "media" or e.get("category") == "media"]
+            if media_entities:
+                record("PASS", f"doc-extract: document hub entity created (media type)")
+            else:
+                record("WARN", "doc-extract: no media hub entity (LLM may have omitted)")
+        else:
+            record("SKIP", "doc-extract: no entities to check for hub")
+    except Exception as e:
+        record("FAIL", "doc-extract: hub entity check", str(e))
+
+    # --- 18d. Cross-window dedup on simulated multi-window extraction ---
+    try:
+        window1 = [
+            {"category": "person", "subject": f"{_PREFIX}Bob_{tag}", "content": "A data scientist."},
+            {"category": "concept", "subject": f"{_PREFIX}MLOps_{tag}", "content": "ML operations."},
+        ]
+        window2 = [
+            {"category": "person", "subject": f"{_PREFIX}Bob_{tag}", "content": "Works at Netflix."},
+            {"relation_type": "employed_by",
+             "source_subject": f"{_PREFIX}Bob_{tag}",
+             "target_subject": "Netflix",
+             "confidence": 0.9},
+        ]
+        deduped = _cross_window_dedup(window1 + window2)
+        entities_d = [e for e in deduped if e.get("category")]
+        relations_d = [e for e in deduped if e.get("relation_type")]
+
+        # Bob should be merged into 1 entity
+        bob_entities = [e for e in entities_d if _PREFIX in e["subject"] and "Bob" in e["subject"]]
+        assert len(bob_entities) == 1, f"expected 1 Bob entity, got {len(bob_entities)}"
+        assert "Netflix" in bob_entities[0]["content"], "Bob's content should include Netflix"
+        assert len(relations_d) == 1, "relation should pass through"
+        record("PASS", "doc-extract: cross-window dedup merges correctly")
+    except Exception as e:
+        record("FAIL", "doc-extract: cross-window dedup", str(e))
+
+    # --- 18e. _dedup_and_save with custom source parameter ---
+    try:
+        from memory_extraction import _dedup_and_save
+        test_entities = [
+            {
+                "category": "fact",
+                "subject": f"{_PREFIX}SourceTest_{tag}",
+                "content": "Testing source parameter propagation.",
+            }
+        ]
+        saved = _dedup_and_save(test_entities, source=f"document:test_{tag}.pdf")
+        if saved >= 1:
+            # Verify source in DB
+            found = kg.find_by_subject(None, f"{_PREFIX}SourceTest_{tag}")
+            if found:
+                _cleanup_entity_ids.append(found["id"])
+                actual_source = found.get("source", "")
+                if "document:" in actual_source:
+                    record("PASS", f"doc-extract: _dedup_and_save source={actual_source}")
+                else:
+                    record("WARN", f"doc-extract: source not 'document:' — got {actual_source!r}")
+            else:
+                record("WARN", "doc-extract: entity saved but not found by subject")
+        else:
+            record("WARN", "doc-extract: _dedup_and_save returned 0")
+    except Exception as e:
+        record("FAIL", "doc-extract: _dedup_and_save source", str(e))
+
+    _cleanup_entities()
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2397,6 +2740,8 @@ def main():
         14: ("Background Permissions", section_14_background_permissions),
         15: ("Bug-fix Verifications", section_15_bugfix_verifications),
         16: ("Skills Engine", section_16_skills),
+        17: ("Wiki Vault", section_17_wiki_vault),
+        18: ("Document Extraction", section_18_document_extraction),
     }
 
     # Section 1 is always required

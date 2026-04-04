@@ -195,20 +195,20 @@ def check_memory_extraction() -> CheckResult:
                 age_h = (datetime.now() - dt).total_seconds() / 3600
                 if age_h < interval * 2:
                     return CheckResult(
-                        "Memory", "ok",
+                        "Knowledge", "ok",
                         f"Last: {dt.strftime('%b %d, %I:%M %p')}",
-                        settings_tab="Memory",
+                        settings_tab="Knowledge",
                     )
                 return CheckResult(
-                    "Memory", "warn",
+                    "Knowledge", "warn",
                     f"Overdue — last: {dt.strftime('%b %d')}",
-                    settings_tab="Memory",
+                    settings_tab="Knowledge",
                 )
             except (ValueError, TypeError):
-                return CheckResult("Memory", "ok", f"Last: {last}", settings_tab="Memory")
-        return CheckResult("Memory", "ok", "Not yet run", settings_tab="Memory")
+                return CheckResult("Knowledge", "ok", f"Last: {last}", settings_tab="Knowledge")
+        return CheckResult("Knowledge", "ok", "Not yet run", settings_tab="Knowledge")
     except Exception as exc:
-        return CheckResult("Memory", "error", str(exc), settings_tab="Memory")
+        return CheckResult("Knowledge", "error", str(exc), settings_tab="Knowledge")
 
 
 def check_disk_space() -> CheckResult:
@@ -219,12 +219,12 @@ def check_disk_space() -> CheckResult:
         free_gb = usage.free / (1024 ** 3)
         pct_used = (usage.used / usage.total) * 100
         if pct_used > 95:
-            return CheckResult("Disk", "error", f"{free_gb:.1f} GB free ({pct_used:.0f}% used)")
+            return CheckResult("Disk", "error", f"{free_gb:.1f} GB free ({pct_used:.0f}% used)", settings_tab="System")
         if pct_used > 85:
-            return CheckResult("Disk", "warn", f"{free_gb:.1f} GB free ({pct_used:.0f}% used)")
-        return CheckResult("Disk", "ok", f"{free_gb:.1f} GB free")
+            return CheckResult("Disk", "warn", f"{free_gb:.1f} GB free ({pct_used:.0f}% used)", settings_tab="System")
+        return CheckResult("Disk", "ok", f"{free_gb:.1f} GB free", settings_tab="System")
     except Exception as exc:
-        return CheckResult("Disk", "error", str(exc))
+        return CheckResult("Disk", "error", str(exc), settings_tab="System")
 
 
 def check_threads_db() -> CheckResult:
@@ -249,9 +249,9 @@ def check_faiss_index() -> CheckResult:
         index_file = vector_dir / "index.faiss"
         map_file = vector_dir / "id_map.json"
         if not vector_dir.exists():
-            return CheckResult("FAISS Index", "ok", "Not yet created", settings_tab="Memory")
+            return CheckResult("FAISS Index", "ok", "Not yet created")
         if not index_file.exists():
-            return CheckResult("FAISS Index", "ok", "Empty index", settings_tab="Memory")
+            return CheckResult("FAISS Index", "ok", "Empty index")
         size_kb = index_file.stat().st_size / 1024
         entities = 0
         if map_file.exists():
@@ -263,10 +263,65 @@ def check_faiss_index() -> CheckResult:
         return CheckResult(
             "FAISS Index", "ok",
             f"{entities} vectors · {size_kb:.0f} KB",
-            settings_tab="Memory",
         )
     except Exception as exc:
-        return CheckResult("FAISS Index", "error", str(exc), settings_tab="Memory")
+        return CheckResult("FAISS Index", "error", str(exc))
+
+
+def check_dream_cycle() -> CheckResult:
+    """Check Dream Cycle status — enabled, last run time."""
+    try:
+        from dream_cycle import get_dream_status
+        status = get_dream_status()
+        if not status.get("enabled"):
+            return CheckResult("Dream Cycle", "inactive", "Disabled", settings_tab="Knowledge")
+        last = status.get("last_run")
+        if last:
+            try:
+                dt = datetime.fromisoformat(last)
+                summary = status.get("last_summary", "")
+                return CheckResult(
+                    "Dream Cycle", "ok",
+                    f"{dt.strftime('%b %d, %I:%M %p')} — {summary}",
+                    settings_tab="Knowledge",
+                )
+            except (ValueError, TypeError):
+                return CheckResult("Dream Cycle", "ok", f"Last: {last}", settings_tab="Knowledge")
+        return CheckResult("Dream Cycle", "ok", "Enabled — not yet run", settings_tab="Knowledge")
+    except Exception as exc:
+        return CheckResult("Dream Cycle", "error", str(exc), settings_tab="Knowledge")
+
+
+def check_tts() -> CheckResult:
+    """Check TTS engine status — installed and enabled."""
+    try:
+        from tts import TTSService
+        svc = TTSService()
+        if not svc._enabled:
+            return CheckResult("TTS", "inactive", "Disabled", settings_tab="Voice")
+        if not svc.is_installed():
+            return CheckResult("TTS", "warn", "Model not installed", settings_tab="Voice")
+        voice = svc._voice or "default"
+        return CheckResult("TTS", "ok", f"Kokoro · {voice}", settings_tab="Voice")
+    except Exception as exc:
+        return CheckResult("TTS", "error", str(exc), settings_tab="Voice")
+
+
+def check_wiki_vault() -> CheckResult:
+    """Check Wiki Vault status — enabled and article count."""
+    try:
+        from wiki_vault import is_enabled, get_vault_stats
+        if not is_enabled():
+            return CheckResult("Wiki Vault", "inactive", "Disabled", settings_tab="Knowledge")
+        stats = get_vault_stats()
+        articles = stats.get("articles", 0)
+        return CheckResult(
+            "Wiki Vault", "ok",
+            f"{articles} article{'s' if articles != 1 else ''}",
+            settings_tab="Knowledge",
+        )
+    except Exception as exc:
+        return CheckResult("Wiki Vault", "error", str(exc), settings_tab="Knowledge")
 
 
 def check_document_store() -> CheckResult:
@@ -311,6 +366,9 @@ ALL_CHECKS = [
     check_calendar_oauth,
     check_task_scheduler,
     check_memory_extraction,
+    check_dream_cycle,
+    check_tts,
+    check_wiki_vault,
     check_disk_space,
     check_threads_db,
     check_faiss_index,
@@ -324,6 +382,7 @@ LIGHT_CHECKS = [
     check_gmail_channel,
     check_telegram,
     check_task_scheduler,
+    check_tts,
 ]
 
 # Heavier checks (I/O, network, OAuth token probing)
@@ -333,6 +392,8 @@ HEAVY_CHECKS = [
     check_gmail_oauth,
     check_calendar_oauth,
     check_memory_extraction,
+    check_dream_cycle,
+    check_wiki_vault,
     check_disk_space,
     check_threads_db,
     check_faiss_index,

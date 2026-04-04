@@ -1,6 +1,6 @@
 # Building the Thoth Windows Installer
 
-This guide explains how to build a distributable Windows installer for Thoth v3.10.0.
+This guide explains how to build a distributable Windows installer for Thoth v3.11.0.
 
 ## Architecture
 
@@ -33,7 +33,7 @@ The installer (~30 MB) bundles the embedded Python runtime and app source code. 
 This will:
 1. Download Python 3.13 embeddable package (~15 MB)
 2. Download `get-pip.py` (~2.5 MB)
-3. Compile everything into `dist\ThothSetup_3.7.0.exe`
+3. Compile everything into `dist\ThothSetup_3.11.0.exe`
 
 ### Options
 
@@ -64,6 +64,9 @@ C:\Program Files\Thoth\            # Installation directory
     ├── memory.py                   # Long-term memory DB + FAISS vector search
     ├── memory_extraction.py        # Background memory extraction from conversations
     ├── knowledge_graph.py          # Knowledge graph (triple store + NetworkX + FAISS)
+    ├── wiki_vault.py               # Obsidian-compatible markdown vault export
+    ├── dream_cycle.py              # Nightly knowledge refinement daemon
+    ├── document_extraction.py      # Document knowledge extraction (map-reduce LLM pipeline)
     ├── models.py                   # Ollama + cloud model management
     ├── documents.py                # Document ingestion
     ├── threads.py                  # Thread/conversation persistence
@@ -89,7 +92,7 @@ C:\Program Files\Thoth\            # Installation directory
     ├── thoth.ico
     ├── static/                     # Vendored JS libraries
     │   └── vis-network.min.js
-    ├── tools/                      # 23 tool modules
+    ├── tools/                      # 24 tool modules
     │   ├── __init__.py
     │   ├── base.py
     │   ├── registry.py
@@ -102,6 +105,7 @@ C:\Program Files\Thoth\            # Installation directory
 ├── memory.db                       # Long-term memories (knowledge graph entities & relations)
 ├── memory_vectors/                 # FAISS index for semantic memory search
 ├── memory_extraction_state.json    # Tracks last extraction run
+├── dream_journal.json              # Dream Cycle operation log
 ├── api_keys.json                   # Tool API keys (Tavily, Wolfram, etc.)
 ├── cloud_config.json               # Cloud LLM provider keys and starred models
 ├── app_config.json                 # Onboarding / first-run state
@@ -114,12 +118,14 @@ C:\Program Files\Thoth\            # Installation directory
 ├── tasks.db                        # Task definitions, schedules, run history & delivery config
 ├── channels_config.json            # Channel settings (Telegram, Email)
 ├── shell_history.json              # Shell command history per thread
+├── skills_config.json              # Skill enable/disable state
 ├── user_config.json                # Avatar emoji & ring color preferences
 ├── thoth_app.log                   # Application log
 ├── vector_store/                   # FAISS index for uploaded documents
 ├── gmail/                          # Gmail OAuth tokens
 ├── calendar/                       # Calendar OAuth tokens
 ├── browser_profile/                # Playwright persistent browser profile
+├── wiki/                           # Obsidian-compatible markdown vault export
 └── kokoro/                         # Kokoro TTS model & voice data (auto-downloaded)
 ```
 
@@ -143,7 +149,7 @@ The Inno Setup installer runs these steps:
 
 ## End-User Experience
 
-1. Run `ThothSetup_3.7.0.exe`
+1. Run `ThothSetup_3.11.0.exe`
 2. Follow the wizard — dependencies download and install automatically (5-15 min)
 3. Launch Thoth from Start Menu or Desktop shortcut
 4. The system tray icon appears; the app opens at `http://localhost:8080`

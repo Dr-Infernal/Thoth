@@ -1,4 +1,4 @@
-"""Thoth UI — Home screen (Tasks / Memory Graph / Activity tabs).
+"""Thoth UI — Home screen (Tasks / Knowledge Graph / Activity tabs).
 
 Extracted from the monolith's ``_build_home`` inner function.
 """
@@ -32,7 +32,7 @@ def build_home(
     mark_onboarding_seen: Callable,
     open_settings: Callable | None = None,
 ) -> None:
-    """Render the home screen with Tasks / Memory Graph / Activity tabs."""
+    """Render the home screen with Tasks / Knowledge Graph / Activity tabs."""
     from models import is_cloud_model, get_current_model
     from tools import registry as tool_registry
     from threads import _save_thread_meta
@@ -54,11 +54,11 @@ def build_home(
         "align=center"
     ).style("border-bottom: 1px solid rgba(255,255,255,0.08);") as home_tabs:
         tasks_tab = ui.tab("Tasks", icon="bolt")
-        graph_tab = ui.tab("Memory", icon="psychology")
+        graph_tab = ui.tab("Knowledge", icon="psychology")
         activity_tab = ui.tab("Activity", icon="assessment")
 
     def _on_tab_change(e):
-        if e.value == 'Memory':
+        if e.value == 'Knowledge':
             ui.run_javascript(
                 'setTimeout(function() {'
                 '  if (window.thothGraphRedraw) window.thothGraphRedraw();'
@@ -358,9 +358,9 @@ def _build_activity_content(container) -> None:
             else:
                 ui.label("No task runs yet.").classes("text-grey-6 text-sm q-ml-sm")
 
-            # Memory Extraction
+            # Knowledge Extraction
             ui.separator().classes("q-my-sm")
-            ui.label("🧠 Memory Extraction").classes("text-subtitle1 font-bold")
+            ui.label("🧠 Knowledge Extraction").classes("text-subtitle1 font-bold")
             mem_status = get_extraction_status()
             last_ext = mem_status.get("last_extraction")
             if last_ext:
@@ -370,10 +370,60 @@ def _build_activity_content(container) -> None:
                     ui.label(
                         f"Last run: {dt.strftime('%b %d, %I:%M %p')} · Runs every {interval_h}h"
                     ).classes("text-sm q-ml-sm")
+                    threads_n = mem_status.get("threads_scanned", 0)
+                    saved_n = mem_status.get("entities_saved", 0)
+                    islands_n = mem_status.get("islands_repaired", 0)
+                    parts = []
+                    if threads_n:
+                        parts.append(f"{threads_n} thread(s) scanned")
+                    if saved_n:
+                        parts.append(f"{saved_n} entities saved")
+                    if islands_n:
+                        parts.append(f"{islands_n} island(s) repaired")
+                    if parts:
+                        ui.label(" · ".join(parts)).classes("text-xs text-grey-6 q-ml-sm")
                 except (ValueError, TypeError):
                     ui.label(f"Last run: {last_ext}").classes("text-sm q-ml-sm")
             else:
                 ui.label("Not yet run — starts automatically.").classes("text-grey-6 text-sm q-ml-sm")
+
+            # Dream Cycle
+            ui.separator().classes("q-my-sm")
+            ui.label("🌙 Dream Cycle").classes("text-subtitle1 font-bold")
+            from dream_cycle import get_dream_status, get_journal
+            dream_status = get_dream_status()
+            if dream_status.get("enabled"):
+                ui.label(
+                    f"Window: {dream_status.get('window', '1:00 – 5:00')}"
+                ).classes("text-sm q-ml-sm")
+                if dream_status.get("last_run"):
+                    try:
+                        dt = datetime.fromisoformat(dream_status["last_run"])
+                        ui.label(
+                            f"Last run: {dt.strftime('%b %d, %I:%M %p')} — "
+                            f"{dream_status.get('last_summary', '')}"
+                        ).classes("text-sm q-ml-sm")
+                    except (ValueError, TypeError):
+                        ui.label(f"Last run: {dream_status['last_run']}").classes("text-sm q-ml-sm")
+                else:
+                    ui.label("No dream cycles yet — runs during idle hours.").classes("text-grey-6 text-sm q-ml-sm")
+
+                # Show recent journal entries
+                journal = get_journal(limit=3)
+                if journal:
+                    for entry in reversed(journal):
+                        ts = entry.get("timestamp", "")
+                        summary = entry.get("summary", "")
+                        if ts and summary:
+                            try:
+                                jdt = datetime.fromisoformat(ts)
+                                ui.label(
+                                    f"  {jdt.strftime('%b %d')} — {summary}"
+                                ).classes("text-xs text-grey-6 q-ml-lg")
+                            except (ValueError, TypeError):
+                                pass
+            else:
+                ui.label("Disabled — enable in Settings → Knowledge.").classes("text-grey-6 text-sm q-ml-sm")
 
             # Channels
             ui.separator().classes("q-my-sm")

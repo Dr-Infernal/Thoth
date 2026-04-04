@@ -1382,28 +1382,42 @@ try:
     else:
         record("FAIL", "kg: graph_enhanced_recall missing _touch_recalled")
 
-    # --- 17i. Orphan repair -----------------------------------------------
+    # --- 17i. Graph island repair ----------------------------------------
 
-    if callable(getattr(_kg17, "repair_orphan_entities", None)):
-        record("PASS", "kg: repair_orphan_entities callable")
-        _roe_src = _inspect.getsource(_kg17.repair_orphan_entities)
+    if callable(getattr(_kg17, "repair_graph_islands", None)):
+        record("PASS", "kg: repair_graph_islands callable")
+        _roe_src = _inspect.getsource(_kg17.repair_graph_islands)
         if "_ensure_user_entity" in _roe_src:
-            record("PASS", "kg: repair_orphan_entities uses _ensure_user_entity")
+            record("PASS", "kg: repair_graph_islands uses _ensure_user_entity")
         else:
-            record("FAIL", "kg: repair_orphan_entities missing _ensure_user_entity")
+            record("FAIL", "kg: repair_graph_islands missing _ensure_user_entity")
         if "_CATEGORY_RELATION_MAP" in _roe_src:
-            record("PASS", "kg: repair_orphan_entities uses _CATEGORY_RELATION_MAP")
+            record("PASS", "kg: repair_graph_islands uses _CATEGORY_RELATION_MAP")
         else:
-            record("FAIL", "kg: repair_orphan_entities missing _CATEGORY_RELATION_MAP")
+            record("FAIL", "kg: repair_graph_islands missing _CATEGORY_RELATION_MAP")
+        if "connected_components" in _roe_src:
+            record("PASS", "kg: repair_graph_islands uses connected_components")
+        else:
+            record("FAIL", "kg: repair_graph_islands missing connected_components")
+        if "_BRIDGE_PRIORITY" in _roe_src:
+            record("PASS", "kg: repair_graph_islands uses _BRIDGE_PRIORITY")
+        else:
+            record("FAIL", "kg: repair_graph_islands missing _BRIDGE_PRIORITY")
     else:
-        record("FAIL", "kg: repair_orphan_entities missing")
+        record("FAIL", "kg: repair_graph_islands missing")
 
-    # extraction calls repair_orphan_entities
-    _re_src17 = _inspect.getsource(_me_mod.run_extraction)
-    if "repair_orphan_entities" in _re_src17:
-        record("PASS", "extraction: run_extraction calls repair_orphan_entities")
+    # backward-compat alias
+    if callable(getattr(_kg17, "repair_orphan_entities", None)):
+        record("PASS", "kg: repair_orphan_entities backward-compat alias exists")
     else:
-        record("FAIL", "extraction: run_extraction missing repair_orphan_entities")
+        record("FAIL", "kg: repair_orphan_entities backward-compat alias missing")
+
+    # extraction calls repair_graph_islands
+    _re_src17 = _inspect.getsource(_me_mod.run_extraction)
+    if "repair_graph_islands" in _re_src17:
+        record("PASS", "extraction: run_extraction calls repair_graph_islands")
+    else:
+        record("FAIL", "extraction: run_extraction missing repair_graph_islands")
 
     # --- 17j. FAISS fallback in extraction relation resolution ------------
 
@@ -6170,8 +6184,8 @@ try:
     record("PASS", "status_checks: CheckResult inactive properties")
 
     # ── 41c. Check registry completeness ─────────────────────────────
-    assert len(ALL_CHECKS) == 14, f"Expected 14 checks, got {len(ALL_CHECKS)}"
-    record("PASS", "status_checks: 14 checks registered in ALL_CHECKS")
+    assert len(ALL_CHECKS) == 17, f"Expected 17 checks, got {len(ALL_CHECKS)}"
+    record("PASS", "status_checks: 17 checks registered in ALL_CHECKS")
 
     assert set(LIGHT_CHECKS).issubset(set(ALL_CHECKS)), "LIGHT_CHECKS not subset"
     assert set(HEAVY_CHECKS).issubset(set(ALL_CHECKS)), "HEAVY_CHECKS not subset"
@@ -6181,7 +6195,7 @@ try:
 
     # ── 41d. Every check runs without crashing ───────────────────────
     all_results = run_all_checks()
-    assert len(all_results) == 14, f"Expected 14 results, got {len(all_results)}"
+    assert len(all_results) == 17, f"Expected 17 results, got {len(all_results)}"
     for r in all_results:
         assert isinstance(r, CheckResult), f"Not CheckResult: {r}"
         assert r.status in ("ok", "warn", "error", "inactive"), f"Bad status: {r.status}"
@@ -6248,9 +6262,9 @@ try:
 
     # ── 41h. Force refresh populates cache ───────────────────────────
     fr = _force_refresh()
-    assert len(fr) == 14, f"force_refresh returned {len(fr)} results"
+    assert len(fr) == 17, f"force_refresh returned {len(fr)} results"
     from ui.status_bar import _status_cache, _cache_time
-    assert len(_status_cache) == 14
+    assert len(_status_cache) == 17
     assert _cache_time > 0
     record("PASS", "status_bar: force_refresh populates cache")
 
@@ -6277,7 +6291,9 @@ try:
         "Ollama": "Models", "Model": "Models", "Cloud API": "Cloud",
         "Email": "Channels", "Telegram": "Channels",
         "Gmail OAuth": "Gmail", "Calendar OAuth": "Calendar",
-        "Memory": "Memory", "FAISS Index": "Memory",
+        "Knowledge": "Knowledge", "FAISS Index": "",
+        "Dream Cycle": "Knowledge", "TTS": "Voice",
+        "Wiki Vault": "Knowledge", "Disk": "System",
         "Documents": "Documents", "Threads DB": "",
     }
     for r in all_results:
@@ -6301,6 +6317,874 @@ try:
 except Exception as e:
     record("FAIL", "status monitor", f"{type(e).__name__}: {e}")
     traceback.print_exc()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 42 · Wiki Vault
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("42. WIKI VAULT")
+print("=" * 70)
+
+import tempfile as _tf42
+
+try:
+    import wiki_vault as _wv42
+
+    # ── 42a. Module imports ──────────────────────────────────────────
+    record("PASS", "wiki_vault: module imports")
+
+    # ── 42b. _safe_filename edge cases ───────────────────────────────
+    assert _wv42._safe_filename("Hello World") == "Hello World"
+    assert _wv42._safe_filename('A<B>C:D"E') == "A_B_C_D_E"
+    assert _wv42._safe_filename("   spaces   ") == "spaces"
+    assert _wv42._safe_filename("") == "unnamed"
+    assert len(_wv42._safe_filename("x" * 200)) <= 120
+    record("PASS", "wiki_vault: _safe_filename edge cases")
+
+    # ── 42c. _entity_md_path structure ───────────────────────────────
+    _e42 = {"id": "test1", "entity_type": "person", "subject": "Alice"}
+    _p42 = _wv42._entity_md_path(_e42)
+    assert _p42.name == "Alice.md"
+    assert "person" in str(_p42)
+    record("PASS", "wiki_vault: _entity_md_path returns correct structure")
+
+    # ── 42d. _render_frontmatter YAML format ─────────────────────────
+    _e42_full = {
+        "id": "abc123",
+        "entity_type": "person",
+        "subject": "Bob",
+        "aliases": "Bobby, Robert",
+        "tags": "family, friend",
+        "properties": "{}",
+        "source": "live",
+        "created_at": "2025-01-01",
+        "updated_at": "2025-06-01",
+    }
+    _fm42 = _wv42._render_frontmatter(_e42_full)
+    assert _fm42.startswith("---")
+    assert _fm42.endswith("---")
+    assert "id: abc123" in _fm42
+    assert 'type: person' in _fm42
+    assert 'subject: "Bob"' in _fm42
+    assert "Bobby" in _fm42  # aliases
+    assert "family" in _fm42  # tags
+    record("PASS", "wiki_vault: _render_frontmatter YAML format")
+
+    # ── 42e. render_entity_md structure ──────────────────────────────
+    _md42 = _wv42.render_entity_md(_e42_full)
+    assert "<!-- Auto-generated" in _md42
+    assert "# Bob" in _md42
+    assert "---" in _md42
+    record("PASS", "wiki_vault: render_entity_md has header + frontmatter + title")
+
+    # ── 42f. Config round-trip with temp dir ─────────────────────────
+    with _tf42.TemporaryDirectory() as _td42:
+        _orig_data42 = _wv42._DATA_DIR
+        _orig_cfg42 = _wv42._CONFIG_PATH
+        _td42_p = pathlib.Path(_td42)
+        _wv42._DATA_DIR = _td42_p
+        _wv42._CONFIG_PATH = _td42_p / "wiki_config.json"
+
+        try:
+            # Initial state — disabled
+            assert not _wv42.is_enabled()
+
+            # Enable
+            _wv42.set_enabled(True)
+            assert _wv42.is_enabled()
+
+            # Set vault path
+            _custom_vault = _td42_p / "my_vault"
+            _wv42.set_vault_path(str(_custom_vault))
+            assert _wv42.get_vault_path() == _custom_vault.resolve()
+
+            # Disable
+            _wv42.set_enabled(False)
+            assert not _wv42.is_enabled()
+            record("PASS", "wiki_vault: config round-trip (enable/disable/path)")
+
+            # ── 42g. export_entity when disabled returns None ────────
+            _result42 = _wv42.export_entity(_e42_full)
+            assert _result42 is None
+            record("PASS", "wiki_vault: export_entity disabled returns None")
+
+            # ── 42h. export_entity when enabled ──────────────────────
+            _wv42.set_enabled(True)
+            _long_desc = "A" * 60  # above _MIN_CONTENT_LENGTH
+            _e42_export = {**_e42_full, "description": _long_desc}
+            _result42 = _wv42.export_entity(_e42_export)
+            assert _result42 is not None
+            assert _result42.exists()
+            _content42 = _result42.read_text(encoding="utf-8")
+            assert "# Bob" in _content42
+            assert _long_desc in _content42
+            record("PASS", "wiki_vault: export_entity creates .md file")
+
+            # ── 42i. Sparse entity (short desc) → no individual file ─
+            _e42_sparse = {**_e42_full, "id": "sparse1", "subject": "Tiny", "description": "Short"}
+            _sparse_result = _wv42.export_entity(_e42_sparse)
+            assert _sparse_result is None
+            assert not _wv42._entity_md_path(_e42_sparse).exists()
+            record("PASS", "wiki_vault: sparse entity skipped (no file)")
+
+            # ── 42j. delete_entity_md removes file ───────────────────
+            _wv42.delete_entity_md(_e42_export)
+            assert not (_wv42._entity_md_path(_e42_export)).exists()
+            record("PASS", "wiki_vault: delete_entity_md removes file")
+
+            # ── 42k. search_vault — text search ─────────────────────
+            # Re-export so we have something to search
+            _wv42.export_entity(_e42_export)
+            _hits42 = _wv42.search_vault("Bob")
+            assert len(_hits42) >= 1
+            assert _hits42[0]["title"] == "Bob"
+            assert "entity_id" in _hits42[0]
+            assert _hits42[0]["entity_id"] == "abc123"
+            record("PASS", "wiki_vault: search_vault finds entity with entity_id")
+
+            # ── 42l. search_vault returns empty for no match ─────────
+            _nohits = _wv42.search_vault("zzzznonexistent")
+            assert _nohits == []
+            record("PASS", "wiki_vault: search_vault returns [] for no match")
+
+            # ── 42m. read_article by subject ─────────────────────────
+            _article42 = _wv42.read_article("Bob")
+            assert _article42 is not None
+            assert "# Bob" in _article42
+            record("PASS", "wiki_vault: read_article returns content by subject")
+
+            # ── 42n. export_conversation ─────────────────────────────
+            _msgs = [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+            ]
+            _conv_path = _wv42.export_conversation("t-001", _msgs, "Test Chat")
+            assert _conv_path is not None
+            assert _conv_path.exists()
+            _conv_text = _conv_path.read_text(encoding="utf-8")
+            assert "**You:** Hello" in _conv_text
+            assert "**Thoth:** Hi there!" in _conv_text
+            record("PASS", "wiki_vault: export_conversation creates .md")
+
+            # ── 42o. get_vault_stats ─────────────────────────────────
+            _stats42 = _wv42.get_vault_stats()
+            assert _stats42["articles"] >= 1
+            assert _stats42["conversations"] >= 1
+            assert _stats42["enabled"] is True
+            record("PASS", "wiki_vault: get_vault_stats returns correct counts")
+
+            # ── 42p. _render_type_index ──────────────────────────────
+            _idx42 = _wv42._render_type_index("person", [_e42_export, _e42_sparse])
+            assert "# Person" in _idx42
+            assert "[[Bob]]" in _idx42
+            assert "## Quick Notes" in _idx42
+            assert "**Tiny**" in _idx42
+            record("PASS", "wiki_vault: _render_type_index groups full + sparse")
+
+            # ── 42q. _render_master_index ────────────────────────────
+            _midx42 = _wv42._render_master_index([_e42_export, _e42_sparse])
+            assert "# Thoth Knowledge Base" in _midx42
+            assert "2 entities" in _midx42
+            record("PASS", "wiki_vault: _render_master_index summary correct")
+
+        finally:
+            _wv42._DATA_DIR = _orig_data42
+            _wv42._CONFIG_PATH = _orig_cfg42
+
+except Exception as e:
+    record("FAIL", "wiki_vault", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 43 · Auto-Recall Improvements
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("43. AUTO-RECALL IMPROVEMENTS")
+print("=" * 70)
+
+try:
+    import knowledge_graph as _kg43
+    import inspect as _ins43
+
+    # ── 43a. graph_enhanced_recall signature ─────────────────────────
+    _sig43 = _ins43.signature(_kg43.graph_enhanced_recall)
+    _params43 = list(_sig43.parameters.keys())
+    assert "max_results" in _params43, "max_results parameter missing"
+    assert _sig43.parameters["max_results"].default == 20
+    record("PASS", "auto-recall: max_results param exists (default=20)")
+
+    assert "hops" in _params43
+    assert _sig43.parameters["hops"].default == 1
+    record("PASS", "auto-recall: hops param exists (default=1)")
+
+    assert _sig43.parameters["threshold"].default == 0.35
+    record("PASS", "auto-recall: threshold default is 0.35")
+
+    # ── 43b. Decay floor in source code ──────────────────────────────
+    _src43 = _ins43.getsource(_kg43.graph_enhanced_recall)
+    assert "threshold * 0.7" in _src43, "decay floor formula not found"
+    record("PASS", "auto-recall: decay_floor uses threshold * 0.7")
+
+    # ── 43c. Neighbor scoring in source ──────────────────────────────
+    assert 'seed["score"] * 0.5' in _src43 or "seed[\"score\"] * 0.5" in _src43, \
+        "neighbor score derivation not found"
+    record("PASS", "auto-recall: neighbor score derives from seed * 0.5")
+
+    # ── 43d. Wiki fallback in source ─────────────────────────────────
+    assert "wiki_vault" in _src43, "wiki_vault import not in source"
+    assert "search_vault" in _src43, "search_vault call not in source"
+    assert '"wiki"' in _src43 or "'wiki'" in _src43, "via=wiki not in source"
+    record("PASS", "auto-recall: wiki vault fallback present in source")
+
+    # ── 43e. Result cap in source ────────────────────────────────────
+    assert "[:max_results]" in _src43, "result cap slice not found"
+    record("PASS", "auto-recall: result cap uses [:max_results]")
+
+    # ── 43f. _decay_multiplier function exists ───────────────────────
+    assert callable(getattr(_kg43, "_decay_multiplier", None))
+    _dm_sig = _ins43.signature(_kg43._decay_multiplier)
+    assert "entity" in _dm_sig.parameters
+    record("PASS", "auto-recall: _decay_multiplier exists with entity param")
+
+    # ── 43g. _touch_recalled function exists ─────────────────────────
+    assert callable(getattr(_kg43, "_touch_recalled", None))
+    record("PASS", "auto-recall: _touch_recalled exists")
+
+except Exception as e:
+    record("FAIL", "auto-recall improvements", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 44 · Wiki Tool
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("44. WIKI TOOL")
+print("=" * 70)
+
+try:
+    from tools.wiki_tool import WikiTool as _WT44
+
+    # ── 44a. Tool class basic attributes ─────────────────────────────
+    _wt44 = _WT44()
+    assert _wt44.name == "wiki"
+    assert "Wiki" in _wt44.display_name
+    record("PASS", "wiki_tool: WikiTool instantiates with name='wiki'")
+
+    # ── 44b. as_langchain_tools returns list of StructuredTools ──────
+    _tools44 = _wt44.as_langchain_tools()
+    assert isinstance(_tools44, list)
+    assert len(_tools44) == 5
+    record("PASS", "wiki_tool: as_langchain_tools returns 5 tools")
+
+    # ── 44c. Tool names match expected set ───────────────────────────
+    _names44 = {t.name for t in _tools44}
+    _expected44 = {"wiki_search", "wiki_read", "wiki_rebuild", "wiki_stats", "wiki_export_conversation"}
+    assert _names44 == _expected44, f"Got {_names44}, expected {_expected44}"
+    record("PASS", "wiki_tool: all 5 tool names correct")
+
+    # ── 44d. Each tool has a description ─────────────────────────────
+    for t in _tools44:
+        assert t.description, f"{t.name} missing description"
+    record("PASS", "wiki_tool: all tools have descriptions")
+
+except Exception as e:
+    record("FAIL", "wiki_tool", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 45 · Bundled Skills Updated
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("45. BUNDLED SKILLS UPDATED")
+print("=" * 70)
+
+try:
+    import yaml as _yaml45
+except ImportError:
+    _yaml45 = None
+
+try:
+    # ── 45a. knowledge_base has YAML frontmatter ─────────────────────
+    _kb_path = PROJECT_ROOT / "bundled_skills" / "knowledge_base" / "SKILL.md"
+    _kb_text = _kb_path.read_text(encoding="utf-8")
+    assert _kb_text.startswith("---"), "knowledge_base SKILL.md missing frontmatter"
+    # Extract frontmatter
+    _parts45 = _kb_text.split("---", 2)
+    assert len(_parts45) >= 3, "knowledge_base frontmatter not properly delimited"
+    _fm_raw = _parts45[1]
+    if _yaml45:
+        _fm45 = _yaml45.safe_load(_fm_raw)
+        assert _fm45.get("name") == "knowledge_base"
+        assert "tools" not in _fm45, "knowledge_base should NOT have tools field"
+    record("PASS", "skills: knowledge_base has valid YAML frontmatter")
+
+    # ── 45b. Updated skills have no 'tools:' field ──────────────────
+    _updated_skills = ["self_reflection", "brain_dump", "meeting_notes", "deep_research"]
+    for _sname in _updated_skills:
+        _spath = PROJECT_ROOT / "bundled_skills" / _sname / "SKILL.md"
+        _stext = _spath.read_text(encoding="utf-8")
+        assert _stext.startswith("---"), f"{_sname} missing frontmatter"
+        _sparts = _stext.split("---", 2)
+        if _yaml45 and len(_sparts) >= 3:
+            _sfm = _yaml45.safe_load(_sparts[1])
+            assert "tools" not in _sfm, f"{_sname} still has tools field"
+        else:
+            # Fallback: simple text check
+            _fm_block = _sparts[1] if len(_sparts) >= 3 else ""
+            assert "tools:" not in _fm_block, f"{_sname} still has tools: in frontmatter"
+        record("PASS", f"skills: {_sname} has no tools field")
+
+    # ── 45c. self_reflection references wiki tools ───────────────────
+    _sr_path = PROJECT_ROOT / "bundled_skills" / "self_reflection" / "SKILL.md"
+    _sr_text = _sr_path.read_text(encoding="utf-8")
+    assert "wiki_search" in _sr_text, "self_reflection should reference wiki_search"
+    assert "wiki_rebuild" in _sr_text, "self_reflection should reference wiki_rebuild"
+    record("PASS", "skills: self_reflection references wiki tools")
+
+    # ── 45d. deep_research has 'Check Existing Knowledge' step ───────
+    _dr_path = PROJECT_ROOT / "bundled_skills" / "deep_research" / "SKILL.md"
+    _dr_text = _dr_path.read_text(encoding="utf-8")
+    assert "Check Existing Knowledge" in _dr_text
+    assert "Save Key Findings" in _dr_text or "Save" in _dr_text
+    record("PASS", "skills: deep_research has knowledge check + save steps")
+
+    # ── 45e. brain_dump has dedup check step ─────────────────────────
+    _bd_path = PROJECT_ROOT / "bundled_skills" / "brain_dump" / "SKILL.md"
+    _bd_text = _bd_path.read_text(encoding="utf-8")
+    assert "Check Existing Knowledge" in _bd_text or "search_memory" in _bd_text
+    record("PASS", "skills: brain_dump checks existing knowledge before saving")
+
+    # ── 45f. meeting_notes mentions knowledge graph linking ──────────
+    _mn_path = PROJECT_ROOT / "bundled_skills" / "meeting_notes" / "SKILL.md"
+    _mn_text = _mn_path.read_text(encoding="utf-8")
+    assert "knowledge graph" in _mn_text.lower() or "auto-link" in _mn_text.lower() or "wiki" in _mn_text.lower()
+    record("PASS", "skills: meeting_notes references knowledge graph/wiki")
+
+except Exception as e:
+    record("FAIL", "bundled skills updated", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# SECTION 46 · Document Knowledge Extraction (Map-Reduce Pipeline)
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("46. DOCUMENT KNOWLEDGE EXTRACTION (MAP-REDUCE)")
+print("=" * 70)
+
+try:
+    # ── 46a. New map-reduce prompts exist with placeholders ──────────
+    from prompts import DOC_MAP_PROMPT, DOC_REDUCE_PROMPT, DOC_EXTRACT_PROMPT
+    assert isinstance(DOC_MAP_PROMPT, str) and len(DOC_MAP_PROMPT) > 50
+    for _ph in ["{document_title}", "{section_number}", "{total_sections}", "{document_text}"]:
+        assert _ph in DOC_MAP_PROMPT, f"DOC_MAP_PROMPT missing placeholder {_ph}"
+    record("PASS", "doc-extract: DOC_MAP_PROMPT defined with placeholders")
+
+    assert isinstance(DOC_REDUCE_PROMPT, str) and len(DOC_REDUCE_PROMPT) > 50
+    for _ph in ["{document_title}", "{section_summaries}"]:
+        assert _ph in DOC_REDUCE_PROMPT, f"DOC_REDUCE_PROMPT missing placeholder {_ph}"
+    record("PASS", "doc-extract: DOC_REDUCE_PROMPT defined with placeholders")
+
+    assert isinstance(DOC_EXTRACT_PROMPT, str) and len(DOC_EXTRACT_PROMPT) > 50
+    for _ph in ["{document_title}", "{document_summary}"]:
+        assert _ph in DOC_EXTRACT_PROMPT, f"DOC_EXTRACT_PROMPT missing placeholder {_ph}"
+    # Verify aggressive extraction guidance
+    assert "3-8" in DOC_EXTRACT_PROMPT or "SELECTIVE" in DOC_EXTRACT_PROMPT, \
+        "DOC_EXTRACT_PROMPT should guide toward selective extraction"
+    record("PASS", "doc-extract: DOC_EXTRACT_PROMPT defined with selective guidance")
+
+    # ── 46b. Legacy alias still works ────────────────────────────────
+    from prompts import DOCUMENT_EXTRACTION_PROMPT as _DEP
+    assert _DEP is DOC_EXTRACT_PROMPT, "DOCUMENT_EXTRACTION_PROMPT should alias DOC_EXTRACT_PROMPT"
+    record("PASS", "doc-extract: DOCUMENT_EXTRACTION_PROMPT legacy alias intact")
+
+    # ── 46c. EXTRACTION_PROMPT lists all 10 entity types ─────────────
+    from prompts import EXTRACTION_PROMPT as _EP
+    _TEN_TYPES = ["person", "preference", "fact", "event", "place",
+                  "project", "organisation", "concept", "skill", "media"]
+    for _t in _TEN_TYPES:
+        assert _t in _EP, f"EXTRACTION_PROMPT missing type: {_t}"
+    record("PASS", "doc-extract: EXTRACTION_PROMPT has all 10 entity types")
+
+    # ── 46d. load_document_text is callable ──────────────────────────
+    import inspect as _inspect46
+    from documents import load_document_text as _ldt
+    assert callable(_ldt), "load_document_text not callable"
+    _sig = _inspect46.signature(_ldt)
+    assert "file_path" in _sig.parameters, "missing file_path param"
+    record("PASS", "doc-extract: load_document_text() callable with file_path param")
+
+    # ── 46e. _split_into_windows produces correct windows ────────────
+    from document_extraction import _split_into_windows
+    _w1 = _split_into_windows("Hello world", window_size=100, overlap=10)
+    assert len(_w1) == 1, f"expected 1 window, got {len(_w1)}"
+    _long = "A" * 250
+    _w2 = _split_into_windows(_long, window_size=100, overlap=20)
+    assert len(_w2) >= 3, f"expected ≥3 windows for 250 chars, got {len(_w2)}"
+    _end_of_first = _w2[0][-20:]
+    _start_of_second = _w2[1][:20]
+    assert _end_of_first == _start_of_second, "windows don't overlap correctly"
+    record("PASS", "doc-extract: _split_into_windows correct count + overlap")
+
+    # ── 46f. _cross_window_dedup merges same-subject entities ────────
+    from document_extraction import _cross_window_dedup
+    _dupes = [
+        {"category": "person", "subject": "Alice", "content": "A researcher."},
+        {"category": "person", "subject": "Alice", "content": "Works at MIT."},
+        {"category": "concept", "subject": "Graph Theory", "content": "A math field."},
+        {"relation_type": "affiliated_with", "source_subject": "Alice",
+         "target_subject": "MIT", "confidence": 0.9},
+    ]
+    _deduped = _cross_window_dedup(_dupes)
+    _entities = [e for e in _deduped if "category" in e]
+    _rels = [e for e in _deduped if "relation_type" in e]
+    assert len(_entities) == 2, f"expected 2 entities after dedup, got {len(_entities)}"
+    assert len(_rels) == 1, "relation should pass through"
+    _alice = [e for e in _entities if e["subject"] == "Alice"][0]
+    assert "researcher" in _alice["content"].lower() and "MIT" in _alice["content"], \
+        "Alice content not merged"
+    record("PASS", "doc-extract: _cross_window_dedup merges same-subject entities")
+
+    # ── 46g. Map/reduce/extract functions exist and are callable ─────
+    from document_extraction import _map_summarize_window, _reduce_summaries, _extract_from_summary
+    assert callable(_map_summarize_window), "_map_summarize_window not callable"
+    assert callable(_reduce_summaries), "_reduce_summaries not callable"
+    assert callable(_extract_from_summary), "_extract_from_summary not callable"
+    _sig_map = _inspect46.signature(_map_summarize_window)
+    assert "title" in _sig_map.parameters and "section_num" in _sig_map.parameters
+    _sig_red = _inspect46.signature(_reduce_summaries)
+    assert "title" in _sig_red.parameters and "summaries" in _sig_red.parameters
+    _sig_ext = _inspect46.signature(_extract_from_summary)
+    assert "title" in _sig_ext.parameters and "summary" in _sig_ext.parameters
+    record("PASS", "doc-extract: map/reduce/extract pipeline functions callable")
+
+    # ── 46h. extract_from_document has map-reduce phases ─────────────
+    _dex_src = _inspect46.getsource(__import__("document_extraction").extract_from_document)
+    assert "_map_summarize_window" in _dex_src, "extract_from_document must call _map_summarize_window"
+    assert "_reduce_summaries" in _dex_src, "extract_from_document must call _reduce_summaries"
+    assert "_extract_from_summary" in _dex_src, "extract_from_document must call _extract_from_summary"
+    assert "hub_entity" in _dex_src or "hub_id" in _dex_src, \
+        "extract_from_document must create document hub entity"
+    assert "extracted_from" in _dex_src, \
+        "extract_from_document must link entities with extracted_from"
+    record("PASS", "doc-extract: extract_from_document uses map-reduce + hub entity")
+
+    # ── 46i. DocumentLoader.supported_file_types includes new formats ─
+    from documents import DocumentLoader
+    _sft = DocumentLoader.supported_file_types
+    assert ".md" in _sft, ".md not in supported_file_types"
+    assert ".pdf" in _sft and ".txt" in _sft, "existing formats missing"
+    record("PASS", "doc-extract: DocumentLoader supports .md (+ .html/.epub if deps available)")
+
+    # ── 46j. _dedup_and_save accepts source parameter ────────────────
+    from memory_extraction import _dedup_and_save
+    _sig_ds = _inspect46.signature(_dedup_and_save)
+    assert "source" in _sig_ds.parameters, "missing source param"
+    _default = _sig_ds.parameters["source"].default
+    assert _default == "extraction", f"default should be 'extraction', got {_default!r}"
+    record("PASS", "doc-extract: _dedup_and_save accepts source param (default='extraction')")
+
+    # ── 46k. queue_extraction adds to queue ──────────────────────────
+    import document_extraction as _dex
+    with _dex._queue_lock:
+        _saved_queue = list(_dex._extraction_queue)
+        _dex._extraction_queue.clear()
+    _initial_len = _dex.get_queue_length()
+    assert _initial_len == 0, f"queue not empty: {_initial_len}"
+    with _dex._queue_lock:
+        _dex._extraction_queue.append(("/fake/path.pdf", "test.pdf"))
+    assert _dex.get_queue_length() == 1, "queue_length should be 1"
+    with _dex._queue_lock:
+        _dex._extraction_queue.clear()
+        _dex._extraction_queue.extend(_saved_queue)
+    record("PASS", "doc-extract: queue_extraction adds to queue + get_queue_length works")
+
+    # ── 46l. get_extraction_status returns None when idle ────────────
+    with _dex._state_lock:
+        _saved_state = _dex._active_extraction
+        _dex._active_extraction = None
+    _status = _dex.get_extraction_status()
+    assert _status is None, f"expected None when idle, got {_status}"
+    with _dex._state_lock:
+        _dex._active_extraction = _saved_state
+    record("PASS", "doc-extract: get_extraction_status returns None when idle")
+
+    # ── 46m. delete_entities_by_source exists and is callable ────────
+    import knowledge_graph as _kg46
+    assert callable(getattr(_kg46, "delete_entities_by_source", None)), \
+        "knowledge_graph missing delete_entities_by_source"
+    _sig_des = _inspect46.signature(_kg46.delete_entities_by_source)
+    assert "source" in _sig_des.parameters, "missing source param"
+    record("PASS", "doc-extract: delete_entities_by_source callable")
+
+    # ── 46n. delete_entities_by_source_prefix exists ─────────────────
+    assert callable(getattr(_kg46, "delete_entities_by_source_prefix", None)), \
+        "knowledge_graph missing delete_entities_by_source_prefix"
+    _sig_dep = _inspect46.signature(_kg46.delete_entities_by_source_prefix)
+    assert "prefix" in _sig_dep.parameters, "missing prefix param"
+    record("PASS", "doc-extract: delete_entities_by_source_prefix callable")
+
+    # ── 46o. remove_document exists in documents.py ──────────────────
+    from documents import remove_document as _rd46
+    assert callable(_rd46), "remove_document not callable"
+    _sig_rd = _inspect46.signature(_rd46)
+    assert "display_name" in _sig_rd.parameters, "missing display_name param"
+    record("PASS", "doc-extract: remove_document callable with display_name param")
+
+    # ── 46p. Graph panel boot: createNetwork before applyFilters ─────
+    _gp_path = PROJECT_ROOT / "ui" / "graph_panel.py"
+    _gp_text = _gp_path.read_text(encoding="utf-8")
+    _boot_idx = _gp_text.find("function boot()")
+    assert _boot_idx > 0, "boot() function not found in graph_panel.py"
+    _boot_block = _gp_text[_boot_idx:_boot_idx + 500]
+    _cn_pos = _boot_block.find("G.createNetwork")
+    _af_pos = _boot_block.find("G.applyFilters")
+    assert _cn_pos > 0 and _af_pos > 0, "createNetwork or applyFilters not found in boot()"
+    assert _cn_pos < _af_pos, \
+        f"boot() must call createNetwork (pos {_cn_pos}) BEFORE applyFilters (pos {_af_pos})"
+    record("PASS", "doc-extract: graph panel boot calls createNetwork before applyFilters")
+
+    # ── 46q. graph_to_vis_json edges have id field ───────────────────
+    _test_vis = _kg46.graph_to_vis_json(entity_id=None)
+    assert "edges" in _test_vis, "graph_to_vis_json must return 'edges' key"
+    _kg_text = (PROJECT_ROOT / "knowledge_graph.py").read_text(encoding="utf-8")
+    assert '"id": f"{src}__{tgt}__{rel}"' in _kg_text, \
+        "graph_to_vis_json must add 'id' field to edges"
+    record("PASS", "doc-extract: graph_to_vis_json edges include id field")
+
+    # ── 46r. thothGraphRedraw calls applyFilters after createNetwork ─
+    _redraw_idx = _gp_text.find("thothGraphRedraw")
+    assert _redraw_idx > 0, "thothGraphRedraw not found"
+    _redraw_block = _gp_text[_redraw_idx:_redraw_idx + 500]
+    _cn_r = _redraw_block.find("G.createNetwork")
+    _af_r = _redraw_block.find("G.applyFilters")
+    assert _cn_r > 0 and _af_r > 0, "createNetwork or applyFilters not in thothGraphRedraw"
+    assert _cn_r < _af_r, "thothGraphRedraw must call createNetwork before applyFilters"
+    record("PASS", "doc-extract: thothGraphRedraw has createNetwork then applyFilters")
+
+    # ── 46s. settings.py imports remove_document ─────────────────────
+    _settings_src = (PROJECT_ROOT / "ui" / "settings.py").read_text(encoding="utf-8")
+    assert "remove_document" in _settings_src, "settings.py must import remove_document"
+    assert "delete_entities_by_source" in _settings_src, \
+        "settings.py must call delete_entities_by_source for cleanup"
+    assert "delete_entities_by_source_prefix" in _settings_src, \
+        "settings.py clear-all must call delete_entities_by_source_prefix"
+    record("PASS", "doc-extract: settings.py wired with per-doc + bulk cleanup")
+
+except Exception as e:
+    record("FAIL", "doc-extract", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 47 · Wiki Cleanup & Knowledge Tab Consolidation
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("47. WIKI CLEANUP & KNOWLEDGE TAB CONSOLIDATION")
+print("=" * 70)
+
+try:
+    import wiki_vault as _wv47
+    import tempfile, pathlib
+
+    # ── 47a. clear_wiki_folder() clears wiki/ preserves raw/ + conversations/
+    with tempfile.TemporaryDirectory() as _td47:
+        _orig_data47 = _wv47._DATA_DIR
+        _orig_cfg47 = _wv47._CONFIG_PATH
+        _wv47._DATA_DIR = pathlib.Path(_td47)
+        _wv47._CONFIG_PATH = pathlib.Path(_td47) / "wiki_config.json"
+
+        try:
+            _wv47.set_vault_path(str(pathlib.Path(_td47) / "vault"))
+            _wv47.set_enabled(True)
+            _vault47 = _wv47.get_vault_path()
+
+            # Create files in wiki/, raw/, conversations/
+            (_vault47 / "wiki" / "person").mkdir(parents=True, exist_ok=True)
+            (_vault47 / "wiki" / "person" / "Alice.md").write_text("test")
+            (_vault47 / "wiki" / "concept" ).mkdir(parents=True, exist_ok=True)
+            (_vault47 / "wiki" / "concept" / "AI.md").write_text("test")
+            (_vault47 / "wiki" / "index.md").write_text("master")
+            (_vault47 / "raw").mkdir(parents=True, exist_ok=True)
+            (_vault47 / "raw" / "upload.pdf").write_text("fake pdf")
+            (_vault47 / "conversations").mkdir(parents=True, exist_ok=True)
+            (_vault47 / "conversations" / "chat.md").write_text("convo")
+
+            removed = _wv47.clear_wiki_folder()
+            assert removed == 3, f"Expected 3 removed, got {removed}"
+            assert not (_vault47 / "wiki" / "person" / "Alice.md").exists()
+            assert not (_vault47 / "wiki" / "concept" / "AI.md").exists()
+            assert not (_vault47 / "wiki" / "index.md").exists()
+            # raw/ and conversations/ must survive
+            assert (_vault47 / "raw" / "upload.pdf").exists(), "raw/ must be preserved"
+            assert (_vault47 / "conversations" / "chat.md").exists(), "conversations/ must be preserved"
+            record("PASS", "wiki_vault: clear_wiki_folder clears wiki/ preserves raw/+conversations/")
+
+            # ── 47b. rebuild_vault() removes orphan .md files ─────────
+            # Create orphan file
+            (_vault47 / "wiki" / "person").mkdir(parents=True, exist_ok=True)
+            (_vault47 / "wiki" / "person" / "Orphan.md").write_text("stale")
+            # rebuild with no entities → orphan should be removed
+            import knowledge_graph as _kg47
+            _orig_db47 = _kg47.DB_PATH
+            _kg47.DB_PATH = str(pathlib.Path(_td47) / "test_kg47.db")
+            _kg47._init_db()
+            try:
+                stats = _wv47.rebuild_vault()
+                assert stats.get("orphans_removed", 0) >= 1, f"Expected orphans_removed >= 1, got {stats}"
+                assert not (_vault47 / "wiki" / "person" / "Orphan.md").exists(), "Orphan.md should be removed"
+                record("PASS", "wiki_vault: rebuild_vault removes orphan .md files")
+            finally:
+                _kg47.DB_PATH = _orig_db47
+
+        finally:
+            _wv47._DATA_DIR = _orig_data47
+            _wv47._CONFIG_PATH = _orig_cfg47
+
+    # ── 47c. delete_all_entities() calls clear_wiki_folder ────────────
+    _kg_src47 = (PROJECT_ROOT / "knowledge_graph.py").read_text(encoding="utf-8")
+    assert "wiki_vault" in _kg_src47.split("def delete_all_entities")[1].split("\ndef ")[0], \
+        "delete_all_entities must reference wiki_vault"
+    assert "clear_wiki_folder" in _kg_src47.split("def delete_all_entities")[1].split("\ndef ")[0], \
+        "delete_all_entities must call clear_wiki_folder"
+    record("PASS", "knowledge_graph: delete_all_entities calls wiki_vault.clear_wiki_folder")
+
+    # ── 47d. Settings tab consolidation: Knowledge tab exists, Memory/Wiki removed
+    _settings_src47 = (PROJECT_ROOT / "ui" / "settings.py").read_text(encoding="utf-8")
+    assert '_build_knowledge_tab' in _settings_src47, "settings.py must have _build_knowledge_tab"
+    assert '_build_memory_tab' not in _settings_src47, "settings.py must NOT have _build_memory_tab"
+    assert '_build_wiki_tab' not in _settings_src47, "settings.py must NOT have _build_wiki_tab"
+    assert 'tab_knowledge' in _settings_src47, "settings.py must use tab_knowledge variable"
+    assert 'tab_mem' not in _settings_src47, "settings.py must NOT have tab_mem"
+    assert 'tab_wiki' not in _settings_src47, "settings.py must NOT have tab_wiki"
+    assert '"Knowledge"' in _settings_src47, "settings.py must reference Knowledge tab"
+    record("PASS", "settings: Knowledge tab exists, Memory/Wiki tabs removed")
+
+    # ── 47e. "Delete all knowledge" has confirmation + clears docs ────
+    assert "confirm(" in _settings_src47.split("_delete_all_knowledge")[1].split("\n\n")[0], \
+        "Delete all knowledge must have confirm dialog"
+    assert "reset_vector_store" in _settings_src47.split("_delete_all_knowledge")[1][:800], \
+        "Delete all knowledge must call reset_vector_store"
+    assert "clear_wiki_folder" in _settings_src47.split("_delete_all_knowledge")[1][:800], \
+        "Delete all knowledge must call clear_wiki_folder"
+    record("PASS", "settings: delete_all_knowledge has confirm + clears docs + wiki")
+
+    # ── 47f. "Clear all documents" has confirmation ───────────────────
+    assert "confirm(" in _settings_src47.split("_clear_docs")[1].split("\n\n")[0], \
+        "Clear all documents must have confirm dialog"
+    record("PASS", "settings: clear_all_documents has confirm dialog")
+
+    # ── 47g. Home page uses "Knowledge" not "Memory" ─────────────────
+    _home_src47 = (PROJECT_ROOT / "ui" / "home.py").read_text(encoding="utf-8")
+    assert 'ui.tab("Knowledge"' in _home_src47, "home.py must use Knowledge tab"
+    assert 'ui.tab("Memory"' not in _home_src47, "home.py must NOT use Memory tab"
+    assert "Knowledge Extraction" in _home_src47, "home.py must say Knowledge Extraction"
+    record("PASS", "home: Memory renamed to Knowledge everywhere")
+
+    # ── 47h. status_checks.py uses Knowledge tab ─────────────────────
+    _sc_src47 = (PROJECT_ROOT / "ui" / "status_checks.py").read_text(encoding="utf-8")
+    assert 'settings_tab="Memory"' not in _sc_src47, \
+        "status_checks.py must NOT reference Memory tab"
+    assert 'settings_tab="Knowledge"' in _sc_src47, \
+        "status_checks.py must reference Knowledge tab"
+    record("PASS", "status_checks: settings_tab references updated to Knowledge")
+
+except Exception as e:
+    record("FAIL", "wiki-cleanup-knowledge-tab", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 48 · Dream Cycle (Nightly Knowledge Refinement)
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("48. DREAM CYCLE")
+print("=" * 70)
+
+try:
+    import dream_cycle as _dc48
+
+    # ── 48a. Module imports and has key functions ─────────────────────
+    for fn_name in (
+        "get_config", "set_enabled", "is_enabled", "set_window",
+        "get_journal", "get_dream_status",
+        "run_dream_cycle", "start_dream_loop", "stop_dream_loop",
+        "_should_dream", "_is_idle", "_in_dream_window", "_already_ran_today",
+        "_find_merge_candidates", "_merge_entities",
+        "_find_thin_entities", "_enrich_entity",
+        "_find_cooccurring_pairs", "_infer_relation",
+        "_llm_call", "_load_config", "_save_config",
+        "_load_journal", "_save_journal", "_append_journal",
+    ):
+        assert callable(getattr(_dc48, fn_name, None)), f"dream_cycle.{fn_name} missing"
+    record("PASS", "dream_cycle: all public+internal functions exist")
+
+    # ── 48b. Default config values ───────────────────────────────────
+    cfg48 = _dc48._DEFAULT_CONFIG
+    assert cfg48["enabled"] is True, "Default enabled must be True"
+    assert cfg48["window_start"] == 1, "Default window_start must be 1"
+    assert cfg48["window_end"] == 5, "Default window_end must be 5"
+    assert cfg48["merge_threshold"] == 0.93, "Default merge_threshold must be 0.93"
+    assert cfg48["enrich_min_chars"] == 80, "Default enrich_min_chars must be 80"
+    assert cfg48["infer_confidence"] == 0.7, "Default infer_confidence must be 0.7"
+    assert cfg48["min_entities"] == 20, "Default min_entities must be 20"
+    assert cfg48["batch_size"] == 50, "Default batch_size must be 50"
+    record("PASS", "dream_cycle: default config values correct")
+
+    # ── 48c. Config persistence (save / load) ────────────────────────
+    import tempfile as _tmp48, pathlib as _pl48, json as _json48
+    _orig_config = _dc48._CONFIG_FILE
+    _test_config = _pl48.Path(_tmp48.mktemp(suffix=".json"))
+    try:
+        _dc48._CONFIG_FILE = _test_config
+        _dc48.set_enabled(False)
+        loaded = _dc48._load_config()
+        assert loaded["enabled"] is False, "set_enabled(False) must persist"
+        _dc48.set_enabled(True)
+        loaded = _dc48._load_config()
+        assert loaded["enabled"] is True, "set_enabled(True) must persist"
+        _dc48.set_window(2, 4)
+        loaded = _dc48._load_config()
+        assert loaded["window_start"] == 2 and loaded["window_end"] == 4, "set_window must persist"
+        record("PASS", "dream_cycle: config persistence works")
+    finally:
+        _dc48._CONFIG_FILE = _orig_config
+        if _test_config.exists():
+            _test_config.unlink()
+
+    # ── 48d. Journal append and rotation ─────────────────────────────
+    _orig_journal = _dc48._JOURNAL_FILE
+    _test_journal = _pl48.Path(_tmp48.mktemp(suffix=".json"))
+    try:
+        _dc48._JOURNAL_FILE = _test_journal
+        # Start fresh
+        assert _dc48._load_journal() == [], "Empty journal should return []"
+        # Append entries
+        for i in range(5):
+            _dc48._append_journal({"cycle_id": str(i), "timestamp": f"2026-04-0{i+1}T02:00:00"})
+        journal = _dc48._load_journal()
+        assert len(journal) == 5, f"Journal should have 5 entries, got {len(journal)}"
+        # get_journal with limit
+        recent = _dc48.get_journal(limit=2)
+        assert len(recent) == 2, f"get_journal(2) should return 2, got {len(recent)}"
+        assert recent[-1]["cycle_id"] == "4", "Last entry should be most recent"
+        # Test rotation cap
+        _dc48._JOURNAL_MAX_ENTRIES = 10
+        for i in range(20):
+            _dc48._append_journal({"cycle_id": f"rot_{i}"})
+        journal = _dc48._load_journal()
+        assert len(journal) <= 10, f"Journal should be capped at 10, got {len(journal)}"
+        _dc48._JOURNAL_MAX_ENTRIES = 100  # Restore
+        record("PASS", "dream_cycle: journal append, get, and rotation work")
+    finally:
+        _dc48._JOURNAL_FILE = _orig_journal
+        if _test_journal.exists():
+            _test_journal.unlink()
+
+    # ── 48e. get_dream_status returns expected keys ──────────────────
+    status48 = _dc48.get_dream_status()
+    for key in ("enabled", "window", "last_run", "last_summary"):
+        assert key in status48, f"get_dream_status must have '{key}'"
+    record("PASS", "dream_cycle: get_dream_status returns expected keys")
+
+    # ── 48f. _should_dream logic ─────────────────────────────────────
+    # When disabled, should NOT dream
+    _orig_cfg_file = _dc48._CONFIG_FILE
+    _test_cfg = _pl48.Path(_tmp48.mktemp(suffix=".json"))
+    _test_jrn = _pl48.Path(_tmp48.mktemp(suffix=".json"))
+    try:
+        _dc48._CONFIG_FILE = _test_cfg
+        _dc48._JOURNAL_FILE = _test_jrn
+        _dc48._save_config({"enabled": False, "window_start": 0, "window_end": 23})
+        assert _dc48._should_dream() is False, "Should not dream when disabled"
+        _dc48._save_config({"enabled": True, "window_start": 0, "window_end": 23})
+        # Should dream is True when enabled, in window, idle, and hasn't run today
+        # (We can't fully test the time window here — just verify the disabled check works)
+        record("PASS", "dream_cycle: _should_dream respects enabled flag")
+    finally:
+        _dc48._CONFIG_FILE = _orig_cfg_file
+        if _test_cfg.exists():
+            _test_cfg.unlink()
+        if _test_jrn.exists():
+            _test_jrn.unlink()
+
+    # ── 48g. _find_thin_entities filters by description length ───────
+    mock_entities = [
+        {"id": "e1", "description": "Short"},          # 5 chars
+        {"id": "e2", "description": "A" * 80},          # exactly 80
+        {"id": "e3", "description": "A" * 81},          # 81 chars — not thin
+        {"id": "e4", "description": ""},                 # empty
+        {"id": "e5", "description": None},               # None
+    ]
+    thin = _dc48._find_thin_entities(mock_entities, 80)
+    thin_ids = {e["id"] for e in thin}
+    assert "e1" in thin_ids, "5-char entity must be thin"
+    assert "e4" in thin_ids, "empty entity must be thin"
+    assert "e5" in thin_ids, "None-desc entity must be thin"
+    assert "e2" not in thin_ids, "exactly-80-char entity must NOT be thin"
+    assert "e3" not in thin_ids, "81-char entity must NOT be thin"
+    record("PASS", "dream_cycle: _find_thin_entities filters correctly")
+
+    # ── 48h. LLM prompts exist in prompts.py ─────────────────────────
+    import prompts as _p48
+    assert hasattr(_p48, "DREAM_MERGE_PROMPT"), "DREAM_MERGE_PROMPT missing"
+    assert hasattr(_p48, "DREAM_ENRICH_PROMPT"), "DREAM_ENRICH_PROMPT missing"
+    assert hasattr(_p48, "DREAM_INFER_PROMPT"), "DREAM_INFER_PROMPT missing"
+    # Check they have the expected format placeholders
+    assert "{subject_a}" in _p48.DREAM_MERGE_PROMPT, "DREAM_MERGE_PROMPT must use {subject_a}"
+    assert "{description_a}" in _p48.DREAM_MERGE_PROMPT, "DREAM_MERGE_PROMPT must use {description_a}"
+    assert "{subject}" in _p48.DREAM_ENRICH_PROMPT, "DREAM_ENRICH_PROMPT must use {subject}"
+    assert "{conversation_excerpts}" in _p48.DREAM_ENRICH_PROMPT, "DREAM_ENRICH_PROMPT must use {conversation_excerpts}"
+    assert "{subject_a}" in _p48.DREAM_INFER_PROMPT, "DREAM_INFER_PROMPT must use {subject_a}"
+    assert "{conversation_excerpt}" in _p48.DREAM_INFER_PROMPT, "DREAM_INFER_PROMPT must use {conversation_excerpt}"
+    record("PASS", "dream_cycle: all 3 LLM prompts exist with correct placeholders")
+
+    # ── 48i. app.py starts dream loop ────────────────────────────────
+    _app_src48 = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
+    assert "from dream_cycle import start_dream_loop" in _app_src48, \
+        "app.py must import start_dream_loop"
+    assert "start_dream_loop" in _app_src48.split("start_periodic_extraction")[-1], \
+        "start_dream_loop must be called after start_periodic_extraction"
+    record("PASS", "dream_cycle: app.py imports and starts dream loop")
+
+    # ── 48j. Knowledge tab has Dream Cycle section ───────────────────
+    _settings_src48 = (PROJECT_ROOT / "ui" / "settings.py").read_text(encoding="utf-8")
+    assert "Dream Cycle" in _settings_src48, "settings.py must have Dream Cycle section"
+    assert "dream_cycle" in _settings_src48, "settings.py must import dream_cycle"
+    assert "Enable Dream Cycle" in _settings_src48, "settings.py must have Enable toggle"
+    record("PASS", "dream_cycle: Knowledge tab has Dream Cycle UI section")
+
+    # ── 48k. Activity tab shows Dream Cycle ──────────────────────────
+    _home_src48 = (PROJECT_ROOT / "ui" / "home.py").read_text(encoding="utf-8")
+    assert "Dream Cycle" in _home_src48, "home.py must have Dream Cycle section"
+    assert "get_dream_status" in _home_src48, "home.py must call get_dream_status"
+    assert "get_journal" in _home_src48, "home.py must call get_journal"
+    record("PASS", "dream_cycle: Activity tab shows Dream Cycle + journal")
+
+    # ── 48l. Source tags use dream_ prefix ───────────────────────────
+    _dc_src48 = (PROJECT_ROOT / "dream_cycle.py").read_text(encoding="utf-8")
+    assert 'source="dream_merge"' in _dc_src48, "Merge source must be dream_merge"
+    # dream_enrich: enrich updates entity description but preserves original source
+    # (no source= on update_entity to avoid overwriting provenance)
+    assert 'source="dream_infer"' in _dc_src48, "Infer source must be dream_infer"
+    record("PASS", "dream_cycle: all operations use dream_* source tags")
+
+    # ── 48m. Safety checks in dream_cycle.py ─────────────────────────
+    # Never deletes entities outside of merge (which redirects relations first)
+    # Min entity threshold
+    assert "min_entities" in _dc_src48, "Must check min_entities before running"
+    # User entity protection
+    assert '"user"' in _dc_src48.lower(), "Must check for User entity to prevent merge"
+    # Batch cap
+    assert "batch_size" in _dc_src48, "Must respect batch_size cap"
+    record("PASS", "dream_cycle: safety checks present (min_entities, User protection, batch cap)")
+
+    # ── 48n. Daemon thread name ──────────────────────────────────────
+    assert 'name="thoth-dream-cycle"' in _dc_src48, "Daemon thread must be named thoth-dream-cycle"
+    record("PASS", "dream_cycle: daemon thread correctly named")
+
+except Exception as e:
+    record("FAIL", "dream-cycle", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
 print("=" * 70)
 print(f"  ✅ PASS: {PASS}")
 print(f"  ❌ FAIL: {FAIL}")

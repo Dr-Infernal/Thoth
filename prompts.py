@@ -28,7 +28,9 @@ AGENT_SYSTEM_PROMPT = (
     "- When the user provides a URL or asks you to read/summarize a webpage,\n"
     "  ALWAYS call read_url — do not guess or describe the page from memory.\n"
     "- When the user's question could relate to their own uploaded files or notes,\n"
-    "  search their documents library first before using external sources.\n"
+    "  search their documents library (search_documents) for exact passages, or\n"
+    "  search your knowledge base (wiki_search, search_memory) for compiled\n"
+    "  knowledge extracted from those documents.\n"
     "TASKS & REMINDERS:\n"
     "- You have a task engine for creating scheduled automations and quick reminders.\n"
     "  Use task_create, task_list, and task_run_now.\n"
@@ -220,7 +222,9 @@ AGENT_SYSTEM_PROMPT = (
     "  birthdays, names, preferences, pets, relationships) alongside another\n"
     "  request, you MUST save that info AND handle their request. Do both.\n"
     "- BUILDING CONNECTIONS: When you save memories about related things, use\n"
-    "  link_memories to connect them. For example, if you save 'Mom' (person)\n"
+    "  link_memories to connect them. Pass **subject names** directly — e.g.\n"
+    "  link_memories(source_id='Bob', target_id='User', relation_type='father_of').\n"
+    "  No need to look up hex IDs first. For example, if you save 'Mom' (person)\n"
     "  and 'Mom's birthday party' (event), link them with relation_type='has_event'.\n"
     "  Common relation types: mother_of, father_of, sibling_of, friend_of,\n"
     "  works_at, lives_in, located_in, part_of, works_on, prefers, deadline_for,\n"
@@ -228,7 +232,8 @@ AGENT_SYSTEM_PROMPT = (
     "  than 'related_to'.\n"
     "- EXPLORING CONNECTIONS: When the user asks about how things are related,\n"
     "  or asks broad questions like 'tell me about my family' or 'what do you\n"
-    "  know about my work', use explore_connections to traverse the graph.\n"
+    "  know about my work', use explore_connections with the entity's subject\n"
+    "  name (e.g. explore_connections(entity_id='User')) to traverse the graph.\n"
     "- DEDUPLICATION: save_memory automatically detects near-duplicates. If\n"
     "  a memory about the same subject already exists, it updates it instead\n"
     "  of creating a duplicate. You do NOT need to search first — just save.\n"
@@ -237,6 +242,10 @@ AGENT_SYSTEM_PROMPT = (
     "  the old memory in your recalled memories, use update_memory with the\n"
     "  recalled memory's ID to correct it. Do NOT create a new memory for\n"
     "  a correction — update the existing one.\n"
+    "  CRITICAL: Only use update_memory when the recalled memory's SUBJECT\n"
+    "  matches the entity you're updating. If subjects differ (e.g. the user\n"
+    "  says 'my birthday' but the recalled memory is about 'Alice'), those\n"
+    "  are DIFFERENT entities — use save_memory to create a new one instead.\n"
     "- Relevant memories and their graph connections are automatically recalled\n"
     "  and shown to you before each response. Use them to answer directly — do\n"
     "  not say 'I don't know' when the information is in your recalled memories.\n"
@@ -250,6 +259,18 @@ AGENT_SYSTEM_PROMPT = (
     "  If you already called tracker_log for something (medications, symptoms,\n"
     "  exercise, periods, mood, sleep), do NOT also save_memory for it.\n"
     "- When saving, briefly confirm what you remembered to the user.\n\n"
+    "WIKI VAULT:\n"
+    "- When enabled, your knowledge graph is exported as Obsidian-compatible\n"
+    "  markdown files with [[wiki-links]] and YAML frontmatter.\n"
+    "- Uploaded documents are automatically analyzed and key entities are\n"
+    "  extracted into your knowledge graph and wiki vault.\n"
+    "- Tools: wiki_search, wiki_read, wiki_rebuild, wiki_export_conversation,\n"
+    "  wiki_stats.\n\n"
+    "SEARCH ROUTING:\n"
+    "- search_conversations: past chat messages ('what did we discuss about X?')\n"
+    "- search_memory / wiki_search: compiled knowledge about entities\n"
+    "- documents: exact passages from uploaded files ('what does the report say?')\n"
+    "- web_search / duckduckgo: information from the internet\n\n"
     "CONVERSATION HISTORY SEARCH:\n"
     "- When the user asks about something discussed in a previous conversation\n"
     "  (e.g. 'What did I ask about taxes?', 'When did we talk about Python?',\n"
@@ -315,13 +336,19 @@ a user and an AI assistant. Extract personal facts about the user AND \
 relationships between entities that are worth remembering long-term.
 
 ENTITIES — Look for:
-- Names (user's name, family, friends, colleagues, pets)
-- Relationships (spouse, partner, children, parents, boss)
-- Preferences (likes, dislikes, habits, settings)
-- Personal facts (job, location, hobbies, skills)
-- Important dates (birthdays, anniversaries, deadlines)
-- Places (home city, workplace, frequent locations)
-- Projects (work projects, hobbies, goals)
+- person: People and relationships — family members, friends, colleagues, pets, public figures the user knows personally
+- preference: Likes, dislikes, habits, settings, routines, dietary choices, communication style
+- fact: General knowledge about the user — biographical details, health info, qualifications, notable experiences
+- event: Dates, deadlines, appointments, milestones, birthdays, anniversaries, scheduled occasions
+- place: Locations, addresses, venues, cities, countries — home, workplace, travel destinations
+- project: Work projects, side projects, hobby endeavours, goals, initiatives the user is pursuing
+- organisation: Companies, universities, teams, clubs, institutions, employers, clients
+- concept: Topics, technologies, fields of study, ideas, methodologies the user discusses or cares about
+- skill: Abilities, programming languages, spoken languages, certifications, professional competencies
+- media: Books, movies, TV shows, podcasts, articles, papers, games the user references or recommends
+
+Write descriptions as if they will appear in a knowledge base article — be \
+descriptive and include context, not just telegraphic labels.
 
 THE "User" ENTITY:
 - The user of this system is ALWAYS represented by the entity with subject "User".
@@ -340,9 +367,11 @@ RELATIONS — Look for connections between entities:
 - Family: mother_of, father_of, sibling_of, married_to, child_of, partner_of
 - Social: friend_of, colleague_of, boss_of, mentor_of
 - Location: lives_in, works_at, located_in, born_in, visits
-- Work: works_on, manages, member_of, part_of
+- Work: works_on, manages, member_of, part_of, employed_by
 - Preference: prefers, enjoys, dislikes, interested_in
 - Temporal: deadline_for, scheduled_for, started_on
+- Knowledge: studies, proficient_in, certified_in, learning
+- Media: reading, watching, recommends, authored
 - General: related_to, associated_with, owns
 
 IMPORTANT — ALWAYS output relations:
@@ -377,7 +406,7 @@ Rules:
   1. Entity: {{"category": "...", "subject": "...", "content": "..."}}
      Optionally include "aliases": "name1, name2" for alternative names.
   2. Relation: {{"relation_type": "...", "source_subject": "...", "target_subject": "...", "confidence": 0.9}}
-- category must be one of: person, preference, fact, event, place, project
+- category must be one of: person, preference, fact, event, place, project, organisation, concept, skill, media
 - relation_type should be a snake_case label (e.g. "mother_of", "lives_in")
 - source_subject and target_subject must match an entity's subject exactly
 - confidence scoring:
@@ -387,18 +416,191 @@ Rules:
   * Below 0.5 — do not extract, too uncertain to be useful
 - If there is NOTHING worth remembering, return an empty array: []
 
-Example — user says "My name is Alex, I live in London, my dad Robert lives in Manchester":
+Example — user says "My name is Alex, I'm a software engineer at Acme Corp in London. \
+I'm reading Designing Data-Intensive Applications and learning Rust on the side. My dad Robert lives in Manchester":
 [
-  {{"category": "person", "subject": "User", "content": "User's name is Alex, lives in London", "aliases": "Alex"}},
+  {{"category": "person", "subject": "User", "content": "User's name is Alex. Software engineer based in London.", "aliases": "Alex"}},
   {{"category": "person", "subject": "Dad", "content": "User's father is named Robert, lives in Manchester", "aliases": "Robert"}},
-  {{"category": "place", "subject": "London", "content": "City where the user lives"}},
-  {{"category": "place", "subject": "Manchester", "content": "City where the user's father lives"}},
+  {{"category": "organisation", "subject": "Acme Corp", "content": "Company where the user works as a software engineer"}},
+  {{"category": "place", "subject": "London", "content": "City where the user lives and works"}},
+  {{"category": "place", "subject": "Manchester", "content": "City where the user's father Robert lives"}},
+  {{"category": "media", "subject": "Designing Data-Intensive Applications", "content": "Book the user is currently reading, by Martin Kleppmann — covers distributed systems and data architecture"}},
+  {{"category": "skill", "subject": "Rust", "content": "Programming language the user is learning as a side project"}},
+  {{"relation_type": "employed_by", "source_subject": "User", "target_subject": "Acme Corp", "confidence": 1.0}},
   {{"relation_type": "lives_in", "source_subject": "User", "target_subject": "London", "confidence": 1.0}},
   {{"relation_type": "father_of", "source_subject": "Dad", "target_subject": "User", "confidence": 1.0}},
-  {{"relation_type": "lives_in", "source_subject": "Dad", "target_subject": "Manchester", "confidence": 0.9}}
+  {{"relation_type": "lives_in", "source_subject": "Dad", "target_subject": "Manchester", "confidence": 0.9}},
+  {{"relation_type": "reading", "source_subject": "User", "target_subject": "Designing Data-Intensive Applications", "confidence": 1.0}},
+  {{"relation_type": "learning", "source_subject": "User", "target_subject": "Rust", "confidence": 1.0}}
 ]
 
 CONVERSATION:
 {conversation}
 
 Respond with ONLY a valid JSON array. No other text."""
+
+
+# ---------------------------------------------------------------------------
+# Prompts: document knowledge extraction (map-reduce pipeline)
+# ---------------------------------------------------------------------------
+
+# Step 1 — MAP: summarize each chunk into a few key sentences
+DOC_MAP_PROMPT = """\
+Summarize this section of "{document_title}" in 3-5 sentences. \
+Focus on the main arguments, findings, and named entities (people, \
+organisations, technologies). Omit filler and formatting artifacts.
+
+SECTION {section_number} of {total_sections}:
+{document_text}
+
+Respond with ONLY the summary paragraph. No headings, no bullets."""
+
+
+# Step 2 — REDUCE: combine chunk summaries into one coherent article
+DOC_REDUCE_PROMPT = """\
+You are compiling a knowledge-base article for the document "{document_title}".
+
+Below are section-level summaries produced from the full document. \
+Synthesize them into ONE coherent wiki article (300-600 words) that covers:
+1. What the document is about (thesis / purpose)
+2. Key findings, arguments, or contributions
+3. Methodology or approach (if applicable)
+4. Important people, organisations, and projects mentioned
+5. Conclusions and implications
+
+Write in an informative, encyclopedic style — like a Wikipedia article. \
+The article should be self-contained and useful without re-reading the \
+source. Do NOT use section numbers or bullet lists — write flowing prose.
+
+SECTION SUMMARIES:
+{section_summaries}
+
+Respond with ONLY the article text. No headings, no JSON."""
+
+
+# Step 3 — EXTRACT: pull key entities from the reduced summary
+DOC_EXTRACT_PROMPT = """\
+You are a knowledge extraction assistant. Given only the summary below, \
+extract the CORE entities and relationships for a personal knowledge base.
+
+DOCUMENT TITLE: {document_title}
+DOCUMENT SUMMARY:
+{document_summary}
+
+EXTRACTION RULES — be SELECTIVE:
+- Extract only entities that are CENTRAL to the document's contribution.
+- A typical research paper should yield 3-8 concept entities, NOT 30+.
+- Only include people who are primary authors or discussed in depth.
+- Only include organisations that play a key role, not every affiliation.
+- Prefer one well-described entity over multiple overlapping ones. \
+  e.g. ONE "AI Agents" entity, not separate ones for "AI Agent Architecture", \
+  "AI Agent Systems", "Autonomous Agent Adaptation".
+- Write descriptions as knowledge-base articles — 2-4 sentences, rich and \
+  contextual. Thin stubs like "A concept in AI" are useless — write something \
+  a reader can learn from.
+- Do NOT create a media entity for the document itself — that is handled \
+  separately by the system.
+
+ENTITY TYPES (use exactly one per entity):
+  person, preference, fact, event, place, project, organisation, concept, \
+  skill, media
+
+RELATIONS — connect entities using typed relationships:
+  authored, published_by, member_of, affiliated_with, part_of, related_to, \
+  builds_on, contradicts, extends, implements, cites, references, \
+  associated_with, used_by
+
+Return a JSON array of objects. TWO types:
+  1. Entity: {{"category": "...", "subject": "...", "content": "...", \
+"aliases": "name1, name2"}}
+  2. Relation: {{"relation_type": "...", "source_subject": "...", \
+"target_subject": "...", "confidence": 0.9}}
+
+- category must be one of the 10 types listed above.
+- Confidence: 1.0 for explicit statements, 0.7-0.9 for inferences.
+- If there is NOTHING notable to extract, return an empty array: []
+
+Respond with ONLY a valid JSON array. No other text."""
+
+
+# Legacy alias — kept for backward compatibility with existing tests
+DOCUMENT_EXTRACTION_PROMPT = DOC_EXTRACT_PROMPT
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Dream Cycle prompts — used by dream_cycle.py for nightly knowledge refinement
+# ═════════════════════════════════════════════════════════════════════════════
+
+DREAM_MERGE_PROMPT = """\
+You are a knowledge-graph curator. Two entities of type "{entity_type}" \
+have been detected as near-duplicates and need to be merged into one.
+
+Entity A — subject: "{subject_a}"
+Description: {description_a}
+
+Entity B — subject: "{subject_b}"
+Description: {description_b}
+
+Write a single, merged description that preserves ALL information from \
+BOTH descriptions. Do not lose any facts. Be concise but complete. Write \
+in the same style as the descriptions above — factual, third-person, \
+knowledge-base style.
+
+Return ONLY the merged description text. No preamble, no explanation."""
+
+
+DREAM_ENRICH_PROMPT = """\
+You are a knowledge-graph curator. An entity has a thin description that \
+needs to be enriched using evidence from conversations.
+
+Entity type: {entity_type}
+Subject: "{subject}"
+Current description: {current_description}
+
+Known relationships:
+{relationships}
+
+Relevant conversation excerpts:
+{conversation_excerpts}
+
+Write an improved description that:
+1. Keeps ALL information from the current description (do not remove anything)
+2. Adds ONLY facts that are explicitly about "{subject}" — not about anyone else
+3. Is factual, third-person, knowledge-base style
+4. Is concise but more informative than the current description
+
+STRICT RULES (violations will corrupt the knowledge base):
+- MOST IMPORTANT: Every fact you include MUST have "{subject}" as its subject in the source text. If a sentence says "User has a dog named Max", that fact belongs to User, NOT to any other entity mentioned nearby.
+- Do NOT copy facts about the User or other people onto this entity. Example: if the conversation says "User's wife is Emma" and you are describing "Diana", do NOT write that Diana is married to Emma.
+- ONLY include facts explicitly stated in the excerpts or current description
+- Do NOT invent details like specific times, ages, locations, or skill levels not in the text
+- If unsure whether a detail applies to "{subject}" specifically, leave it out — being incomplete is better than being wrong
+
+Return ONLY the enriched description text. No preamble, no explanation."""
+
+
+DREAM_INFER_PROMPT = """\
+You are a knowledge-graph curator. Two entities co-occur in the same \
+conversation but have no relationship in the graph. Determine if a \
+meaningful relationship exists.
+
+Entity A — type: {type_a}, subject: "{subject_a}"
+Description: {description_a}
+
+Entity B — type: {type_b}, subject: "{subject_b}"
+Description: {description_b}
+
+Conversation excerpt where both appear:
+{conversation_excerpt}
+
+If these entities have a meaningful, factual relationship, return:
+{{"has_relation": true, "relation_type": "<type>"}}
+
+Common relation types: knows, related_to, works_on, part_of, member_of, \
+located_in, associated_with, uses, created_by, manages, employed_by, \
+studies, interested_in, prefers, friend_of, colleague_of
+
+If there is NO clear relationship, or you are unsure, return:
+{{"has_relation": false}}
+
+Return ONLY the JSON object. No other text."""

@@ -77,14 +77,14 @@ class _DeleteMemoryInput(BaseModel):
 class _LinkMemoriesInput(BaseModel):
     source_id: str = Field(
         description=(
-            "ID of the source entity (the 'from' side of the relationship). "
-            "Get IDs from search_memory or list_memories."
+            "Source entity — pass the entity's **subject name** (e.g. 'Bob', "
+            "'User', 'Atlas') or its hex ID. Names are preferred."
         )
     )
     target_id: str = Field(
         description=(
-            "ID of the target entity (the 'to' side of the relationship). "
-            "Get IDs from search_memory or list_memories."
+            "Target entity — pass the entity's **subject name** (e.g. 'User', "
+            "'London', 'Dune') or its hex ID. Names are preferred."
         )
     )
     relation_type: str = Field(
@@ -98,14 +98,57 @@ class _LinkMemoriesInput(BaseModel):
 class _ExploreConnectionsInput(BaseModel):
     entity_id: str = Field(
         description=(
-            "ID of the entity to explore connections for. "
-            "Get IDs from search_memory or list_memories."
+            "Entity to explore — pass the **subject name** (e.g. 'Bob', "
+            "'User', 'Atlas') or its hex ID. Names are preferred."
         )
     )
     hops: int = Field(
         default=1,
         description="Number of hops to traverse (1 = immediate neighbors, 2 = friends-of-friends).",
     )
+
+
+# ── Contradiction detection ──────────────────────────────────────────────────
+
+_CONTRADICTION_PROMPT = """\
+You are checking whether two pieces of information about "{subject}" contradict each other.
+
+Existing: {old_content}
+New: {new_content}
+
+Do these contain contradictory facts (e.g. different dates, numbers, names, \
+or mutually exclusive statements about the same attribute)?
+
+If YES, reply with a single short sentence describing the conflict.
+If NO (they are compatible or additive), reply with exactly: NO"""
+
+
+def _check_contradiction(old_content: str, new_content: str, subject: str) -> str | None:
+    """Return a conflict description if old and new content contradict, else None."""
+    try:
+        from models import get_current_model, get_llm_for
+        from langchain_core.messages import HumanMessage
+
+        prompt = _CONTRADICTION_PROMPT.format(
+            subject=subject,
+            old_content=old_content,
+            new_content=new_content,
+        )
+        llm = get_llm_for(get_current_model())
+        resp = llm.invoke([HumanMessage(content=prompt)])
+        raw = resp.content or ""
+        if isinstance(raw, list):
+            raw = " ".join(
+                b.get("text", "") if isinstance(b, dict) else str(b)
+                for b in raw
+            )
+        raw = raw.strip()
+        if raw.upper().startswith("NO"):
+            return None
+        return raw
+    except Exception:
+        # On failure, allow the merge to proceed (no false blocks)
+        return None
 
 
 # ── Tool functions ───────────────────────────────────────────────────────────
@@ -127,7 +170,16 @@ def _save_memory(category: str, subject: str, content: str, tags: str = "") -> s
                 # New content is a superset — replace entirely
                 merged = new_content
             else:
-                # Both have unique info — combine them
+                # Both have unique info — check for contradiction before merging
+                conflict = _check_contradiction(old_content, new_content, subject)
+                if conflict:
+                    return (
+                        f"⚠️ CONFLICT for '{subject}': {conflict}\n"
+                        f"Existing content: {old_content}\n"
+                        f"New content: {new_content}\n"
+                        f"Ask the user which is correct before updating."
+                    )
+                # No contradiction — safe to combine
                 merged = f"{old_content}. {new_content}".replace(". . ", ". ")
 
             result = memory_db.update_memory(
@@ -218,18 +270,38 @@ def _delete_memory(memory_id: str) -> str:
     return f"Memory '{memory_id}' not found."
 
 
+def _resolve_entity(name_or_id: str) -> dict | None:
+    """Resolve an entity by subject name (preferred) or hex ID."""
+    # Try by name first (most common path for the agent)
+    entity = kg.find_by_subject(entity_type=None, subject=name_or_id)
+    if entity:
+        return entity
+    # Fall back to direct ID lookup
+    entity = kg.get_entity(name_or_id)
+    if entity:
+        return entity
+    return None
+
+
 def _link_memories(source_id: str, target_id: str, relation_type: str) -> str:
     """Create a relationship between two memories in the knowledge graph."""
-    try:
-        # Validate both entities exist and give helpful names
-        source_entity = kg.get_entity(source_id)
-        target_entity = kg.get_entity(target_id)
-        if not source_entity:
-            return f"Error: source entity '{source_id}' not found. Use search_memory or list_memories to find the correct ID."
-        if not target_entity:
-            return f"Error: target entity '{target_id}' not found. Use search_memory or list_memories to find the correct ID."
+    import time
 
-        rel = kg.add_relation(source_id, target_id, relation_type)
+    try:
+        # Resolve by name or ID
+        source_entity = _resolve_entity(source_id)
+        target_entity = _resolve_entity(target_id)
+        if not source_entity:
+            return f"Error: source entity '{source_id}' not found. Use search_memory or list_memories to find the correct name or ID."
+        if not target_entity:
+            # Retry once after a short delay — the entity may have been
+            # created by a parallel tool call in the same batch.
+            time.sleep(0.5)
+            target_entity = _resolve_entity(target_id)
+        if not target_entity:
+            return f"Error: target entity '{target_id}' not found. Use search_memory or list_memories to find the correct name or ID."
+
+        rel = kg.add_relation(source_entity['id'], target_entity['id'], relation_type)
         if rel:
             return (
                 f"Relationship created successfully.\n"
@@ -244,13 +316,14 @@ def _link_memories(source_id: str, target_id: str, relation_type: str) -> str:
 def _explore_connections(entity_id: str, hops: int = 1) -> str:
     """Explore the knowledge graph around an entity."""
     try:
-        entity = kg.get_entity(entity_id)
+        entity = _resolve_entity(entity_id)
         if not entity:
-            return f"Entity '{entity_id}' not found. Use search_memory or list_memories to find the correct ID."
+            return f"Entity '{entity_id}' not found. Use search_memory or list_memories to find the correct name or ID."
 
+        resolved_id = entity['id']
         hops = max(1, min(hops, 3))  # cap at 3 to prevent huge traversals
-        neighbors = kg.get_neighbors(entity_id, hops=hops)
-        relations = kg.get_relations(entity_id)
+        neighbors = kg.get_neighbors(resolved_id, hops=hops)
+        relations = kg.get_relations(resolved_id)
 
         parts = [f"**{entity.get('subject', '?')}** ({entity.get('entity_type', '?')})"]
 
@@ -280,9 +353,10 @@ def _explore_connections(entity_id: str, hops: int = 1) -> str:
             parts.append("\nNo connections found. Use link_memories to create relationships.")
 
         # Include Mermaid diagram for visual context
-        mermaid = kg.to_mermaid(entity_id, hops=hops, max_nodes=15)
+        mermaid = kg.to_mermaid(resolved_id, hops=hops, max_nodes=15)
         if mermaid and mermaid.count("\n") > 1:
             parts.append(f"\n```mermaid\n{mermaid}\n```")
+            parts.append("\nInclude the mermaid diagram above verbatim in your response so the user can see the visual graph.")
 
         return "\n".join(parts)
     except Exception as exc:
@@ -384,9 +458,11 @@ class MemoryTool(BaseTool):
                     "Create a relationship between two memories in the knowledge graph. "
                     "Use when the user mentions how things are related — e.g. 'Sarah is "
                     "my mom', 'I work at Acme Corp', 'The deadline is for Project X'. "
-                    "Requires source_id, target_id (from search/list), and a relation_type "
-                    "label like 'mother_of', 'works_at', 'deadline_for'. Also use this "
-                    "proactively when you save related memories to build connections."
+                    "Pass entity **subject names** (e.g. source_id='Bob', target_id='User') "
+                    "or hex IDs. Names are preferred — no need to look up IDs first. "
+                    "relation_type should be a snake_case label like 'mother_of', 'works_at', "
+                    "'deadline_for'. Also use this proactively when you save related memories "
+                    "to build connections."
                 ),
                 args_schema=_LinkMemoriesInput,
             ),

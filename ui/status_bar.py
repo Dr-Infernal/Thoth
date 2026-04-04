@@ -242,6 +242,11 @@ _AVATAR_CSS = """
 .thoth-diag-spinning .material-icons {
     animation: thoth-diag-spin 0.8s linear infinite;
 }
+@keyframes pulse-border {
+    0%   { border-color: #FFA726; }
+    50%  { border-color: #FF7043; }
+    100% { border-color: #FFA726; }
+}
 </style>
 """
 
@@ -431,3 +436,61 @@ def build_status_bar(
             '</div>',
             sanitize=False,
         ).on("click", lambda: _run_diagnosis())
+
+      # ── EXTRACTION PROGRESS pill (below status row) ──────────────
+      extraction_pill = ui.html("", sanitize=False)
+      extraction_pill.set_visibility(False)
+      extraction_pill.style("text-align: center; margin-top: 4px;")
+
+      def _poll_extraction_status() -> None:
+          """Timer callback — update extraction pill every 2 s."""
+          try:
+              from document_extraction import get_extraction_status, get_queue_length, stop_extraction as _stop_ext
+          except ImportError:
+              return
+          status = get_extraction_status()
+          if status is None:
+              extraction_pill.set_visibility(False)
+              return
+          fname = status.get("file", "")
+          prog = status.get("progress", 0)
+          total = status.get("total", 0)
+          ents = status.get("entities", 0)
+          phase = status.get("phase", "map")
+          queued = get_queue_length()
+          pct = int(prog / total * 100) if total else 0
+          bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
+          queue_txt = f" · +{queued} queued" if queued else ""
+          phase_label = {"map": "summarizing", "reduce": "compiling", "extract": "extracting"}.get(phase, phase)
+          extraction_pill.set_content(
+              f'<span style="display:inline-flex; align-items:center; gap:6px; '
+              f'border:1px solid #FFA726; border-radius:12px; padding:2px 10px; '
+              f'font-size:0.75rem; color:#FFA726; animation:pulse-border 2s infinite;">'
+              f'🧠 {fname} {bar} {prog}/{total} · {phase_label}{queue_txt}'
+              f'<span id="extraction-stop-btn" style="cursor:pointer; margin-left:4px;" '
+              f'title="Stop extraction">⏹</span>'
+              f'</span>'
+          )
+          extraction_pill.set_visibility(True)
+
+      ui.timer(2.0, _poll_extraction_status)
+
+      # Wire the stop button via JavaScript delegation
+      ui.run_javascript('''
+          document.addEventListener("click", function(e) {
+              if (e.target && e.target.id === "extraction-stop-btn") {
+                  fetch("/_nicegui_api/extraction_stop", {method: "POST"}).catch(function(){});
+              }
+          });
+      ''')
+
+      # Use server-side click detection instead — simpler with NiceGUI
+      extraction_pill.on("click", lambda: _handle_extraction_stop())
+
+      def _handle_extraction_stop():
+          try:
+              from document_extraction import stop_extraction
+              if stop_extraction():
+                  ui.notify("⏹ Stopping extraction…", type="info")
+          except ImportError:
+              pass

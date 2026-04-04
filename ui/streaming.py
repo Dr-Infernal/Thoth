@@ -329,7 +329,9 @@ async def consume_generation(
             if gen.tts_active:
                 state.tts_service.flush_streaming(gen.tts_buffer)
 
-            if gen.accumulated and YT_URL_PATTERN.search(gen.accumulated):
+            # Re-render the streamed content via render_text_with_embeds
+            # so code blocks get proper highlight.js and mermaid diagrams render.
+            if gen.accumulated:
                 if gen.assistant_md:
                     gen.assistant_md.delete()
                     gen.assistant_md = None
@@ -342,14 +344,11 @@ async def consume_generation(
                     "document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));"
                 )
                 ui.run_javascript(
-                    "document.querySelectorAll('pre code.language-mermaid').forEach(function(el) {"
-                    "  var pre = el.parentElement;"
-                    "  var div = document.createElement('div');"
-                    "  div.className = 'mermaid-rendered';"
-                    "  div.textContent = el.textContent;"
-                    "  pre.replaceWith(div);"
-                    "});"
-                    "if (typeof mermaid !== 'undefined') { mermaid.run({nodes: document.querySelectorAll('.mermaid-rendered')}); }"
+                    "setTimeout(function() {"
+                    "  if (typeof mermaid !== 'undefined') {"
+                    "    mermaid.run({nodes: document.querySelectorAll('pre.mermaid')});"
+                    "  }"
+                    "}, 100);"
                 )
             except RuntimeError:
                 pass

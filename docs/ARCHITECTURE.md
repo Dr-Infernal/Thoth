@@ -9,6 +9,9 @@
 
 - [ReAct Agent Architecture](#react-agent-architecture)
 - [Long-Term Memory & Knowledge Graph](#long-term-memory--knowledge-graph)
+- [Wiki Vault](#wiki-vault)
+- [Dream Cycle](#dream-cycle)
+- [Document Knowledge Extraction](#document-knowledge-extraction)
 - [Brain Model & Cloud Models](#brain-model--cloud-models)
 - [Voice Input & Text-to-Speech](#voice-input--text-to-speech)
 - [Shell Access](#shell-access)
@@ -30,7 +33,7 @@
 ## ReAct Agent Architecture
 
 - **Autonomous tool use** — the agent decides which tools to call, when, and how many times, based on your question
-- **23 tools / 61 sub-tools** — web search, email, calendar, file management, shell access, browser automation, Telegram messaging, vision, memory, scheduled tasks, habit tracking, and more (see [Tools](#tools))
+- **24 tools / 67 sub-tools** — web search, email, calendar, file management, shell access, browser automation, Telegram messaging, vision, memory, scheduled tasks, habit tracking, and more (see [Tools](#tools))
 - **Streaming responses** — tokens stream in real-time with a typing indicator
 - **Thinking indicators** — shows when the model is reasoning before responding
 - **Smart context management** — automatic conversation summarization compresses older turns when token usage exceeds 80% of the context window, preserving the 5 most recent turns and a running summary; a hard trim at 85% drops oldest messages as a safety net; oversized tool outputs (e.g. large PDF reads) are proportionally shrunk so multi-tool chains fit within context; accurate token counting via tiktoken (cl100k_base)
@@ -51,11 +54,11 @@
 Thoth doesn't just store isolated facts — it builds a **personal knowledge graph**: a connected web of people, places, preferences, events, and their relationships. Every memory is an entity linked to others through typed relations, so the agent can reason about how things in your life connect.
 
 - **Entity-relation model** — memories are stored as entities with a type, subject, description, aliases, and tags; entities are connected by typed directional relations (e.g. `Dad --[father_of]--> User`, `User --[lives_in]--> London`)
-- **6 entity types** — `person`, `preference`, `fact`, `event`, `place`, `project`
+- **10 entity types** — `person`, `preference`, `fact`, `event`, `place`, `project`, `organisation`, `concept`, `skill`, `media`
 - **Memory tool** — 7 sub-tools let the agent save, search, list, update, delete, **link**, and **explore** memories through natural conversation — *"Remember that my mom's birthday is March 15"*, *"What do you know about me?"*, *"How are these memories connected?"*
 - **Link memories** — the agent can create relationships between any two entities — *"Link Mom to Mom's Birthday Party with relation has_event"* — building a richer graph over time
 - **Explore connections** — the agent can traverse the graph outward from any entity, discovering chains of relationships — useful for broad questions like *"Tell me about my family"* or *"What do you know about my work?"*
-- **Interactive memory visualization** — a dedicated **Memory tab** on the home screen renders the entire knowledge graph as an interactive network diagram: search bar, entity-type filters, clickable detail cards, full-graph / ego-graph toggle, and a fit-to-view button; color-coded by category, with relation types shown as edge labels
+- **Interactive memory visualization** — a dedicated **Knowledge tab** on the home screen renders the entire knowledge graph as an interactive network diagram: search bar, entity-type filters, clickable detail cards, full-graph / ego-graph toggle, and a fit-to-view button; color-coded by category, with relation types shown as edge labels
 - **Graph-enhanced auto-recall** — before every response, the agent retrieves semantically relevant entities via FAISS and then expands one hop in the graph to surface connected neighbors; recalled memories include their relationship context (e.g. "connected via: Dad --> father_of --> User"); includes FAISS fallback search — if the primary semantic recall returns no results above 0.80 similarity, a broader relaxed search is attempted automatically
 - **Auto-linking on save** — when a new memory is saved, the engine automatically scans existing entities for potential relationships and creates links, building the knowledge graph organically without manual intervention
 - **Background orphan repair** — a periodic background process detects entities with zero relationships and attempts to link them to related entities, keeping the knowledge graph connected
@@ -68,7 +71,55 @@ Thoth doesn't just store isolated facts — it builds a **personal knowledge gra
 - **Memory IDs in context** — auto-recalled memories include their IDs so the agent can update or delete specific entries when the user corrects previously saved information
 - **Consolidation** — a built-in `consolidate_duplicates()` utility merges near-duplicate memories that may have accumulated over time
 - **Local SQLite + NetworkX + FAISS storage** — entities and relations stored in `~/.thoth/memory.db`, mirrored in a NetworkX graph for fast traversal, with FAISS vector index in `~/.thoth/memory_vectors/`; never sent to the cloud
-- **Settings UI** — browse, search, and bulk-delete memories from the Memory tab in Settings; graph statistics (entity count, relations, connected components) displayed in the Knowledge Graph settings section
+- **Settings UI** — browse, search, and bulk-delete memories from the Knowledge tab in Settings; graph statistics (entity count, relations, connected components) displayed in the Knowledge Graph settings section
+
+---
+
+## Wiki Vault
+
+The knowledge graph can be exported as a structured **Obsidian-compatible markdown vault** — one `.md` file per entity with YAML frontmatter, `[[wiki-links]]`, and auto-generated indexes.
+
+- **Vault structure** — entities grouped by type (`wiki/person/`, `wiki/project/`, `wiki/event/`, etc.) with one `.md` file per entity; sparse entities (<20 chars) roll up into `_index.md` per type; per-type indexes and a master `index.md` auto-generated on rebuild
+- **YAML frontmatter** — each article includes `id`, `type`, `subject`, `aliases`, `tags`, `source`, `created`, `updated` metadata
+- **Wiki-links** — related entities linked via `[[Entity Name]]` syntax, enabling Obsidian backlinks and graph view
+- **Connections section** — outgoing and incoming relations listed with arrow notation
+- **Live export** — entities are exported on save (≥20 chars), deleted on entity removal, and rebuilt on batch operations
+- **Search** — full-text search across all `.md` files with title, snippet, and entity ID results
+- **Conversation export** — any thread can be exported as a vault-compatible markdown file
+- **Agent tool** — 5 sub-tools (`wiki_search`, `wiki_read`, `wiki_rebuild`, `wiki_stats`, `wiki_export_conversation`) let the agent interact with the vault directly
+- **Settings UI** — enable/disable toggle, vault path configuration with Browse button, stats display, rebuild and open-folder buttons in the Knowledge tab
+
+---
+
+## Dream Cycle
+
+A background daemon that refines the knowledge graph during idle hours, running three non-destructive operations with a three-layer anti-contamination system.
+
+- **Duplicate merge** — entities with ≥0.93 semantic similarity and same type are merged; LLM synthesizes the best description, aliases are unioned, relations re-pointed to the survivor
+- **Subject-name guard** — entities with different normalized subjects require ≥0.98 similarity to merge, preventing false merges of distinct people/concepts
+- **Description enrichment** — thin entities (<80 chars) appearing in 2+ conversations get richer descriptions from conversation context and relationship graph
+- **Relationship inference** — co-occurring entity pairs with no existing edge are evaluated for a meaningful connection (tagged `source="dream_infer"`)
+- **Three-layer anti-contamination** — (1) sentence-level excerpt filtering extracts only sentences mentioning the target entity, (2) deterministic post-enrichment cross-entity validation scans LLM output for unrelated entity subjects and rejects contaminated results before DB write, (3) strengthened prompt with concrete negative examples and subject-name substitution
+- **Configurable window** — default 1–5 AM local time; checks every 30 minutes if conditions met (enabled, in window, idle, not yet run today)
+- **Dream journal** — all operations logged to `~/.thoth/dream_journal.json` with cycle ID, summary, and duration; viewable in the Activity tab
+- **Settings UI** — enable/disable toggle, window display, and last run summary in the Knowledge tab
+- **Status pill** — dedicated health-check pill shows enabled state and last run time
+
+---
+
+## Document Knowledge Extraction
+
+Uploaded documents are processed through a three-phase **map-reduce LLM pipeline** that extracts structured knowledge into the graph with full source provenance.
+
+- **Map phase** — document split into ~6K-char windows; each window summarized to 3–5 sentences
+- **Reduce phase** — window summaries combined into a coherent 300–600 word article
+- **Extract phase** — core entities and relations pulled from the final article; 3–8 entities per document
+- **Hub entity** — the document itself is saved as a `media` entity; extracted entities linked via `extracted_from` relation for provenance tracking
+- **Cross-window dedup** — entities with the same subject across windows are merged before saving
+- **New file formats** — supports PDF, DOCX, TXT, Markdown (`.md`), HTML, and EPUB
+- **Live progress** — status bar shows pulsing progress pill with phase indicator, progress bar, queue count, and stop button (updates every 2 seconds)
+- **Background queue** — documents queued for processing; worker thread handles one at a time
+- **Per-document cleanup** — individual document delete button removes vector store entries and all extracted entities with matching source tag; bulk "Clear all documents" removes everything with `document:*` prefix
 
 ---
 
@@ -158,7 +209,7 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 - **Always-background execution** — tasks always run in the background so you can keep chatting; the sidebar shows a ⏳ indicator while running
 - **Background permissions** — background tasks use a tiered permission system: safe operations always run, low-risk operations (move file, send email) are allowed with optional per-task allowlists, and irreversible operations (file delete, memory delete) are always blocked; configure allowed shell command prefixes and email recipients per-task in the "🔒 Background permissions" section of the task editor
 - **Pre-built templates** — ships with 5 starter tasks (Daily Briefing, Research Summary, Email Digest, Weekly Review, Quick Reminder)
-- **Home screen dashboard** — manage tasks from the home screen with a tabbed layout: ⚡ Tasks (tiles with edit/run/delete) and 📋 Activity (monitoring panel with upcoming runs, recent history, channel status); the home screen's status monitor panel shows 14 health-check pills at a glance with a diagnosis button
+- **Home screen dashboard** — manage tasks from the home screen with a tabbed layout: ⚡ Tasks (tiles with edit/run/delete) and 📋 Activity (monitoring panel with upcoming runs, recent history, channel status); the home screen’s status monitor panel shows 17 health-check pills at a glance with a diagnosis button
 - **Persistent run history** — task execution history survives task deletion; displayed in the Activity tab with ✅/❌/⏳ status icons
 - **Monitoring / polling** — use interval schedules with conditional prompts to monitor conditions (stock availability, price drops, new releases); the agent checks periodically, reports when the condition is met, and self-disables the task via `{{task_id}}` — no manual intervention needed
 - **Task stop / cancel** — stop a running task from the chat header, activity panel, or task card; stopped tasks skip delivery and auto-delete, and are recorded in run history
@@ -218,7 +269,7 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 - **Inline YouTube embeds** — YouTube links in responses are rendered as playable embedded videos
 - **Syntax-highlighted code blocks** — fenced code blocks render with language-aware highlighting and a built-in copy button
 - **Onboarding guide** — first-run welcome message with tool overview and clickable example prompts; `👋` button in sidebar to re-show anytime
-- **Status monitor panel** — replaces the home-screen logo with a frosted-glass panel containing an animated avatar (customizable emoji + ring color), 14 health-check pills in two rows (Ollama, Model, Cloud API, Email, Telegram, Gmail OAuth, Calendar OAuth, Task Scheduler, Memory Extraction, Disk, Threads DB, FAISS Index, Documents, Network), and a diagnosis button that runs all checks on demand with a copy-to-clipboard report; click any pill to jump to the relevant settings tab; ECG heartbeat animation scrolls behind the panel
+- **Status monitor panel** — replaces the home-screen logo with a frosted-glass panel containing an animated avatar (customizable emoji + ring color), 17 health-check pills in two rows (Ollama, Model, Cloud API, Email, Telegram, Gmail OAuth, Calendar OAuth, Task Scheduler, Knowledge, Dream Cycle, TTS, Wiki Vault, Disk, Threads DB, FAISS Index, Documents, Network), and a diagnosis button that runs all checks on demand with a copy-to-clipboard report; click any pill to jump to the relevant settings tab; ECG heartbeat animation scrolls behind the panel
 - **Startup health check** — verifies model availability on launch; skips Ollama check when using a cloud brain model
 - **OAuth token health** — Gmail and Calendar tokens are proactively checked at startup with silent refresh; periodic re-validation every 6 hours with user-facing warnings when tokens expire
 
@@ -263,27 +314,30 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 
 | File | Purpose |
 |------|---------|
-| **`app.py`** + **`ui/`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (12 tabs including Cloud), tabbed home screen (Tasks + Activity + Memory graph), status monitor panel with animated avatar, 14 health-check pills, and diagnosis button (`status_bar.py` + `status_checks.py`), Task Edit dialog, file attachment handling with clipboard paste and drag-and-drop, streaming event loop with error recovery, Playwright PDF export, voice bar, first-launch setup wizard (Local/Cloud paths), per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network), Mermaid diagram rendering (mermaid.js), OAuth token health checks (startup + periodic 6 h re-check), right-click context menu (pywebview), centralized logging configuration |
+| **`app.py`** + **`ui/`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (13 tabs including Cloud), tabbed home screen (Tasks + Activity + Knowledge graph), status monitor panel with animated avatar, 17 health-check pills, and diagnosis button (`status_bar.py` + `status_checks.py`), Task Edit dialog, file attachment handling with clipboard paste and drag-and-drop, streaming event loop with error recovery, Playwright PDF export, voice bar, first-launch setup wizard (Local/Cloud paths), per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network), Mermaid diagram rendering (mermaid.js), OAuth token health checks (startup + periodic 6 h re-check), right-click context menu (pywebview), centralized logging configuration |
 | **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator with thinking/reasoning token extraction, interrupt handling for destructive actions, live token usage reporting, graph-enhanced auto-recall with memory IDs and relation context, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off), task cancellation via stop_event, displaced tool-call auto-repair |
 | **`threads.py`** | SQLite-backed thread metadata, `SqliteSaver` checkpointer for persisting LangGraph conversation state, and per-thread image sidecar persistence (`thread_ui/`) |
 | **`memory.py`** | Backward-compatible memory wrapper — delegates all operations to `knowledge_graph.py`, mapping legacy column names (`category`/`content` to `entity_type`/`description`); provides `save_memory`, `find_by_subject`, `update_memory`, `delete_memory`, `semantic_search`, and `count_memories` with unchanged signatures |
 | **`knowledge_graph.py`** | Personal knowledge graph engine — SQLite entity + relation tables (WAL mode), NetworkX DiGraph for traversal, FAISS vector index for semantic search; entity CRUD with alias resolution, relation CRUD with cascade delete, `graph_enhanced_recall()` for semantic + graph expansion, `graph_to_vis_json()` for visualization; deterministic dedup via normalized subject matching |
+| **`wiki_vault.py`** | Obsidian-compatible markdown vault export — per-entity articles with YAML frontmatter, wiki-links, type-based directory grouping, per-type and master indexes, full-text search, conversation export, live export on save/delete |
+| **`dream_cycle.py`** | Nightly knowledge refinement daemon — duplicate merge (≥0.93 similarity), description enrichment from conversation context, relationship inference between co-occurring entities; three-layer anti-contamination, configurable 1–5 AM window, dream journal logging |
+| **`document_extraction.py`** | Background map-reduce LLM pipeline for document knowledge extraction — split → summarize → extract entities with source provenance; queue-based with live progress in status bar |
 | **`models.py`** | Ollama + cloud model management — local model listing/downloading/switching, cloud provider support (OpenAI direct, OpenRouter via ChatOpenRouter), starred models, context-size catalog with heuristics, model override routing, cloud vision detection, reasoning model support (`reasoning=True` for thinking models) |
-| **`documents.py`** | Document ingestion — PDF/DOCX/TXT loading, chunking, FAISS embedding and storage |
+| **`documents.py`** | Document ingestion — PDF/DOCX/TXT/Markdown/HTML/EPUB loading, chunking, FAISS embedding and storage; per-document removal with source cleanup |
 | **`voice.py`** | Local STT pipeline — toggle-based 4-state machine (stopped/listening/transcribing/muted) with faster-whisper CPU-only int8 transcription |
 | **`tts.py`** | Kokoro TTS integration — cross-platform neural TTS, model auto-downloaded on first use (~169 MB), 10 built-in voices, streaming sentence-by-sentence playback |
 | **`vision.py`** | Camera/screen capture via OpenCV/MSS, workspace image file analysis, image analysis via local or cloud vision models |
 | **`data_reader.py`** | Shared pandas-based reader for CSV, TSV, Excel, JSON, JSONL — returns schema + stats + preview rows |
 | **`launcher.py`** | Desktop launcher — system tray (pystray), native window management (pywebview), two-tier splash screen (tkinter with console fallback), manages NiceGUI server lifecycle; structured logging to `~/.thoth/thoth_app.log` |
 | **`api_keys.py`** | API key management — tool keys from `~/.thoth/api_keys.json`, cloud LLM provider keys and starred models from `~/.thoth/cloud_config.json` |
-| **`prompts.py`** | Centralized LLM prompts — system prompt (with BUILDING CONNECTIONS, EXPLORING CONNECTIONS, and BACKGROUND TASK PERMISSIONS sections), extraction prompt (triple-based with User entity convention and relation taxonomy), summarization prompt; memory guidelines with dedup and update instructions |
+| **`prompts.py`** | Centralized LLM prompts — system prompt (with BUILDING CONNECTIONS, EXPLORING CONNECTIONS, and BACKGROUND TASK PERMISSIONS sections), extraction prompt (triple-based with User entity convention, 10 entity types, and relation taxonomy), summarization prompt, dream cycle prompts (merge/enrich/infer), document extraction prompts (map/reduce/extract); memory guidelines with dedup, update, and cross-entity overwrite guard |
 | **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts entities and relations as structured triples, two-pass dedup (entities with alias merging, then relations with subject-to-ID resolution), User entity pre-population, excludes active threads, runs on startup + every 6 hours |
 | **`skills.py`** | Skills engine — discovers, loads, and caches bundled and user skill definitions from `SKILL.md` files with YAML frontmatter; builds prompt text for enabled skills injected into the system prompt; config persistence in `~/.thoth/skills_config.json` |
 | **`bundled_skills/`** | 10 built-in skill packages (Brain Dump, Daily Briefing, Data Analyst, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) — each a directory containing a `SKILL.md` instruction file |
 | **`tasks.py`** | Task engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, sequential prompt execution, background runner with threading, channel delivery (Telegram/Email), per-task model override, run history persistence, task stop/cancel, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
 | **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue with `toast_type` support (positive/negative); error toasts render as persistent red banners; coordinates task completion chimes and timer alerts |
 | **`channels/`** | Messaging channel adapters — Telegram bot (long polling, interrupt approval, corrupt thread recovery, HTML formatting) and Email channel (Gmail polling, interrupt approval, corrupt thread recovery, sender-only filter), with shared config store |
-| **`tools/`** | 23 self-registering tool modules + base class + registry |
+| **`tools/`** | 24 self-registering tool modules + base class + registry |
 | **`static/`** | Bundled JS libraries — `vis-network.min.js` for knowledge graph visualization, `mermaid.min.js` for diagram rendering |
 
 ---
@@ -299,6 +353,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── memory.db               # Knowledge graph — entities, relations, and memory data
 ├── memory_vectors/         # FAISS vector index for semantic memory search
 ├── memory_extraction_state.json  # Tracks last extraction run timestamp
+├── dream_journal.json      # Dream Cycle operation log (cycle ID, summary, duration)
 ├── api_keys.json           # API keys (Tavily, Wolfram, etc.)
 ├── cloud_config.json       # Cloud LLM provider keys and starred models
 ├── app_config.json         # Onboarding / first-run state
@@ -323,6 +378,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── calendar/               # Calendar OAuth tokens
 ├── browser_profile/        # Playwright persistent browser profile (cookies, logins, localStorage)
 ├── browser_history.json    # Browser browsing history
+├── wiki/                   # Obsidian-compatible markdown vault export
 └── kokoro/                 # Kokoro TTS model & voice data
 ```
 
@@ -358,7 +414,7 @@ Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI,
 | **Long-term memory** | Session compaction + pruning | Personal knowledge graph — entities, relations, visual explorer, semantic search, auto-extraction |
 | **Health & Habit Tracking** | ❌ None | Conversational tracker for meds, symptoms, exercise, periods — streaks, adherence, and trend analysis |
 | **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Kokoro TTS — fully offline, 10 voices |
-| **Tools** | Browser automation, Canvas, Skills platform | 23 tools / 61 sub-ops — Gmail, Calendar, filesystem, shell, browser, vision, habit tracker, charts, Wolfram, and more |
+| **Tools** | Browser automation, Canvas, Skills platform | 24 tools / 67 sub-ops — Gmail, Calendar, filesystem, shell, browser, vision, habit tracker, charts, Wolfram, and more |
 | **Desktop experience** | macOS menu bar app, WebChat | Native desktop window with system tray, splash screen, dark mode UI |
 | **Tasks** | Cron jobs + webhooks | Named tasks with 7 schedule types, stop/cancel, channel delivery, per-task model override, and template variables |
 | **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows & macOS |

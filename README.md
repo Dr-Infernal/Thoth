@@ -8,10 +8,10 @@
   <a href="https://github.com/siddsachar/Thoth/releases"><img src="https://img.shields.io/github/v/release/siddsachar/Thoth?style=flat&label=release&color=c9a227" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/siddsachar/Thoth?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-c9a227?style=flat" alt="Platform">
-  <img src="https://img.shields.io/badge/tests-868%20unit%20%7C%20155%20integration-brightgreen?style=flat" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-974%20unit%20%7C%20155%20integration-brightgreen?style=flat" alt="Tests">
 </p>
 
-Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 23 integrated tools (61 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory with a personal knowledge graph, scheduled tasks, habit tracking, and more — plus Telegram and Email messaging channels. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
+Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 24 integrated tools (67 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, long-term memory with a personal knowledge graph, scheduled tasks, habit tracking, and more — plus Telegram and Email messaging channels. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
 
 > **Local models are already amazing.** You'll be surprised what a 14B+ local model can do. If you start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
 
@@ -42,15 +42,33 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ### 🤖 ReAct Agent Architecture
 
-LangGraph-based autonomous agent with **23 tools / 61 sub-operations** — the agent decides which tools to call, how many times, and in what order. Real-time token streaming with thinking model support (DeepSeek-R1, Qwen3, QwQ — collapsible reasoning bubbles). Smart context management via tiktoken: auto-summarization at 80% capacity, proportional tool-output shrinking, and dynamic tool budgets that adapt to available headroom. Destructive actions require explicit confirmation; orphaned tool calls are auto-repaired; recursive loops are caught with a wind-down warning at 75%.
+LangGraph-based autonomous agent with **24 tools / 67 sub-operations** — the agent decides which tools to call, how many times, and in what order. Real-time token streaming with thinking model support (DeepSeek-R1, Qwen3, QwQ — collapsible reasoning bubbles). Smart context management via tiktoken: auto-summarization at 80% capacity, proportional tool-output shrinking, and dynamic tool budgets that adapt to available headroom. Destructive actions require explicit confirmation; orphaned tool calls are auto-repaired; recursive loops are caught with a wind-down warning at 75%.
 
 [Details →](docs/ARCHITECTURE.md#react-agent-architecture)
 
 ### 🧠 Long-Term Memory & Knowledge Graph
 
-Thoth builds a **personal knowledge graph** — entities (person, place, event, preference, fact, project) linked by typed directional relations (`Dad --[father_of]--> User`), with alias resolution, auto-linking on save, memory decay, and background orphan repair. The agent can save, search, link, and explore memories through natural conversation. Graph-enhanced auto-recall retrieves semantically similar entities via FAISS and expands 1 hop in the NetworkX graph before every LLM call. An interactive **Memory tab** visualizes the full graph with search, entity-type filters, ego-graph toggle, and clickable detail cards. Background extraction produces structured triples with deterministic cross-category dedup.
+Thoth builds a **personal knowledge graph** — entities (person, place, event, preference, fact, project, organisation, concept, skill, media) linked by typed directional relations (`Dad --[father_of]--> User`), with alias resolution, auto-linking on save, memory decay, and background orphan repair. The agent can save, search, link, and explore memories through natural conversation. Graph-enhanced auto-recall retrieves semantically similar entities via FAISS and expands 1 hop in the NetworkX graph before every LLM call. An interactive **Knowledge tab** visualizes the full graph with search, entity-type filters, ego-graph toggle, and clickable detail cards. Background extraction produces structured triples with deterministic cross-category dedup.
 
 [Details →](docs/ARCHITECTURE.md#long-term-memory--knowledge-graph)
+
+### 📚 Wiki Vault (Obsidian Export)
+
+Export the entire knowledge graph as an **Obsidian-compatible markdown vault** — one `.md` file per entity with YAML frontmatter, `[[wiki-links]]`, and per-type indexes. Entities grouped by type (`wiki/person/`, `wiki/project/`, …); sparse entities roll up into index files. Live export on save/delete, full-text search, and conversation export. The agent has 5 sub-tools (`wiki_search`, `wiki_read`, `wiki_rebuild`, `wiki_stats`, `wiki_export_conversation`) to interact with the vault directly.
+
+[Details →](docs/ARCHITECTURE.md#wiki-vault)
+
+### 🌙 Dream Cycle (Nightly Knowledge Refinement)
+
+A background daemon that refines the knowledge graph during idle hours — **merging duplicates** (≥0.93 similarity), **enriching thin descriptions** from conversation context, and **inferring missing relationships** between co-occurring entities. Three-layer anti-contamination system prevents cross-entity fact-bleed: sentence-level excerpt filtering, deterministic post-enrichment validation, and hardened prompts. Configurable 1–5 AM window; all operations logged to a dream journal viewable in the Activity tab.
+
+[Details →](docs/ARCHITECTURE.md#dream-cycle)
+
+### 📄 Document Knowledge Extraction
+
+Uploaded documents are processed through a **map-reduce LLM pipeline** that extracts structured knowledge into the graph. Documents are split into windows, summarized, then reduced into a coherent article; core entities and relations are extracted with full source provenance. Supports PDF, DOCX, TXT, Markdown, HTML, and EPUB. Live progress pill in the status bar with phase indicator and stop button. Per-document cleanup removes vector store entries and all extracted entities.
+
+[Details →](docs/ARCHITECTURE.md#document-knowledge-extraction)
 
 ### 🤖 Brain Model & Cloud Models
 
@@ -108,7 +126,7 @@ Native window via **pywebview** with system tray, splash screen, right-click con
 
 ### 💬 Chat & Conversations
 
-Multi-turn threads with LangGraph checkpointer, auto-naming, per-thread model switching, and export (Markdown, text, PDF via Playwright). Attach images, PDFs, CSV, Excel, JSON — plus clipboard paste and drag-and-drop. Images persist across reloads via sidecar files. Inline rendering: **Plotly charts**, **Mermaid diagrams** (flowchart, sequence, state, ER, Gantt, mindmap), **YouTube embeds**, and syntax-highlighted code. **Status monitor panel** with animated avatar, 14 health-check pills, OAuth token monitoring, and one-click diagnosis.
+Multi-turn threads with LangGraph checkpointer, auto-naming, per-thread model switching, and export (Markdown, text, PDF via Playwright). Attach images, PDFs, CSV, Excel, JSON — plus clipboard paste and drag-and-drop. Images persist across reloads via sidecar files. Inline rendering: **Plotly charts**, **Mermaid diagrams** (flowchart, sequence, state, ER, Gantt, mindmap), **YouTube embeds**, and syntax-highlighted code. **Status monitor panel** with animated avatar, 17 health-check pills, OAuth token monitoring, and one-click diagnosis.
 
 [Details →](docs/ARCHITECTURE.md#chat--conversations)
 
@@ -139,9 +157,9 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 
 ---
 
-## 🔧 Tools (23 Tools / 61 Sub-tools)
+## 🔧 Tools (24 Tools / 67 Sub-tools)
 
-Thoth's agent has access to 23 tools that expose 61 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
+Thoth's agent has access to 24 tools that expose 67 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
 
 ### Search & Knowledge
 
@@ -154,6 +172,7 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 | **▶️ YouTube** | Search videos + fetch full transcripts/captions | None |
 | **🔗 URL Reader** | Fetch and extract text content from any URL | None |
 | **📄 Documents** | Semantic search over your uploaded files (FAISS vector store) | None |
+| **📚 Wiki Vault** | Search, read, rebuild, and export the knowledge graph as an Obsidian markdown vault | None |
 
 ### Productivity
 
@@ -201,7 +220,7 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 | **Conversations** | Owned by the provider — can be deleted, leaked, or used for training | Stored locally in SQLite, fully yours, exportable anytime |
 | **Cost** | $20+/month per subscription | Free with local models. Cloud models use pay-per-token APIs — typically pennies per conversation with smart context trimming |
 | **Memory** | Limited, opaque, provider-controlled | Personal knowledge graph — entities, relationships, visual explorer, fully yours |
-| **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, shell, browser, webcam — 23 tools, 61 sub-operations |
+| **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, shell, browser, webcam — 24 tools, 67 sub-operations |
 | **Customisation** | Pick a model, write a system prompt | Swap models per conversation or per task, build scheduled tasks with cron/daily/weekly/interval triggers, mix local and cloud models freely |
 | **Voice** | Cloud-processed speech | Local Whisper STT + Kokoro TTS — never leaves your mic |
 | **Availability** | Requires internet, subject to outages & rate limits | Local models work offline; cloud models available when connected |
@@ -219,12 +238,12 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 │                    NiceGUI Frontend (app.py + ui/ package)              │
 │  ┌────────────┐  ┌──────────────────────┐  ┌───────────────────┐   │
 │  │  Sidebar   │  │   Chat Interface     │  │   Settings Dialog │   │
-│  │  Threads   │  │   Streaming Tokens   │  │   12 Tabs         │   │
+│  │  Threads   │  │   Streaming Tokens   │  │   13 Tabs         │   │
 │  │  Controls  │  │   Tool Status        │  │   Tool Config     │   │
-│  │  Memory Tab│  │   Memory Graph View  │  │   Cloud Settings  │   │
+│  │ Knowledge  │  │ Knowledge Graph View │  │   Cloud Settings  │   │
 │  └────────────┘  └──────────────────────┘  └───────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Status Monitor — Avatar · 14 Health Pills · Diagnosis Btn  │   │
+│  │  Status Monitor — Avatar · 17 Health Pills · Diagnosis Btn  │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └──────────────────────────┬───────────────────────────────────────────┘
                            │
@@ -238,7 +257,7 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 │   Graph-enhanced auto-recall (semantic + 1-hop expansion)           │
 │   Per-thread model override (local or cloud)                        │
 │                                                                      │
-│   61 LangChain sub-tools from 23 registered tool modules            │
+│   67 LangChain sub-tools from 24 registered tool modules            │
 └───────┬──────────┬──────────┬──────────┬──────────┬─────────────────┘
         │          │          │          │          │
         ▼          ▼          ▼          ▼          ▼
@@ -288,13 +307,13 @@ Thoth's agent has access to 23 tools that expose 61 individual operations to the
 
 ### Windows
 
-1. Download **[ThothSetup_3.10.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.11.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.10.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.11.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Open the DMG and drag **Thoth.app** into the **Applications** folder
 3. Launch **Thoth** from Applications or Launchpad
    - First run may prompt "Thoth is an app downloaded from the internet" → click **Open**

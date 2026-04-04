@@ -3,10 +3,8 @@ name: self_reflection
 display_name: Self-Reflection
 icon: "🪞"
 description: Periodically review memory for contradictions, gaps, and stale information.
-tools:
-  - memory
 enabled_by_default: false
-version: "1.0"
+version: "1.1"
 tags:
   - memory
   - quality
@@ -23,15 +21,17 @@ When the user asks you to **review your memories**, **check what you know**, **c
 
 ## Memory Audit (when explicitly requested)
 
-4. **Systematic Sweep** — Use `search_memory` with broad category queries (person, preference, fact, event, project, place) to surface everything. Use `explore_connections` to visualise relationships and spot gaps. Review each category for:
+4. **Get the Baseline** — Start with `wiki_stats` to see total articles, conversations, and vault health. Then use `wiki_search` with broad terms to scan for coverage gaps that `search_memory` (semantic only) might miss.
+5. **Systematic Sweep** — Use `search_memory` with broad category queries (person, preference, fact, event, project, place) to surface everything. Use `explore_connections` to visualise relationships and spot gaps. Review each category for:
    - **Duplicates** — Same fact stored under different wording
    - **Stale entries** — Jobs, addresses, or statuses that may have changed
-   - **Orphans** — Entities with no connections to anything else
+   - **User-only connections** — Entities whose only relationship is the auto-link to User (visible in the graph panel with "Hide unlinked" toggle) — these need richer connections
    - **Missing links** — Related memories that aren't connected (e.g. a person and their workplace)
-5. **Fix As You Go** — Update or `link_memories` during the audit rather than compiling a report first. Confirm each change with the user.
-6. **Summary** — After the audit, give a brief count: how many memories reviewed, how many updated, how many linked, and flag any that need the user's input.
+6. **Fix As You Go** — Update or `link_memories` during the audit rather than compiling a report first. Confirm each change with the user.
+7. **Rebuild after cleanup** — After bulk updates (merging duplicates, fixing links), run `wiki_rebuild` to regenerate the wiki vault with clean, up-to-date articles.
+8. **Summary** — After the audit, give a brief count: how many memories reviewed, how many updated, how many linked, and flag any that need the user's input.
 
 ## Ongoing Awareness
 
-7. **Correction Logging** — When the user corrects you on a fact ("Actually, it's March 20, not March 15"), always update the existing memory. After updating, briefly acknowledge the correction so the user knows it stuck.
-8. **Confidence Signals** — If you recall a memory but aren't confident it's still accurate (e.g. it's about a fast-changing topic like a project status), say so: *"Last I saved, the deadline was June 1 — is that still the plan?"*
+9. **Correction Logging** — When the user corrects you on a fact ("Actually, it's March 20, not March 15"), always update the existing memory. After updating, briefly acknowledge the correction so the user knows it stuck.
+10. **Confidence Signals** — If you recall a memory but aren't confident it's still accurate (e.g. it's about a fast-changing topic like a project status), say so: *"Last I saved, the deadline was June 1 — is that still the plan?"*

@@ -2,6 +2,139 @@
 
 ---
 
+## v3.11.0 — Wiki Vault, Dream Cycle, Document Extraction & Knowledge Consolidation
+
+Three major knowledge systems land in this release. **Wiki Vault** exports the entire knowledge graph as an Obsidian-compatible markdown vault with YAML frontmatter, wiki-links, and per-type indexes. **Dream Cycle** runs nightly background refinement — merging duplicate entities, enriching thin descriptions from conversation context, and inferring missing relationships — with a three-layer anti-contamination system that prevents cross-entity fact-bleed. **Document Knowledge Extraction** processes uploaded documents through a map-reduce LLM pipeline, extracting entities and relations into the knowledge graph with full source provenance. The Settings UI consolidates all knowledge features under a unified **Knowledge tab**, the graph panel gains source filtering and recency glow, and the status bar grows to 17 health-check pills.
+
+### 📚 Wiki Vault (Obsidian Export)
+
+The knowledge graph can now be exported as a structured markdown vault, compatible with Obsidian, VS Code, and any markdown editor.
+
+- **Vault structure** — entities grouped by type (`wiki/person/`, `wiki/project/`, `wiki/event/`, etc.) with one `.md` file per entity; sparse entities (<20 chars) roll up into `_index.md` per type; per-type indexes and a master `index.md` auto-generated on rebuild
+- **YAML frontmatter** — each article includes `id`, `type`, `subject`, `aliases`, `tags`, `source`, `created`, `updated` metadata
+- **Wiki-links** — related entities linked via `[[Entity Name]]` syntax, enabling Obsidian backlinks and graph view
+- **Connections section** — outgoing and incoming relations listed with arrow notation
+- **Live export** — entities are exported on save (≥20 chars), deleted on entity removal, and rebuilt on batch operations
+- **Search** — full-text search across all `.md` files with title, snippet, and entity ID results
+- **Conversation export** — any thread can be exported as a vault-compatible markdown file
+- **Agent tool** — 5 sub-tools (`wiki_search`, `wiki_read`, `wiki_rebuild`, `wiki_stats`, `wiki_export_conversation`) let the agent interact with the vault
+- **Settings UI** — enable/disable toggle, vault path configuration with Browse button, stats display, rebuild and open-folder buttons
+
+### 🌙 Dream Cycle (Nightly Knowledge Refinement)
+
+A background daemon refines the knowledge graph during idle hours, running three non-destructive operations.
+
+- **Duplicate merge** — entities with ≥0.93 semantic similarity and same type are merged; LLM synthesizes the best description, aliases are unioned, relations re-pointed to the survivor
+- **Description enrichment** — thin entities (<80 chars) appearing in 2+ conversations get richer descriptions from conversation context and relationship graph
+- **Relationship inference** — co-occurring entity pairs with no existing edge are evaluated for a meaningful connection (tagged `source="dream_infer"`)
+- **Three-layer anti-contamination** — (1) sentence-level excerpt filtering extracts only sentences mentioning the target entity, (2) deterministic post-enrichment cross-entity validation scans LLM output for unrelated entity subjects and rejects contaminated results before DB write, (3) strengthened prompt with concrete negative examples and subject-name substitution
+- **Subject-name guard** — entities with different normalized subjects require ≥0.98 similarity to merge, preventing false merges of distinct people/concepts
+- **Configurable window** — default 1–5 AM local time; checks every 30 minutes if conditions met (enabled, in window, idle, not yet run today)
+- **Dream journal** — all operations logged to `~/.thoth/dream_journal.json` with cycle ID, summary, and duration; viewable in the Activity tab
+- **Settings UI** — enable/disable toggle, window display, last run summary in the Knowledge tab
+- **Status pill** — new Dream Cycle health-check pill shows enabled state and last run time
+
+### 📄 Document Knowledge Extraction (Map-Reduce Pipeline)
+
+Uploaded documents are now processed through a three-phase LLM pipeline that extracts structured knowledge.
+
+- **Map phase** — document split into ~6K-char windows; each window summarized to 3–5 sentences
+- **Reduce phase** — window summaries combined into a coherent 300–600 word article
+- **Extract phase** — core entities and relations pulled from the final article; 3–8 entities per document
+- **Hub entity** — the document itself is saved as a `media` entity; extracted entities linked via `extracted_from` relation for provenance
+- **Cross-window dedup** — entities with the same subject across windows are merged before saving
+- **Live progress** — status bar shows pulsing progress pill with phase indicator, progress bar, queue count, and stop button (updates every 2 seconds)
+- **Background queue** — documents queued for processing; worker thread handles one at a time
+- **New file formats** — document upload now supports `.md`, `.html`, and `.epub` in addition to PDF, DOCX, and TXT
+- **Per-document cleanup** — individual document delete button removes vector store entries and all extracted entities with matching source tag; bulk "Clear all documents" removes everything with `document:*` prefix
+
+### 🧠 Knowledge Tab Consolidation
+
+All knowledge management features are unified under a single **Knowledge** settings tab.
+
+- **Renamed** — "Memory" tab → "Knowledge" tab throughout settings, home Activity panel, and status pills
+- **Unified sections** — Memory Extraction settings, Wiki Vault settings, Dream Cycle settings, and Danger Zone all in one place
+- **Activity panel** — shows extraction counters (threads scanned, entities saved, islands repaired), Dream Cycle window/status/last run, and up to 3 recent dream journal entries
+- **Danger zone** — "Delete all knowledge" now clears entities, vector store, and wiki vault folder in one operation with confirmation dialog
+
+### 🕸️ Knowledge Graph Visualization Enhancements
+
+The graph panel gains filtering tools and visual indicators for entity provenance and recency.
+
+- **Source filter pills** — toggleable `💬 chat` and `📄 documents` buttons filter nodes by origin
+- **Recency glow** — node border width and color reflect how recently the entity was updated: bright amber (≤7 days), orange (7–30 days), dim brown (30–90 days), stale grey (90+ days)
+- **User hub toggle** — show or hide the central User node
+- **Hide unlinked toggle** — hide entities connected only to the User node, revealing natural clusters
+- **Source border style** — document-sourced entities render with dashed borders
+- **Detail card** — now shows source label and recency (e.g., "📄 document · 1 day ago")
+- **Edge IDs** — `graph_to_vis_json()` now includes `id` field on edges for stable updates
+
+### 🔗 Memory Tool Improvements
+
+- **Subject-name arguments** — `link_memories` and `explore_connections` now accept entity **names** (preferred) instead of hex IDs; `_resolve_entity()` helper looks up by name first, falls back to ID
+- **Contradiction detection** — `save_memory` runs LLM-based contradiction check before updating; if a conflict is detected, the agent returns a warning and asks the user which version is correct
+- **Cross-entity overwrite guard** — system prompt guardrail prevents `update_memory` from overwriting a memory belonging to a different subject than the one being discussed
+- **Retry on parallel calls** — `link_memories` includes 0.5s retry delay for parallel tool invocations that race against entity creation
+
+### 🔧 Rendering Fixes
+
+- **Mermaid diagram extraction** — fenced mermaid blocks are now extracted from text *before* `markdown2` processing (which was mangling them), rendered as `<pre class="mermaid">` elements, and processed by `mermaid.js` with a 100ms post-render delay
+- **Streaming finalization** — all streamed messages now get unconditionally re-rendered at finalization (was previously gated on YouTube/mermaid detection), fixing code block syntax highlighting that only appeared on refresh
+
+### 📊 Status Monitor Updates
+
+- **17 health-check pills** — 3 new checks for Dream Cycle, TTS (Kokoro), and Wiki Vault; total up from 14
+- **Renamed** — "Memory" pill → "Knowledge" pill
+- **Tab routing fixes** — Disk pill now links to System tab; FAISS Index pill no longer links anywhere (informational only)
+- **Extraction progress pill** — live document extraction progress with phase, bar, queue count, and stop button
+
+### 📋 Bundled Skills Updated
+
+- **Knowledge Base** — new bundled skill guiding the agent through the unified knowledge system (graph + documents + wiki)
+- **Self-Reflection** — updated to reference `wiki_search` and `wiki_rebuild` for the reflection cycle
+- **Deep Research** — added "Check Existing Knowledge" and "Save Key Findings" steps
+- **Brain Dump** — added "Check Existing Knowledge" step to prevent duplicating facts
+- **Meeting Notes** — references knowledge graph and wiki linking
+- **Tool fields removed** — `tools:` field removed from all updated skill frontmatters (skills auto-discover tools)
+
+### 🧪 Tests
+
+- **974 PASS**, 0 FAIL, 1 WARN (up from 886 in v3.10.0)
+- New: Wiki Vault (74 tests), Auto-Recall improvements, Wiki Tool (5 sub-tools), Bundled Skills validation, Document Knowledge Extraction (map-reduce, dedup, queue, cleanup), Wiki Cleanup & Knowledge Tab consolidation, Dream Cycle (config, journal, safety checks, 14 assertions), Status monitor count updates
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`wiki_vault.py`** | **New** — Obsidian-compatible markdown vault export: per-entity articles, YAML frontmatter, wiki-links, indexes, search, conversation export |
+| **`tools/wiki_tool.py`** | **New** — Agent tool with 5 sub-tools: wiki_search, wiki_read, wiki_rebuild, wiki_stats, wiki_export_conversation |
+| **`dream_cycle.py`** | **New** — Nightly knowledge refinement daemon: merge, enrich, infer with 3-layer anti-contamination, configurable window, dream journal |
+| **`document_extraction.py`** | **New** — Background map-reduce LLM pipeline: split → summarize → extract entities; queue-based with live progress |
+| **`bundled_skills/knowledge_base/SKILL.md`** | **New** — Bundled skill for the unified knowledge system |
+| **`prompts.py`** | 8 new prompt templates: DOC_MAP/REDUCE/EXTRACT, DREAM_MERGE/ENRICH/INFER, updated EXTRACTION_PROMPT (10 entity types), cross-entity guardrail in UPDATING MEMORIES, search_documents→documents fix |
+| **`knowledge_graph.py`** | `delete_entities_by_source()`, `delete_entities_by_source_prefix()`, `repair_graph_islands()`, edge IDs in vis JSON, `_updated_at`/`_source` fields on nodes, wiki vault auto-export on save/delete |
+| **`documents.py`** | New loaders for `.md`, `.html`, `.epub`; `remove_document()` with source cleanup |
+| **`tools/memory_tool.py`** | `_resolve_entity()` name-first lookup, `_check_contradiction()` LLM call, subject-name arguments on link/explore, 0.5s retry |
+| **`memory_extraction.py`** | Calls `repair_graph_islands()`, extraction status counters (threads_scanned, entities_saved, islands_repaired) |
+| **`ui/settings.py`** | Knowledge tab consolidation (Memory+Wiki+Dream Cycle), document upload triggers extraction queue, per-doc delete, Wiki Vault section, Dream Cycle section, danger zone clears wiki |
+| **`ui/home.py`** | Activity panel: extraction counters, Dream Cycle status/journal, renamed Memory→Knowledge |
+| **`ui/graph_panel.py`** | Source filter pills, recency glow, user hub toggle, hide unlinked toggle, source border style, detail card enhancements |
+| **`ui/render.py`** | `_MERMAID_FENCE_RE`, `_split_mermaid()`, mermaid extraction before markdown2, `<pre class="mermaid">` rendering |
+| **`ui/streaming.py`** | Unconditional re-render at finalization, `mermaid.run()` with 100ms delay |
+| **`ui/status_bar.py`** | Document extraction progress pill with phase/bar/stop button |
+| **`ui/status_checks.py`** | 3 new checks (Dream Cycle, TTS, Wiki Vault), Memory→Knowledge rename, Disk→System tab, FAISS unlinked |
+| **`ui/chat.py`** | Drag-drop safety timer, document-level drop handler with Quasar guard |
+| **`app.py`** | `start_dream_loop()` at startup |
+| **`tools/__init__.py`** | `wiki_tool` import for registry auto-registration |
+| **`bundled_skills/self_reflection/SKILL.md`** | References wiki_search + wiki_rebuild, removed tools field |
+| **`bundled_skills/deep_research/SKILL.md`** | Added Check Existing Knowledge + Save Key Findings steps |
+| **`bundled_skills/brain_dump/SKILL.md`** | Added Check Existing Knowledge step |
+| **`bundled_skills/meeting_notes/SKILL.md`** | References knowledge graph + wiki linking |
+| **`test_suite.py`** | 88 new tests across 7 sections (42–48); check count updates |
+| **`integration_tests.py`** | New integration tests for document extraction + wiki vault |
+
+---
+
 ## v3.10.0 — Status Monitor, Mermaid Diagrams, Image Persistence, Vision Files & Rich PDF Export
 
 The home screen gets an interactive **status monitor panel** — a frosted-glass bar with an animated avatar, 14 health-check pills, and a one-click diagnosis button. Images now **survive thread reload** — pasted, captured, and attached images are persisted in per-thread sidecar files and rehydrated when you revisit a conversation. **Mermaid diagram rendering** brings flowcharts, sequence diagrams, and state diagrams to life inline in chat via mermaid.js. The **vision tool** gains `source='file'` for analyzing workspace image files by path, and the **filesystem tool** displays images inline when read. **PDF export** is upgraded to Playwright (headless Chromium) for full Unicode, emoji, chart, and styled markdown support. **OAuth token health checks** proactively validate Gmail and Calendar tokens at startup with silent refresh and periodic re-validation. A rewritten **Arxiv tool**, **clipboard image paste**, **right-click context menu** (pywebview), and a knowledge graph **opacity-based filter** round out the release.

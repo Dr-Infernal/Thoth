@@ -40,6 +40,42 @@ if _app_dir not in sys.path:
 
 from nicegui import ui, app, run
 
+
+# ── Patch NiceGUI JSON serializer for surrogate safety ───────────────────────
+# PDF text extraction and web scraping can inject lone UTF-16 surrogates
+# (U+D800–U+DFFF) into tool results stored in LangGraph checkpoints.
+# orjson (used by NiceGUI's socketio transport) rejects these with
+# "surrogates not allowed".  This patch catches the error and strips
+# surrogates on retry — zero cost for clean data.
+def _patch_json_serializer() -> None:
+    import re as _re
+    import nicegui.json as _nj
+    import nicegui.json.orjson_wrapper as _ow
+
+    _orig = _ow.dumps
+    _SURR = _re.compile('[\ud800-\udfff]')
+
+    def _strip(obj):
+        if isinstance(obj, str):
+            return _SURR.sub('', obj)
+        if isinstance(obj, dict):
+            return {_strip(k): _strip(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return type(obj)(_strip(x) for x in obj)
+        return obj
+
+    def _safe_dumps(obj, *args, **kwargs):
+        try:
+            return _orig(obj, *args, **kwargs)
+        except (TypeError, UnicodeEncodeError):
+            return _orig(_strip(obj), *args, **kwargs)
+
+    _ow.dumps = _safe_dumps
+    _nj.dumps = _safe_dumps
+
+_patch_json_serializer()
+
+
 # ── UI package ───────────────────────────────────────────────────────────────
 from ui.state import (
     AppState, GenerationState, P,
@@ -74,6 +110,7 @@ from agent import get_token_usage, clear_summary_cache
 from memory_extraction import (
     run_extraction, start_periodic_extraction, set_active_thread,
 )
+from dream_cycle import start_dream_loop
 from tasks import seed_default_tasks, start_task_scheduler, get_running_tasks, stop_task
 from notifications import drain_toasts
 
@@ -177,6 +214,9 @@ async def on_startup():
 
     _set("🔄 Starting periodic extraction…")
     await asyncio.to_thread(start_periodic_extraction)
+
+    _set("🌙 Starting dream cycle daemon…")
+    await asyncio.to_thread(start_dream_loop)
 
     _set("⚡ Loading workflows…")
     await asyncio.to_thread(lambda: (seed_default_tasks(), start_task_scheduler()))

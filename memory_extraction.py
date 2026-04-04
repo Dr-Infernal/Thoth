@@ -64,6 +64,9 @@ def get_extraction_status() -> dict:
     return {
         "last_extraction": st.get("last_extraction"),
         "interval_hours": _INTERVAL_S / 3600,
+        "threads_scanned": st.get("threads_scanned", 0),
+        "entities_saved": st.get("entities_saved", 0),
+        "islands_repaired": st.get("islands_repaired", 0),
     }
 
 
@@ -179,7 +182,7 @@ def _extract_from_conversation(conversation_text: str) -> list[dict]:
         return []
 
 
-def _dedup_and_save(extracted: list[dict]) -> int:
+def _dedup_and_save(extracted: list[dict], source: str = "extraction") -> int:
     """Save extracted memories and relations, deduplicating against existing ones.
 
     Uses ``find_by_subject(category=None, ...)`` — a deterministic SQL
@@ -189,6 +192,13 @@ def _dedup_and_save(extracted: list[dict]) -> int:
 
     Also processes extracted ``relations`` — connecting entities that
     the LLM identified as related.
+
+    Parameters
+    ----------
+    source : str
+        Value for the ``source`` field on saved entities/relations.
+        Defaults to ``"extraction"`` for conversation extraction.
+        Document extraction passes ``"document:<filename>"``.
 
     Returns the number of new/updated memories + relations.
     """
@@ -275,7 +285,6 @@ def _dedup_and_save(extracted: list[dict]) -> int:
                     update_memory(
                         existing["id"],
                         merged_content,
-                        source="extraction",
                         **update_kwargs,
                     )
                     saved_count += 1
@@ -291,14 +300,14 @@ def _dedup_and_save(extracted: list[dict]) -> int:
             try:
                 result = save_memory(
                     category, subject, content,
-                    tags="", source="extraction",
+                    tags="", source=source,
                 )
                 subject_to_id[kg._normalize_subject(subject)] = result["id"]
 
                 # If we created a new entity with aliases, update it
                 if new_aliases:
                     try:
-                        update_memory(result["id"], content, aliases=new_aliases, source="extraction")
+                        update_memory(result["id"], content, aliases=new_aliases, source=source)
                         for alias in new_aliases.split(","):
                             alias = alias.strip()
                             if alias:
@@ -362,7 +371,7 @@ def _dedup_and_save(extracted: list[dict]) -> int:
             try:
                 result = kg.add_relation(
                     src_id, tgt_id, rel_type,
-                    source="extraction",
+                    source=source,
                     confidence=rel.get("confidence", 0.8),
                 )
                 if result:
@@ -459,17 +468,30 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
         except Exception as exc:
             logger.debug("Post-extraction rebuild_index failed: %s", exc)
 
-    # Repair orphan entities — catch anything that slipped through
-    # without a relation (runs only on entities with zero connections).
+        # Single wiki vault rebuild after ALL threads processed (not per-entity)
+        try:
+            import wiki_vault
+            if wiki_vault.is_enabled():
+                wiki_vault.rebuild_vault()
+                logger.info("Post-extraction wiki vault rebuild complete")
+        except Exception as exc:
+            logger.debug("Post-extraction wiki rebuild skipped: %s", exc)
+
+    # Repair disconnected graph islands — bridge any clusters that have
+    # internal relations but no path to the User node.
+    islands_repaired = 0
     try:
         import knowledge_graph as _kg_repair
-        repaired = _kg_repair.repair_orphan_entities()
-        if repaired and on_status:
-            on_status(f"Linked {repaired} orphan memory(s)")
+        islands_repaired = _kg_repair.repair_graph_islands() or 0
+        if islands_repaired and on_status:
+            on_status(f"Bridged {islands_repaired} disconnected memory cluster(s)")
     except Exception as exc:
         logger.debug("Orphan repair failed (non-fatal): %s", exc)
 
     state["last_extraction"] = datetime.now().isoformat()
+    state["threads_scanned"] = len(new_threads)
+    state["entities_saved"] = total_saved
+    state["islands_repaired"] = islands_repaired
     _save_state(state)
 
     if on_status:

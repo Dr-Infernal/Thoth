@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import sqlite3
 import uuid
 from collections import defaultdict
@@ -52,6 +53,16 @@ _faiss_lock = threading.Lock()
 # per-call rebuild_index().  Callers must call rebuild_index() once
 # after the batch.  Used by the extraction pipeline.
 _skip_reindex = False
+
+# PDF extraction and web scraping can introduce lone UTF-16 surrogates
+# (U+D800–U+DFFF) into text.  These are valid in Python str but
+# invalid in strict UTF-8, causing orjson (NiceGUI) to crash on encode.
+_SURROGATE_RE = re.compile('[\ud800-\udfff]')
+
+
+def _sanitize_text(s: str) -> str:
+    """Strip lone UTF-16 surrogates that are invalid in strict UTF-8."""
+    return _SURROGATE_RE.sub('', s) if s else s
 
 # ── Data directory ───────────────────────────────────────────────────────────
 _DATA_DIR = pathlib.Path(
@@ -85,6 +96,36 @@ _CATEGORY_RELATION_MAP: dict[str, str] = {
     "concept":      "related_to",
     "media":        "related_to",
 }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Wiki vault hooks (fire-and-forget — never block graph operations)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _wiki_export_entity(entity: dict) -> None:
+    """Export an entity to the wiki vault (if enabled).  Non-blocking.
+
+    Skipped when ``_skip_reindex`` is True (batch extraction) — a single
+    ``rebuild_vault()`` is called at the end of the extraction run instead.
+    """
+    if _skip_reindex:
+        return
+    try:
+        import wiki_vault
+        if wiki_vault.is_enabled():
+            wiki_vault.export_entity(entity)
+    except Exception as exc:
+        logger.debug("Wiki export skipped: %s", exc)
+
+
+def _wiki_delete_entity(entity: dict) -> None:
+    """Remove an entity's .md file from the wiki vault (if enabled)."""
+    try:
+        import wiki_vault
+        if wiki_vault.is_enabled():
+            wiki_vault.delete_entity_md(entity)
+    except Exception as exc:
+        logger.debug("Wiki delete skipped: %s", exc)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -236,6 +277,50 @@ def _migrate_from_memories() -> int:
 
 _init_db()
 _migrate_from_memories()
+
+
+def _scrub_surrogates() -> None:
+    """One-time startup cleanup: strip surrogate chars from existing entities.
+
+    PDF text extraction can inject lone UTF-16 surrogates into entity text.
+    These are valid Python str but invalid in strict UTF-8, crashing orjson
+    when NiceGUI serialises graph data for the browser.  This scan fixes
+    existing rows so the data layer is clean going forward.
+    """
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, subject, description, aliases, tags FROM entities"
+    ).fetchall()
+    updates = []
+    for row in rows:
+        r = dict(row)
+        cleaned = {}
+        dirty = False
+        for col in ("subject", "description", "aliases", "tags"):
+            val = r[col] or ""
+            scrubbed = _sanitize_text(val)
+            if scrubbed != val:
+                dirty = True
+            cleaned[col] = scrubbed
+        if dirty:
+            updates.append((
+                cleaned["subject"], cleaned["description"],
+                cleaned["aliases"], cleaned["tags"], r["id"],
+            ))
+    if updates:
+        conn.executemany(
+            "UPDATE entities SET subject=?, description=?, aliases=?, tags=? "
+            "WHERE id=?",
+            updates,
+        )
+        conn.commit()
+        logger.info(
+            "Scrubbed surrogate characters from %d entities.", len(updates)
+        )
+    conn.close()
+
+
+_scrub_surrogates()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -420,6 +505,45 @@ def _upsert_index(entity_id: str) -> None:
         map_path.write_text(json.dumps(id_map))
 
 
+def _remove_from_index(entity_id: str) -> None:
+    """Remove a single entity from the FAISS index without full rebuild.
+
+    Much faster than ``rebuild_index()`` because it only reconstructs
+    existing vectors — no embedding calls needed.
+    """
+    import faiss as _faiss
+
+    index_path = _VECTOR_DIR / "index.faiss"
+    map_path = _VECTOR_DIR / "id_map.json"
+
+    with _faiss_lock:
+        if not index_path.exists() or not map_path.exists():
+            return
+        index = _faiss.read_index(str(index_path))
+        id_map: list[str] = json.loads(map_path.read_text())
+        if entity_id not in id_map:
+            return
+
+        old_idx = id_map.index(entity_id)
+        n = index.ntotal
+        if n > 1:
+            all_vecs = np.vstack(
+                [index.reconstruct(i) for i in range(n) if i != old_idx]
+            )
+            new_map = [eid for i, eid in enumerate(id_map) if i != old_idx]
+            dim = all_vecs.shape[1]
+            index = _faiss.IndexFlatIP(dim)
+            index.add(all_vecs)
+            id_map = new_map
+        else:
+            dim = index.d
+            index = _faiss.IndexFlatIP(dim)
+            id_map = []
+
+        _faiss.write_index(index, str(index_path))
+        map_path.write_text(json.dumps(id_map))
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Entity CRUD
 # ═════════════════════════════════════════════════════════════════════════════
@@ -471,17 +595,40 @@ def save_entity(
             f"Must be one of: {', '.join(sorted(VALID_ENTITY_TYPES))}"
         )
 
+    # Prevent duplicate User entities — redirect to update if one exists
+    if _normalize_subject(subject) == "user":
+        existing_user = find_by_subject(None, "User")
+        if existing_user:
+            # Merge description if new content adds info
+            old_desc = existing_user.get("description", "") or ""
+            new_desc = description.strip()
+            if new_desc and new_desc.lower() not in old_desc.lower():
+                merged = f"{old_desc}. {new_desc}".strip(". ") if old_desc else new_desc
+            else:
+                merged = old_desc
+            updated = update_entity(
+                existing_user["id"],
+                merged or old_desc,
+                entity_type="person",
+            )
+            return updated if updated else existing_user
+
     entity_id = uuid.uuid4().hex[:12]
     now = datetime.now().isoformat()
     props_json = json.dumps(properties or {})
 
     conn = _get_conn()
+    _subject = _sanitize_text(subject.strip())
+    _description = _sanitize_text(description.strip())
+    _aliases = _sanitize_text(aliases.strip())
+    _tags = _sanitize_text(tags.strip())
+
     conn.execute(
         "INSERT INTO entities "
         "(id, entity_type, subject, description, aliases, tags, properties, source, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (entity_id, entity_type, subject.strip(), description.strip(),
-         aliases.strip(), tags.strip(), props_json, source.strip(), now, now),
+        (entity_id, entity_type, _subject, _description,
+         _aliases, _tags, props_json, source.strip(), now, now),
     )
     conn.commit()
     conn.close()
@@ -489,10 +636,10 @@ def save_entity(
     entity = {
         "id": entity_id,
         "entity_type": entity_type,
-        "subject": subject.strip(),
-        "description": description.strip(),
-        "aliases": aliases.strip(),
-        "tags": tags.strip(),
+        "subject": _subject,
+        "description": _description,
+        "aliases": _aliases,
+        "tags": _tags,
         "properties": props_json,
         "source": source.strip(),
         "created_at": now,
@@ -510,6 +657,9 @@ def save_entity(
         # and during batch extraction, which handles relations in Pass 2).
         if _normalize_subject(subject) != "user":
             _auto_link_to_user(entity_id, entity_type)
+
+    # Wiki vault export (non-blocking, fire-and-forget)
+    _wiki_export_entity(entity)
 
     return entity
 
@@ -540,11 +690,11 @@ def update_entity(
     """
     now = datetime.now().isoformat()
     fields = ["description = ?", "updated_at = ?"]
-    params: list = [description.strip(), now]
+    params: list = [_sanitize_text(description.strip()), now]
 
     if subject is not None:
         fields.append("subject = ?")
-        params.append(subject.strip())
+        params.append(_sanitize_text(subject.strip()))
     if entity_type is not None:
         et = entity_type.lower().strip()
         if et in VALID_ENTITY_TYPES:
@@ -552,10 +702,10 @@ def update_entity(
             params.append(et)
     if aliases is not None:
         fields.append("aliases = ?")
-        params.append(aliases.strip())
+        params.append(_sanitize_text(aliases.strip()))
     if tags is not None:
         fields.append("tags = ?")
-        params.append(tags.strip())
+        params.append(_sanitize_text(tags.strip()))
     if properties is not None:
         fields.append("properties = ?")
         params.append(json.dumps(properties))
@@ -587,12 +737,17 @@ def update_entity(
             g.add_node(entity_id, **entity)
         if not _skip_reindex:
             _upsert_index(entity_id)
+        # Wiki vault export (non-blocking)
+        _wiki_export_entity(entity)
         return entity
     return None
 
 
 def delete_entity(entity_id: str) -> bool:
     """Delete an entity and its relations.  Returns True if deleted."""
+    # Capture entity data before deletion for wiki cleanup
+    entity_data = get_entity(entity_id)
+
     conn = _get_conn()
     # FK CASCADE handles relations
     cur = conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
@@ -605,8 +760,68 @@ def delete_entity(entity_id: str) -> bool:
         if entity_id in g:
             g.remove_node(entity_id)  # also removes incident edges
         if not _skip_reindex:
-            rebuild_index()
+            _remove_from_index(entity_id)
+        # Wiki vault cleanup
+        if entity_data:
+            _wiki_delete_entity(entity_data)
     return deleted
+
+
+def delete_entities_by_source(source: str) -> int:
+    """Delete all entities (and their relations via FK CASCADE) matching *source*.
+
+    Re-syncs the NetworkX graph and rebuilds the FAISS index once at the end.
+    Returns the number of entities deleted.
+    """
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, entity_type, subject, description FROM entities WHERE source = ?",
+        (source,),
+    ).fetchall()
+    if not rows:
+        conn.close()
+        return 0
+
+    ids = [r[0] for r in rows]
+    conn.execute(
+        f"DELETE FROM entities WHERE id IN ({','.join('?' * len(ids))})", ids,
+    )
+    # Also delete relations that reference this source (orphaned by other docs)
+    conn.execute("DELETE FROM relations WHERE source = ?", (source,))
+    conn.commit()
+    conn.close()
+
+    g = _ensure_graph()
+    for eid in ids:
+        if eid in g:
+            g.remove_node(eid)
+
+    if not _skip_reindex:
+        rebuild_index()
+
+    # Wiki vault cleanup
+    for r in rows:
+        _wiki_delete_entity(dict(zip(("id", "entity_type", "subject", "description"), r)))
+
+    return len(ids)
+
+
+def delete_entities_by_source_prefix(prefix: str) -> int:
+    """Delete all entities whose source starts with *prefix* (e.g. ``'document:'``).
+
+    Returns total entities deleted.
+    """
+    conn = _get_conn()
+    sources = conn.execute(
+        "SELECT DISTINCT source FROM entities WHERE source LIKE ?",
+        (prefix + "%",),
+    ).fetchall()
+    conn.close()
+
+    total = 0
+    for (src,) in sources:
+        total += delete_entities_by_source(src)
+    return total
 
 
 def list_entities(
@@ -690,18 +905,29 @@ def find_by_subject(
 
     norm = _normalize_subject(subject)
 
+    matches = []
     for row in rows:
         row = dict(row)
         # Match on subject
         if _normalize_subject(row["subject"]) == norm:
-            return row
+            matches.append(row)
+            continue
         # Match on aliases
         aliases = row.get("aliases", "")
         if aliases:
             for alias in aliases.split(","):
                 if _normalize_subject(alias.strip()) == norm:
-                    return row
-    return None
+                    matches.append(row)
+                    break
+
+    if not matches:
+        return None
+    # For the canonical "User" entity, prefer person type
+    if norm == "user":
+        for m in matches:
+            if m.get("entity_type") == "person":
+                return m
+    return matches[0]
 
 
 # ── Auto-link helpers ────────────────────────────────────────────────────────
@@ -883,6 +1109,12 @@ def add_relation(
     g = _ensure_graph()
     g.add_edge(source_id, target_id, **rel)
 
+    # Re-export both endpoints so .md Connections sections stay current
+    for eid in (source_id, target_id):
+        ent = get_entity(eid)
+        if ent:
+            _wiki_export_entity(ent)
+
     return rel
 
 
@@ -954,6 +1186,13 @@ def delete_relation(relation_id: str) -> bool:
     g = _ensure_graph()
     if g.has_edge(row["source_id"], row["target_id"]):
         g.remove_edge(row["source_id"], row["target_id"])
+
+    # Re-export both endpoints so .md Connections sections stay current
+    for eid in (row["source_id"], row["target_id"]):
+        ent = get_entity(eid)
+        if ent:
+            _wiki_export_entity(ent)
+
     return True
 
 
@@ -1298,6 +1537,8 @@ def graph_to_vis_json(
         desc = n.get("description", "") or ""
         aliases = n.get("aliases", "") or ""
         tags = n.get("tags", "") or ""
+        source = n.get("source", "live") or "live"
+        updated_at = n.get("updated_at", "") or ""
 
         vis_nodes.append({
             "id": nid,
@@ -1311,12 +1552,14 @@ def graph_to_vis_json(
                 f"Connections: {deg}"
                 + (f"\n{desc[:120]}" if desc else "")
             ),
-            # Extra data for the detail card
+            # Extra data for the detail card and filtering
             "_type": etype,
             "_description": desc,
             "_aliases": aliases,
             "_tags": tags,
             "_degree": deg,
+            "_source": source,
+            "_updated_at": updated_at,
         })
 
     # ── Build vis-network edges ──────────────────────────────────────────
@@ -1326,10 +1569,12 @@ def graph_to_vis_json(
         tgt = e.get("target_id", "")
         if src not in node_ids_set or tgt not in node_ids_set:
             continue
+        rel = e.get("relation_type", "")
         vis_edges.append({
+            "id": f"{src}__{tgt}__{rel}",
             "from": src,
             "to": tgt,
-            "label": e.get("relation_type", ""),
+            "label": rel,
             "arrows": "to",
             "color": {"color": "#616161", "highlight": "#FFD54F"},
         })
@@ -1428,17 +1673,20 @@ def graph_enhanced_recall(
     top_k: int = 5,
     threshold: float = 0.35,
     hops: int = 1,
+    max_results: int = 20,
 ) -> list[dict]:
-    """Semantic search + memory decay + 1-hop graph expansion.
+    """Semantic search + memory decay + graph expansion + wiki fallback.
 
     1. FAISS semantic search for top-k seed entities.
     2. Apply memory decay multiplier (recent/recalled → higher score).
-    3. Expand 1-hop neighbors from the graph.
-    4. Reinforce recalled memories (touch ``recalled_at``).
+    3. Expand 1-hop neighbors from the graph (scored relative to seed).
+    4. Wiki vault full-text fallback when FAISS returns few results.
+    5. Cap total results to *max_results* to control token usage.
+    6. Reinforce recalled memories (touch ``recalled_at``).
 
     Each returned entity has extra keys:
-        ``score`` — semantic similarity × decay (seeds; 0 for graph-expanded)
-        ``via`` — ``'semantic'`` or ``'graph'``
+        ``score`` — semantic similarity × decay (seeds), or derived (graph/wiki)
+        ``via`` — ``'semantic'``, ``'graph'``, or ``'wiki'``
         ``relations`` — list of relations connecting this entity to its seed
     """
     seeds = semantic_search(query, top_k=top_k, threshold=threshold)
@@ -1449,8 +1697,10 @@ def graph_enhanced_recall(
     for seed in seeds:
         seed["score"] = round(seed.get("score", 0) * _decay_multiplier(seed), 4)
 
-    # Re-filter after decay (some may have dropped below threshold)
-    seeds = [s for s in seeds if s["score"] >= threshold]
+    # Re-filter after decay — use a softer floor so old-but-relevant
+    # memories fade in ranking but don't vanish entirely.
+    decay_floor = threshold * 0.7
+    seeds = [s for s in seeds if s["score"] >= decay_floor]
     if not seeds:
         return []
 
@@ -1489,10 +1739,39 @@ def graph_enhanced_recall(
                     "type": edata.get("relation_type", "related"),
                 })
 
-            nbr["score"] = 0.0
+            # Derive neighbor score from its seed (halved) so neighbors
+            # sort meaningfully instead of all being 0.
+            nbr["score"] = round(seed["score"] * 0.5, 4)
             nbr["via"] = "graph"
             nbr["relations"] = connecting_rels
             result.append(nbr)
+
+    # ── Wiki vault full-text fallback ───────────────────────────────
+    # If FAISS returned few semantic hits, try keyword search across the
+    # wiki markdown files.  Catches exact names, dates, and coded terms
+    # that embedding models struggle with.
+    if len(seeds) < 3:
+        try:
+            import wiki_vault
+            if wiki_vault.is_enabled():
+                wiki_hits = wiki_vault.search_vault(query, max_results=3)
+                for hit in wiki_hits:
+                    eid = hit.get("entity_id", "")
+                    if not eid or eid in seen_ids:
+                        continue
+                    entity = get_entity(eid)
+                    if entity:
+                        seen_ids.add(eid)
+                        entity["score"] = 0.15  # low but present
+                        entity["via"] = "wiki"
+                        entity["relations"] = []
+                        result.append(entity)
+        except Exception:
+            pass  # wiki fallback is non-critical
+
+    # ── Cap total results to control token usage ────────────────────
+    result.sort(key=lambda m: m["score"], reverse=True)
+    result = result[:max_results]
 
     # Reinforce recalled memories (touch recalled_at timestamp)
     try:
@@ -1522,6 +1801,14 @@ def delete_all_entities() -> int:
 
     if count:
         rebuild_index()
+
+    # Clean wiki vault files
+    try:
+        import wiki_vault
+        wiki_vault.clear_wiki_folder()
+    except Exception as exc:
+        logger.debug("Wiki cleanup skipped: %s", exc)
+
     return count
 
 
@@ -1648,16 +1935,54 @@ def consolidate_duplicates(threshold: float = 0.90) -> int:
 
 
 def repair_orphan_entities() -> int:
-    """Find entities with zero relations and auto-link them to User.
+    """Alias kept for backward compatibility — delegates to
+    :func:`repair_graph_islands`."""
+    return repair_graph_islands()
 
-    Uses the category heuristic (``_CATEGORY_RELATION_MAP``) to create
-    appropriate ``User → entity`` relations.  Skips the User entity itself.
 
-    Designed to be called after extraction / FAISS rebuild to patch up
-    any entities that slipped through without connections.
+# Entity-type priority for choosing the bridge node in an island.
+# Lower number = higher priority (people & projects are the most
+# meaningful bridge point; generic concepts are the fallback).
+_BRIDGE_PRIORITY: dict[str, int] = {
+    "person":       0,
+    "project":      1,
+    "organisation": 2,
+    "event":        3,
+    "place":        4,
+    "skill":        5,
+    "media":        6,
+    "preference":   7,
+    "concept":      8,
+    "fact":         9,
+}
 
-    Returns the number of new relations created.
+
+def repair_graph_islands() -> int:
+    """Ensure every entity is reachable from the User node.
+
+    Works in two passes:
+
+    1. **True orphans** — entities with zero relations get a direct
+       ``User → entity`` edge (same as the old ``repair_orphan_entities``).
+    2. **Disconnected islands** — connected components that have internal
+       relations but no path to User.  One *bridge entity* is chosen per
+       island (highest-priority type, then highest internal degree) and a
+       single ``User → bridge`` relation is created.  The island's own
+       internal structure is preserved — the bridge is the only new edge.
+
+    Uses ``networkx.connected_components`` on the **undirected** view of the
+    graph — O(V + E) on the in-memory NetworkX mirror, no DB or LLM calls.
+
+    Returns the total number of new relations created.
     """
+    g = _ensure_graph()
+    if g.number_of_nodes() == 0:
+        return 0
+
+    user_id = _ensure_user_entity()
+    linked = 0
+
+    # ── Pass 1: true orphans (zero relations) ────────────────────────
     conn = _get_conn()
     orphans = conn.execute("""
         SELECT e.* FROM entities e
@@ -1668,12 +1993,6 @@ def repair_orphan_entities() -> int:
         )
     """).fetchall()
     conn.close()
-
-    if not orphans:
-        return 0
-
-    user_id = _ensure_user_entity()
-    linked = 0
 
     for row in orphans:
         row = dict(row)
@@ -1693,8 +2012,49 @@ def repair_orphan_entities() -> int:
         except Exception:
             pass
 
+    # ── Pass 2: disconnected islands ─────────────────────────────────
+    # Re-read the graph (Pass 1 may have added edges).
+    g = _ensure_graph()
+    undirected = g.to_undirected(as_view=True)
+
+    for component in nx.connected_components(undirected):
+        if user_id in component:
+            continue  # This is the main cluster — nothing to do.
+
+        # Pick the best bridge entity for this island.
+        best_id: str | None = None
+        best_priority = 999
+        best_degree = -1
+
+        for node_id in component:
+            data = g.nodes.get(node_id, {})
+            etype = data.get("entity_type", "")
+            priority = _BRIDGE_PRIORITY.get(etype, 99)
+            degree = g.degree(node_id)
+            if (priority, -degree) < (best_priority, -best_degree):
+                best_priority = priority
+                best_degree = degree
+                best_id = node_id
+
+        if best_id is None:
+            continue
+
+        etype = g.nodes.get(best_id, {}).get("entity_type", "")
+        rel_type = _CATEGORY_RELATION_MAP.get(etype, "related_to")
+        try:
+            result = add_relation(user_id, best_id, rel_type, source="auto_bridge")
+            if result:
+                linked += 1
+                subj = g.nodes.get(best_id, {}).get("subject", "?")
+                logger.debug(
+                    "Island bridge: User --[%s]--> %s (island of %d)",
+                    rel_type, subj, len(component),
+                )
+        except Exception:
+            pass
+
     if linked:
-        logger.info("Repaired %d orphan entities with auto-links", linked)
+        logger.info("Graph repair: created %d bridge/orphan links", linked)
     return linked
 
 

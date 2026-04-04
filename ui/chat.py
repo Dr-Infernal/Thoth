@@ -437,6 +437,7 @@ def build_chat(
             window._thothDragInstalled = true;
             const body = document.body;
             let overlay = null;
+            let dragTimer = null;
             function showOverlay() {{
                 if (overlay) return;
                 overlay = document.createElement("div");
@@ -448,18 +449,29 @@ def build_chat(
             }}
             function hideOverlay() {{
                 if (overlay) {{ overlay.remove(); overlay = null; }}
+                if (dragTimer) {{ clearTimeout(dragTimer); dragTimer = null; }}
             }}
-            body.addEventListener("dragover", (e) => {{ e.preventDefault(); showOverlay(); }});
+            body.addEventListener("dragover", (e) => {{
+                e.preventDefault(); showOverlay();
+                // Safety: auto-hide after 300ms of no dragover events
+                if (dragTimer) clearTimeout(dragTimer);
+                dragTimer = setTimeout(hideOverlay, 300);
+            }});
             body.addEventListener("dragleave", (e) => {{
                 if (e.relatedTarget === null || !body.contains(e.relatedTarget)) hideOverlay();
             }});
-            body.addEventListener("drop", (e) => {{
-                e.preventDefault(); hideOverlay();
+            // Use capture phase so we hide overlay even if Quasar QUploader stops propagation
+            document.addEventListener("drop", (e) => {{
+                hideOverlay();
+                // Only intercept drops outside Quasar uploaders (let them handle their own)
+                const inUploader = e.target.closest && e.target.closest('.q-uploader');
+                if (inUploader) return;
+                e.preventDefault();
                 const files = e.dataTransfer?.files;
                 if (!files || files.length === 0) return;
                 const vue = getElement(window._thothUploadId);
                 if (vue && vue.$refs.qRef) vue.$refs.qRef.addFiles(files);
-            }});
+            }}, true);
         }})();
     ''')
 

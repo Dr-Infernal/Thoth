@@ -6,6 +6,7 @@ context.  They receive ``state`` and ``p`` explicitly, never via closure.
 
 from __future__ import annotations
 
+import html as _html
 import os
 import re
 from datetime import datetime
@@ -80,6 +81,12 @@ _MERMAID_START_RE = re.compile(
     r"^(graph|flowchart|sequenceDiagram|classDiagram|erDiagram|journey|gantt|"
     r"stateDiagram(?:-v2)?|mindmap|timeline|pie)\b",
     re.IGNORECASE,
+)
+
+# Matches a fenced ```mermaid ... ``` block (after _auto_fence_mermaid has run)
+_MERMAID_FENCE_RE = re.compile(
+    r"^```mermaid\s*\n(.*?)\n```",
+    re.MULTILINE | re.DOTALL,
 )
 
 
@@ -165,8 +172,28 @@ def _auto_fence_mermaid(text: str) -> str:
     return "\n\n".join(out_parts)
 
 
+def _split_mermaid(parts: list[tuple[str, str | None]]) -> list[tuple[str, str | None]]:
+    """Second pass: split any 'text' parts that contain fenced mermaid blocks."""
+    out: list[tuple[str, str | None]] = []
+    for kind, value in parts:
+        if kind != "text" or not value or "```mermaid" not in value:
+            out.append((kind, value))
+            continue
+        last = 0
+        for m in _MERMAID_FENCE_RE.finditer(value):
+            before = value[last:m.start()]
+            if before.strip():
+                out.append(("text", before))
+            out.append(("mermaid", m.group(1)))
+            last = m.end()
+        tail = value[last:]
+        if tail.strip():
+            out.append(("text", tail))
+    return out
+
+
 def render_text_with_embeds(text: str) -> None:
-    """Render markdown text with inline YouTube video embeds."""
+    """Render markdown text with inline YouTube video embeds and mermaid diagrams."""
     if not text:
         return
     text = _auto_fence_mermaid(text)
@@ -192,20 +219,28 @@ def render_text_with_embeds(text: str) -> None:
         tail = text[last_end:]
         if tail.strip():
             parts.append(("text", tail))
+    # If no YouTube embeds were found, start with the full text as one part
     if not parts:
-        ui.markdown(autolink_urls(text), extras=['code-friendly', 'fenced-code-blocks', 'tables']).classes("thoth-msg w-full")
-    else:
-        for kind, value in parts:
-            if kind == "text" and value and value.strip():
-                ui.markdown(autolink_urls(value), extras=['code-friendly', 'fenced-code-blocks', 'tables']).classes("thoth-msg w-full")
-            elif kind == "video":
-                ui.html(
-                    f'<iframe width="280" height="158" '
-                    f'src="https://www.youtube.com/embed/{value}" '
-                    f'frameborder="0" allowfullscreen '
-                    f'style="border-radius:8px;"></iframe>',
-                    sanitize=False,
-                )
+        parts = [("text", text)]
+    # Second pass: extract fenced mermaid blocks from text parts
+    parts = _split_mermaid(parts)
+    # Render all parts
+    for kind, value in parts:
+        if kind == "text" and value and value.strip():
+            ui.markdown(autolink_urls(value), extras=['code-friendly', 'fenced-code-blocks', 'tables']).classes("thoth-msg w-full")
+        elif kind == "video":
+            ui.html(
+                f'<iframe width="280" height="158" '
+                f'src="https://www.youtube.com/embed/{value}" '
+                f'frameborder="0" allowfullscreen '
+                f'style="border-radius:8px;"></iframe>',
+                sanitize=False,
+            )
+        elif kind == "mermaid" and value:
+            ui.html(
+                f'<div class="mermaid-rendered"><pre class="mermaid">{_html.escape(value)}</pre></div>',
+                sanitize=False,
+            )
 
 
 def render_message_content(msg: dict) -> None:
@@ -281,7 +316,7 @@ def render_message_content(msg: dict) -> None:
             "  div.textContent = el.textContent;"
             "  pre.replaceWith(div);"
             "});"
-            "if (typeof mermaid !== 'undefined') { mermaid.run({nodes: document.querySelectorAll('.mermaid-rendered')}); }"
+            "if (typeof mermaid !== 'undefined') { mermaid.run({nodes: document.querySelectorAll('pre.mermaid')}); }"
         )
     except RuntimeError:
         pass

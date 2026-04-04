@@ -3,11 +3,8 @@ name: meeting_notes
 display_name: Meeting Notes
 icon: "📋"
 description: Structure raw meeting notes into actionable minutes with follow-ups.
-tools:
-  - memory
-  - calendar
 enabled_by_default: false
-version: "1.1"
+version: "1.2"
 tags:
   - productivity
   - meetings
@@ -27,7 +24,7 @@ When the user shares **meeting notes**, asks you to **summarise a meeting**, or 
      - What needs to be done
      - Who is responsible
      - When it's due (if mentioned)
-4. **Save Action Items** — Store the action items to memory so they can be referenced later. Use a descriptive subject like `Team Standup Actions — March 28`.
+4. **Save to Knowledge Graph** — Store action items, decisions, and key facts to memory. Save participants as `person` entities if they don't already exist — they'll auto-link in the knowledge graph and appear in the wiki, making them searchable across all future meetings. Use descriptive subjects like `Team Standup Actions — March 28`. Link action items to the people responsible.
 5. **Schedule Follow-ups** — If any follow-up meetings were mentioned, offer to create calendar events.
 6. **Present** — Output the structured minutes in a clean, skimmable format.
 

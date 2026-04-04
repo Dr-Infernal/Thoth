@@ -1,5 +1,5 @@
 ; =============================================================================
-; Thoth v3.10.0 – Inno Setup Script
+; Thoth v3.11.0 – Inno Setup Script
 ; Self-contained installer: bundles embedded Python with all pip packages
 ; pre-installed.  No internet downloads at install time.
 ; =============================================================================
@@ -10,7 +10,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "3.10.0"
+#define MyAppVersion   "3.11.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -46,6 +46,9 @@ Source: "..\agent.py";                 DestDir: "{app}\app"; Flags: ignoreversio
 Source: "..\memory.py";                DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\memory_extraction.py";     DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\knowledge_graph.py";       DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\wiki_vault.py";             DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\dream_cycle.py";            DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\document_extraction.py";    DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\tasks.py";                 DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\models.py";                DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\data_reader.py";            DestDir: "{app}\app"; Flags: ignoreversion
@@ -100,6 +103,7 @@ Source: "..\tools\wolfram_tool.py";    DestDir: "{app}\app\tools"; Flags: ignore
 Source: "..\tools\browser_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\shell_tool.py";      DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\youtube_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
+Source: "..\tools\wiki_tool.py";      DestDir: "{app}\app\tools"; Flags: ignoreversion
 
 ; ── Bundled Skills ───────────────────────────────────────────────────────────
 Source: "..\bundled_skills\*";         DestDir: "{app}\app\bundled_skills"; Flags: ignoreversion recursesubdirs createallsubdirs

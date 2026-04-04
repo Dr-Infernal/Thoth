@@ -51,6 +51,30 @@ def build_graph_panel() -> None:
             sanitize=False,
         )
         ui.html('<div style="flex-grow:1;"></div>', sanitize=False)
+        # ── Source filter pills ──────────────────────────────────────
+        ui.html(
+            '<div id="graph-source-filters" style="display:flex; gap:4px; flex-wrap:wrap;">'
+            '<button data-source="chat" title="From conversations (manual + extraction + system)" '
+            'style="border:1px solid #42A5F5; background:none; border-radius:12px; '
+            'padding:1px 8px; font-size:0.72rem; color:#42A5F5; cursor:pointer;">💬 chat</button>'
+            '<button data-source="document" title="From uploaded documents" '
+            'style="border:1px solid #AB47BC; background:none; border-radius:12px; '
+            'padding:1px 8px; font-size:0.72rem; color:#AB47BC; cursor:pointer;">📄 documents</button>'
+            '</div>',
+            sanitize=False,
+        )
+        ui.html(
+            '<label style="display:flex; align-items:center; gap:4px; font-size:0.8rem; color:#ccc; cursor:pointer;" title="Show/hide the User hub node">'
+            '<input type="checkbox" id="graph-user-toggle" '
+            'style="accent-color:#4FC3F7;" /> User hub</label>',
+            sanitize=False,
+        )
+        ui.html(
+            '<label style="display:flex; align-items:center; gap:4px; font-size:0.8rem; color:#ccc; cursor:pointer;" title="Hide entities only connected to User">'
+            '<input type="checkbox" id="graph-unlinked-toggle" '
+            'style="accent-color:#FF8A65;" /> Hide unlinked</label>',
+            sanitize=False,
+        )
         ui.html(
             f'<span id="graph-stats-label" style="font-size:0.75rem; color:#9E9E9E;">'
             f'{stats["shown_nodes"]} memories · {stats["shown_edges"]} connections'
@@ -100,11 +124,53 @@ def build_graph_panel() -> None:
         '    currentNodes: null,'
         '    currentEdges: null,'
         '    activeFilters: new Set(),'
+        '    activeSourceFilters: new Set(),'
+        '    showUserHub: true,'
+        '    hideUnlinked: false,'
         '    isFullGraph: true,'
         '    searchDebounce: null'
         '  };'
+        # ── Helper: recency glow (days since updated_at → border width) ──
+        '  G.recencyGlow = function(updatedAt) {'
+        '    if (!updatedAt) return {bw: 1, bc: "#555"};'
+        '    var ms = Date.now() - new Date(updatedAt).getTime();'
+        '    var days = ms / 86400000;'
+        '    if (days <= 7) return {bw: 3, bc: "#FFD54F"};'     # bright amber
+        '    if (days <= 30) return {bw: 2, bc: "#FFA726"};'    # orange
+        '    if (days <= 90) return {bw: 1, bc: "#8D6E63"};'    # dim brown
+        '    return {bw: 1, bc: "#555"};'                        # stale
+        '  };'
+        # ── Helper: source-based border style ────────────────────────────
+        '  G.isDocSource = function(src) {'
+        '    return (src || "").indexOf("document") === 0;'
+        '  };'
+        '  G.sourceBorder = function(src) {'
+        '    if (G.isDocSource(src)) return "false";'   # dashes=false means dashed in vis
+        '    return undefined;'
+        '  };'
+        # ── Prepare nodes with recency + source styling ──────────────────
+        '  G.styleNode = function(n) {'
+        '    var glow = G.recencyGlow(n._updated_at);'
+        '    var styled = Object.assign({}, n);'
+        '    styled.borderWidth = glow.bw;'
+        '    styled.color = {background: n.color, border: glow.bc,'
+        '      highlight: {background: n.color, border: "#FFD54F"}};'
+        '    if (G.isDocSource(n._source)) {'
+        '      styled.shapeProperties = {borderDashes: [6,3]};'
+        '    }'
+        '    return styled;'
+        '  };'
+        '  G.allNodes = G.allNodes.map(G.styleNode);'
         '  G.currentNodes = G.allNodes;'
         '  G.currentEdges = G.allEdges;'
+        # ── Find the User node ID ────────────────────────────────────────
+        '  G.userNodeId = null;'
+        '  for (var ui = 0; ui < G.allNodes.length; ui++) {'
+        '    if ((G.allNodes[ui].label || "").toLowerCase() === "user") {'
+        '      G.userNodeId = G.allNodes[ui].id; break;'
+        '    }'
+        '  }'
+        # ── createNetwork ────────────────────────────────────────────────
         '  G.createNetwork = function(nodes, edges, focusId) {'
         '    var container = document.getElementById("graph-container");'
         '    if (!container) return;'
@@ -133,6 +199,7 @@ def build_graph_panel() -> None:
         '      if (focusId) { G.network.focus(focusId, { scale: 1.0, animation: true }); }'
         '      else { G.network.fit({ animation: true }); }'
         '    });'
+        # ── Click → detail card (enhanced with source + wiki link) ───────
         '    G.network.on("click", function(params) {'
         '      var detail = document.getElementById("graph-detail");'
         '      if (!detail) return;'
@@ -158,9 +225,17 @@ def build_graph_panel() -> None:
         '      }'
         '      var aliases = node._aliases ? "<div style=\\"color:#999; font-size:0.8rem;\\">Aliases: " + node._aliases + "</div>" : "";'
         '      var tags = node._tags ? "<div style=\\"color:#999; font-size:0.8rem;\\">Tags: " + node._tags + "</div>" : "";'
+        # Source label mapping
+        '      var srcLabel = G.isDocSource(node._source) ? "📄 document" : "💬 chat";'
+        # Time-ago helper
+        '      var agoText = "";'
+        '      if (node._updated_at) {'
+        '        var agoDays = Math.floor((Date.now() - new Date(node._updated_at).getTime()) / 86400000);'
+        '        agoText = agoDays === 0 ? "today" : agoDays === 1 ? "1 day ago" : agoDays + " days ago";'
+        '      }'
         '      detail.innerHTML ='
         '        "<div style=\\"display:flex; align-items:center; gap:8px;\\">"'
-        '        + "<span style=\\"background:" + node.color + "; width:10px; height:10px;"'
+        '        + "<span style=\\"background:" + (typeof node.color === "object" ? node.color.background : node.color) + "; width:10px; height:10px;"'
         '        + " border-radius:50%; display:inline-block;\\"></span>"'
         '        + "<b style=\\"color:#eee; font-size:1rem;\\">" + node.label + "</b>"'
         '        + "<span style=\\"color:#888; font-size:0.8rem;\\">(" + (node._type || "?") + ")</span>"'
@@ -168,7 +243,11 @@ def build_graph_panel() -> None:
         '        + node._degree + " connections</span>"'
         '        + "</div>"'
         '        + (node._description ? "<div style=\\"margin-top:4px; color:#bbb;\\">" + node._description + "</div>" : "")'
-        '        + aliases + tags + relHtml;'
+        '        + aliases + tags + relHtml'
+        '        + "<div style=\\"margin-top:4px; font-size:0.75rem; color:#777;\\">"'
+        '        + "Source: " + srcLabel'
+        '        + (agoText ? " \u00b7 Updated: " + agoText : "")'
+        '        + "</div>";'
         '      detail.style.display = "block";'
         '    });'
         '    G.network.on("doubleClick", function(params) {'
@@ -177,6 +256,7 @@ def build_graph_panel() -> None:
         '    });'
         '    return G.network;'
         '  };'
+        # ── refocusOnNode ────────────────────────────────────────────────
         '  G.refocusOnNode = function(nodeId) {'
         '    var hops = 2, visited = new Set([nodeId]), frontier = [nodeId];'
         '    for (var h = 0; h < hops; h++) {'
@@ -199,6 +279,7 @@ def build_graph_panel() -> None:
         '    G.updateStatsLabel(subNodes.length, subEdges.length);'
         '    G.createNetwork(subNodes, subEdges, nodeId);'
         '  };'
+        # ── buildFilterPills ─────────────────────────────────────────────
         '  G.buildFilterPills = function() {'
         '    var container = document.getElementById("graph-type-filters");'
         '    if (!container) return;'
@@ -225,14 +306,17 @@ def build_graph_panel() -> None:
         '      })(types[i]);'
         '    }'
         '  };'
+        # ── applyFilters (enhanced with source + user hub + unlinked) ────
         '  G.applyFilters = function() {'
         '    var searchVal = (document.getElementById("graph-search") || {}).value || "";'
         '    searchVal = searchVal.toLowerCase();'
-        '    var hasFilter = G.activeFilters.size > 0;'
+        '    var hasTypeFilter = G.activeFilters.size > 0;'
+        '    var hasSourceFilter = G.activeSourceFilters.size > 0;'
         '    var hasSearch = searchVal.length > 0;'
+        '    var hasAny = hasTypeFilter || hasSourceFilter || hasSearch || !G.showUserHub || G.hideUnlinked;'
         '    var ds = G.network.body.data.nodes;'
         '    var eds = G.network.body.data.edges;'
-        '    if (!hasFilter && !hasSearch) {'
+        '    if (!hasAny) {'
         '      G.allNodes.forEach(function(n) {'
         '        if (ds.get(n.id) === null) return;'
         '        ds.update({id: n.id, opacity: 1.0, color: n.color, font: {color: "#ccc", size: 12}});'
@@ -244,14 +328,46 @@ def build_graph_panel() -> None:
         '      G.updateStatsLabel(G.allNodes.length, G.allEdges.length);'
         '      return;'
         '    }'
+        # Build set of User hub edges (edges to/from User node)
+        '    var userEdges = new Set();'
+        '    if (!G.showUserHub && G.userNodeId) {'
+        '      G.allEdges.forEach(function(e) {'
+        '        if (e.from === G.userNodeId || e.to === G.userNodeId) userEdges.add(e.id);'
+        '      });'
+        '    }'
+        # Count non-User connections per node (for "unlinked" detection)
+        '    var nonUserDeg = {};'
+        '    if (G.hideUnlinked) {'
+        '      G.allNodes.forEach(function(n) { nonUserDeg[n.id] = 0; });'
+        '      G.allEdges.forEach(function(e) {'
+        '        if (e.from !== G.userNodeId && e.to !== G.userNodeId) {'
+        '          nonUserDeg[e.from] = (nonUserDeg[e.from] || 0) + 1;'
+        '          nonUserDeg[e.to] = (nonUserDeg[e.to] || 0) + 1;'
+        '        }'
+        '      });'
+        '    }'
         '    var matchSet = new Set();'
         '    G.allNodes.forEach(function(n) {'
-        '      var typeOk = !hasFilter || G.activeFilters.has(n._type);'
+        # Type filter
+        '      var typeOk = !hasTypeFilter || G.activeFilters.has(n._type);'
+        # Source filter — "chat" matches non-document, "document" matches document:*
+        '      var srcOk = !hasSourceFilter || (function() {'
+        '        var s = n._source || "live";'
+        '        var isDoc = G.isDocSource(s);'
+        '        if (G.activeSourceFilters.has("document") && isDoc) return true;'
+        '        if (G.activeSourceFilters.has("chat") && !isDoc) return true;'
+        '        return false;'
+        '      })();'
+        # Search filter
         '      var searchOk = !hasSearch || n.label.toLowerCase().indexOf(searchVal) >= 0'
         '        || (n._description || "").toLowerCase().indexOf(searchVal) >= 0'
         '        || (n._aliases || "").toLowerCase().indexOf(searchVal) >= 0'
         '        || (n._tags || "").toLowerCase().indexOf(searchVal) >= 0;'
-        '      if (typeOk && searchOk) matchSet.add(n.id);'
+        # User hub filter: hide User node itself
+        '      var userOk = G.showUserHub || n.id !== G.userNodeId;'
+        # Unlinked filter: hide nodes with 0 non-User connections
+        '      var linkedOk = !G.hideUnlinked || n.id === G.userNodeId || (nonUserDeg[n.id] || 0) > 0;'
+        '      if (typeOk && srcOk && searchOk && userOk && linkedOk) matchSet.add(n.id);'
         '    });'
         '    G.allNodes.forEach(function(n) {'
         '      if (ds.get(n.id) === null) return;'
@@ -264,14 +380,18 @@ def build_graph_panel() -> None:
         '    G.allEdges.forEach(function(e) {'
         '      if (eds.get(e.id) === null) return;'
         '      var both = matchSet.has(e.from) && matchSet.has(e.to);'
-        '      eds.update({id: e.id, color: {opacity: both ? 1.0 : 0.06}});'
+        '      var hiddenUserEdge = !G.showUserHub && userEdges.has(e.id);'
+        '      eds.update({id: e.id, color: {opacity: (both && !hiddenUserEdge) ? 1.0 : 0.06}});'
         '    });'
-        '    G.updateStatsLabel(matchSet.size, G.allEdges.filter(function(e) { return matchSet.has(e.from) && matchSet.has(e.to); }).length);'
+        '    var visibleEdges = G.allEdges.filter(function(e) { return matchSet.has(e.from) && matchSet.has(e.to) && (G.showUserHub || !userEdges.has(e.id)); });'
+        '    G.updateStatsLabel(matchSet.size, visibleEdges.length);'
         '  };'
+        # ── updateStatsLabel ─────────────────────────────────────────────
         '  G.updateStatsLabel = function(nodeCount, edgeCount) {'
         '    var el = document.getElementById("graph-stats-label");'
         '    if (el) el.textContent = nodeCount + " memories \u00b7 " + edgeCount + " connections";'
         '  };'
+        # ── wireControls (enhanced with source + user hub + unlinked) ────
         '  G.wireControls = function() {'
         '    G.buildFilterPills();'
         '    var searchInput = document.getElementById("graph-search");'
@@ -279,6 +399,40 @@ def build_graph_panel() -> None:
         '      searchInput.oninput = function() {'
         '        clearTimeout(G.searchDebounce);'
         '        G.searchDebounce = setTimeout(function() { G.applyFilters(); }, 300);'
+        '      };'
+        '    }'
+        # Source filter buttons
+        '    document.querySelectorAll("#graph-source-filters button").forEach(function(btn) {'
+        '      btn.onclick = function() {'
+        '        var src = btn.dataset.source;'
+        '        if (G.activeSourceFilters.has(src)) {'
+        '          G.activeSourceFilters.delete(src);'
+        '          btn.style.background = "none";'
+        '          btn.style.color = btn.style.borderColor;'
+        '        } else {'
+        '          G.activeSourceFilters.add(src);'
+        '          btn.style.background = btn.style.borderColor;'
+        '          btn.style.color = "#121212";'
+        '        }'
+        '        G.applyFilters();'
+        '      };'
+        '    });'
+        # User hub toggle
+        '    var userToggle = document.getElementById("graph-user-toggle");'
+        '    if (userToggle) {'
+        '      userToggle.checked = G.showUserHub;'
+        '      userToggle.onchange = function() {'
+        '        G.showUserHub = userToggle.checked;'
+        '        G.applyFilters();'
+        '      };'
+        '    }'
+        # Hide unlinked toggle
+        '    var unlinkedToggle = document.getElementById("graph-unlinked-toggle");'
+        '    if (unlinkedToggle) {'
+        '      unlinkedToggle.checked = G.hideUnlinked;'
+        '      unlinkedToggle.onchange = function() {'
+        '        G.hideUnlinked = unlinkedToggle.checked;'
+        '        G.applyFilters();'
         '      };'
         '    }'
         '    var fitBtn = document.getElementById("graph-fit-btn");'
@@ -291,10 +445,14 @@ def build_graph_panel() -> None:
         '        if (fullToggle.checked) {'
         '          G.isFullGraph = true; G.currentNodes = G.allNodes; G.currentEdges = G.allEdges;'
         '          G.activeFilters.clear();'
+        '          G.activeSourceFilters.clear();'
         '          var si = document.getElementById("graph-search"); if (si) si.value = "";'
         '          document.querySelectorAll("#graph-type-filters button").forEach(function(b) {'
         '            var c = G.typeColors[b.dataset.type] || "#B0BEC5";'
         '            b.style.background = "none"; b.style.color = c;'
+        '          });'
+        '          document.querySelectorAll("#graph-source-filters button").forEach(function(b) {'
+        '            b.style.background = "none"; b.style.color = b.style.borderColor;'
         '          });'
         '          G.updateStatsLabel(G.allNodes.length, G.allEdges.length);'
         '          G.createNetwork(G.allNodes, G.allEdges, G.centerId);'
@@ -302,6 +460,7 @@ def build_graph_panel() -> None:
         '      };'
         '    }'
         '  };'
+        # ── Boot ─────────────────────────────────────────────────────────
         '  function boot() {'
         '    if (typeof vis === "undefined" || !document.getElementById("graph-container")) {'
         '      window._thothGraphBootTimer = setTimeout(boot, 100);'
@@ -309,10 +468,12 @@ def build_graph_panel() -> None:
         '    }'
         '    G.wireControls();'
         '    G.createNetwork(G.allNodes, G.allEdges, G.centerId);'
+        '    G.applyFilters();'   # Apply default filters AFTER network exists
         '    window.thothGraphRedraw = function() {'
         '      if (!document.getElementById("graph-container")) return;'
         '      G.wireControls();'
         '      G.createNetwork(G.currentNodes, G.currentEdges, null);'
+        '      G.applyFilters();'
         '    };'
         '  }'
         '  boot();'

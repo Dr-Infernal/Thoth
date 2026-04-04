@@ -10,6 +10,7 @@ import logging
 import os
 import pathlib
 import tempfile
+from datetime import datetime
 from typing import Callable
 
 from nicegui import events, run, ui
@@ -65,7 +66,7 @@ def open_settings(
         _cloud_model_cache,
     )
     from vision import POPULAR_VISION_MODELS, list_cameras
-    from documents import load_processed_files, load_and_vectorize_document, reset_vector_store
+    from documents import load_processed_files, load_and_vectorize_document, reset_vector_store, remove_document
 
     # ── Recursive reopen helper ──
     def _reopen(tab: str = initial_tab):
@@ -79,48 +80,102 @@ def open_settings(
     def _build_documents_tab() -> None:
         ui.label("📄 Local Documents").classes("text-h6")
         ui.label(
-            "Upload your own files (PDF, TXT, DOCX, etc.) to build a local knowledge base. "
+            "Upload your own files (PDF, TXT, DOCX, MD, HTML, EPUB) to build a local knowledge base. "
             "Documents are chunked, vectorized, and stored in a local FAISS database "
-            "for fast semantic search. When enabled, the agent will search these "
-            "documents to answer questions about your personal content."
+            "for fast semantic search. Uploaded documents are also automatically "
+            "analyzed to extract entities into your knowledge graph and wiki vault."
         ).classes("text-grey-6 text-sm")
 
         async def _handle_doc_upload(e: events.UploadEventArguments):
             name = e.file.name
+            n = ui.notification(f"📄 Indexing {name}…", type="ongoing", spinner=True, timeout=None)
+            # Clear the upload widget file list immediately
+            doc_upload.reset()
             data = await e.file.read()
             with tempfile.NamedTemporaryFile(delete=False, suffix=pathlib.Path(name).suffix) as tmp:
                 tmp.write(data)
                 tmp_path = tmp.name
             try:
                 await run.io_bound(load_and_vectorize_document, tmp_path, True, name)
+                n.dismiss()
                 ui.notify(f"✅ {name} indexed", type="positive")
+
+                # Queue background knowledge extraction
+                try:
+                    from document_extraction import queue_extraction
+                    staging_dir = pathlib.Path.home() / ".thoth" / "doc_staging"
+                    staging_dir.mkdir(parents=True, exist_ok=True)
+                    staging_path = staging_dir / name
+                    import shutil
+                    shutil.copy2(tmp_path, staging_path)
+                    queue_extraction(str(staging_path), name)
+                    ui.notify(f"🧠 Extracting knowledge from {name}…", type="info")
+                except Exception as exc:
+                    logger.warning("Failed to queue document extraction: %s", exc)
             except Exception as exc:
+                n.dismiss()
                 ui.notify(f"Failed: {exc}", type="negative")
             finally:
                 os.unlink(tmp_path)
 
-        ui.upload(
-            label="Upload documents (PDF, DOCX, TXT)",
+        doc_upload = ui.upload(
+            label="Upload documents (PDF, DOCX, TXT, MD, HTML, EPUB)",
             on_upload=_handle_doc_upload,
             auto_upload=True,
             multiple=True,
-        ).classes("w-full")
+        ).classes("w-full").props('flat bordered hide-upload-btn')
 
         ui.separator()
         processed = load_processed_files()
         if processed:
             ui.label(f"📚 {len(processed)} indexed document(s)").classes("font-bold")
             for f in sorted(processed):
-                ui.label(f"  • {f}").classes("text-sm")
+                with ui.row().classes("items-center gap-1"):
+                    ui.label(f"  • {f}").classes("text-sm")
+
+                    def _make_delete(name=f):
+                        async def _do_delete():
+                            import knowledge_graph as kg
+                            n = ui.notification(f"🗑️ Removing {name}…", type="ongoing", spinner=True, timeout=None)
+                            try:
+                                await run.io_bound(remove_document, name)
+                                await run.io_bound(kg.delete_entities_by_source, f"document:{name}")
+                                n.dismiss()
+                                ui.notify(f"🗑️ Removed {name}", type="info")
+                                _reopen("documents")
+                            except Exception as exc:
+                                n.dismiss()
+                                ui.notify(f"Delete failed: {exc}", type="negative")
+                        return _do_delete
+
+                    ui.button(icon="delete", on_click=_make_delete(f)).props(
+                        "flat dense round size=xs color=negative"
+                    ).tooltip(f"Remove {f}")
         else:
             ui.label("No documents indexed yet.").classes("text-grey-6")
 
         ui.separator()
 
-        def _clear_docs():
-            reset_vector_store()
-            ui.notify("🗑️ Vector store cleared.", type="info")
-            _reopen()
+        _clearing_docs = False
+
+        async def _clear_docs():
+            nonlocal _clearing_docs
+            if _clearing_docs:
+                return
+            _clearing_docs = True
+            try:
+                confirm = await ui.run_javascript(
+                    "confirm('Clear ALL documents? This will remove all indexed files and their extracted knowledge. This cannot be undone.')",
+                    timeout=30,
+                )
+                if confirm:
+                    import knowledge_graph as kg
+                    reset_vector_store()
+                    kg.delete_entities_by_source_prefix("document:")
+                    ui.notify("🗑️ All documents and extracted knowledge cleared.", type="info")
+                    _reopen("documents")
+            finally:
+                _clearing_docs = False
 
         ui.button("🗑️ Clear all documents", on_click=_clear_docs).props("flat color=negative")
 
@@ -1324,14 +1379,18 @@ def open_settings(
         else:
             ui.label("No trackers yet.").classes("text-grey-6 mt-2")
 
-    # ── Memory Tab ───────────────────────────────────────────────────
+    # ── Knowledge Tab ─────────────────────────────────────────────────
 
-    def _build_memory_tab() -> None:
+    def _build_knowledge_tab() -> None:
         import knowledge_graph as kg
         import memory as memory_db
+        import wiki_vault
+        from documents import reset_vector_store
 
-        ui.label("🧠 Memory").classes("text-h6")
-        ui.label("Thoth builds a memory map from your conversations.").classes("text-grey-6 text-sm")
+        ui.label("🧠 Knowledge").classes("text-h6")
+        ui.label(
+            "Thoth builds a knowledge graph from your conversations and documents."
+        ).classes("text-grey-6 text-sm")
 
         mem_tool = tool_registry.get_tool("memory")
         if mem_tool:
@@ -1358,19 +1417,156 @@ def open_settings(
                     ui.label(f"Types — {', '.join(type_parts)}").classes("text-xs text-grey-6")
                 if stats.get("connected_components", 0) > 0:
                     ui.label(
-                        f"Memory graph — {stats['connected_components']} component(s), "
-                        f"largest: {stats['largest_component']} memories, "
+                        f"Knowledge graph — {stats['connected_components']} component(s), "
+                        f"largest: {stats['largest_component']} entities, "
                         f"{stats['isolated_entities']} isolated"
                     ).classes("text-xs text-grey-6")
             except Exception:
                 pass
 
+        # ── Wiki Vault section ───────────────────────────────────────
+        ui.separator()
+        ui.label("📚 Wiki Vault").classes("text-subtitle1 font-bold")
+        ui.label(
+            "Export your knowledge graph as Obsidian-compatible markdown files. "
+            "Open the vault in Obsidian, VS Code, or any markdown editor."
+        ).classes("text-grey-6 text-sm")
+
+        cfg = wiki_vault._load_config()
+        vault_enabled = cfg.get("enabled", False)
+        vault_path = cfg.get("vault_path", str(wiki_vault._DATA_DIR / "vault"))
+
+        def _toggle_vault(e):
+            wiki_vault.set_enabled(e.value)
+            if e.value:
+                ui.notify("Wiki vault enabled — rebuilding…", type="info")
+                try:
+                    vstats = wiki_vault.rebuild_vault()
+                    ui.notify(
+                        f"✅ Vault rebuilt: {vstats['exported']} articles",
+                        type="positive",
+                    )
+                except Exception as exc:
+                    ui.notify(f"Rebuild failed: {exc}", type="negative")
+            else:
+                ui.notify("Wiki vault disabled.", type="info")
+
+        ui.switch("Enable Wiki Vault", value=vault_enabled, on_change=_toggle_vault)
+
+        ui.label("Vault Path").classes("font-bold")
+        with ui.row().classes("w-full items-center gap-2"):
+            path_input = ui.input(value=vault_path).classes("flex-grow")
+
+            async def _browse_vault():
+                folder = await browse_folder("Select vault folder")
+                if folder:
+                    path_input.value = folder
+
+            ui.button("Browse", on_click=_browse_vault).props("flat dense")
+
+            def _apply_path():
+                new_path = path_input.value.strip()
+                if new_path:
+                    wiki_vault.set_vault_path(new_path)
+                    ui.notify(f"Vault path set to: {new_path}", type="info")
+
+            ui.button("Apply", on_click=_apply_path).props("flat dense color=primary")
+
+        if vault_enabled:
+            vstats = wiki_vault.get_vault_stats()
+            with ui.row().classes("gap-6"):
+                ui.label(f"Articles: {vstats.get('articles', 0)}").classes("font-bold")
+                conv_count = vstats.get('conversations', 0)
+                if conv_count > 0:
+                    ui.label(f"Conversations: {conv_count}").classes("font-bold")
+
+            with ui.row().classes("gap-2"):
+                def _rebuild():
+                    try:
+                        result = wiki_vault.rebuild_vault()
+                        ui.notify(
+                            f"✅ Rebuilt: {result['exported']} articles, "
+                            f"{result['sparse']} sparse, "
+                            f"{result.get('orphans_removed', 0)} orphans removed",
+                            type="positive",
+                        )
+                        _reopen("Knowledge")
+                    except Exception as exc:
+                        ui.notify(f"Failed: {exc}", type="negative")
+
+                ui.button("🔄 Rebuild Vault", on_click=_rebuild).props("flat")
+
+                def _open_vault():
+                    import platform
+                    import subprocess as sp
+                    vp = wiki_vault.get_vault_path()
+                    if not vp.exists():
+                        ui.notify("Vault folder not found.", type="warning")
+                        return
+                    system = platform.system()
+                    try:
+                        if system == "Windows":
+                            os.startfile(str(vp))
+                        elif system == "Darwin":
+                            sp.Popen(["open", str(vp)])
+                        else:
+                            sp.Popen(["xdg-open", str(vp)])
+                    except Exception as exc:
+                        ui.notify(f"Failed to open: {exc}", type="negative")
+
+                ui.button("📂 Open Vault Folder", on_click=_open_vault).props("flat")
+
+        # ── Dream Cycle section ───────────────────────────────────────
+        ui.separator()
+        import dream_cycle
+
+        ui.label("🌙 Dream Cycle").classes("text-subtitle1 font-bold")
+        ui.label(
+            "Nightly background task that merges duplicates, enriches "
+            "thin descriptions, and infers missing relationships."
+        ).classes("text-grey-6 text-sm")
+
+        dream_cfg = dream_cycle.get_config()
+
+        def _toggle_dream(e):
+            dream_cycle.set_enabled(e.value)
+            ui.notify(
+                "Dream cycle enabled." if e.value else "Dream cycle disabled.",
+                type="info",
+            )
+
+        ui.switch(
+            "Enable Dream Cycle",
+            value=dream_cfg.get("enabled", True),
+            on_change=_toggle_dream,
+        )
+
+        with ui.row().classes("gap-4 items-center"):
+            ui.label(
+                f"Window: {dream_cfg.get('window_start', 1)}:00 – "
+                f"{dream_cfg.get('window_end', 5)}:00"
+            ).classes("text-sm")
+
+        dream_status = dream_cycle.get_dream_status()
+        if dream_status.get("last_run"):
+            try:
+                last_dt = datetime.fromisoformat(dream_status["last_run"])
+                ui.label(
+                    f"Last run: {last_dt.strftime('%b %d, %I:%M %p')} — "
+                    f"{dream_status.get('last_summary', '')}"
+                ).classes("text-xs text-grey-6")
+            except (ValueError, TypeError):
+                pass
+        else:
+            ui.label("No dream cycles have run yet.").classes("text-xs text-grey-6")
+
+        # ── Browse knowledge ─────────────────────────────────────────
         ui.separator()
 
         if total > 0:
             cat_options = ["All"] + sorted(memory_db.VALID_CATEGORIES)
             cat_sel = ui.select(label="Filter by category", options=cat_options, value="All").classes("w-full")
-            search_input = ui.input("Search memories", placeholder="Type a keyword…").classes("w-full")
+            search_input = ui.input("Search knowledge", placeholder="Type a keyword…").classes("w-full")
             mem_container = ui.column().classes("w-full")
 
             def _refresh_memories():
@@ -1383,7 +1579,7 @@ def open_settings(
                     memories = memory_db.list_memories(category=cat)
                 with mem_container:
                     if not memories:
-                        ui.label("No matching memories.").classes("text-grey-6")
+                        ui.label("No matching entries.").classes("text-grey-6")
                     else:
                         for mem in memories:
                             with ui.expansion(f"**{mem['subject']}** — _{mem.get('category', mem.get('entity_type', ''))}_").classes("w-full"):
@@ -1414,7 +1610,7 @@ def open_settings(
 
                                 def _del_mem(mid=mem["id"]):
                                     memory_db.delete_memory(mid)
-                                    ui.notify("Memory deleted.", type="info")
+                                    ui.notify("Entry deleted.", type="info")
                                     _refresh_memories()
 
                                 ui.button("🗑️ Delete", on_click=_del_mem).props("flat dense color=negative")
@@ -1423,15 +1619,32 @@ def open_settings(
             search_input.on("update:model-value", lambda _: _refresh_memories())
             _refresh_memories()
 
-            ui.separator()
+        # ── Danger zone ──────────────────────────────────────────────
+        ui.separator()
 
-            def _delete_all_memories():
-                memory_db.delete_all_memories()
-                ui.notify("All memories deleted.", type="info")
-                _reopen("Memory")
+        _deleting_knowledge = False
 
-            with ui.row().classes("w-full"):
-                ui.button("🗑️ Delete all memories", on_click=_delete_all_memories).props("flat color=negative")
+        async def _delete_all_knowledge():
+            nonlocal _deleting_knowledge
+            if _deleting_knowledge:
+                return
+            _deleting_knowledge = True
+            try:
+                confirm = await ui.run_javascript(
+                    "confirm('Delete ALL knowledge? This will erase all entities, relations, wiki files, and document indexes. This cannot be undone.')",
+                    timeout=30,
+                )
+                if confirm:
+                    memory_db.delete_all_memories()
+                    reset_vector_store()
+                    wiki_vault.clear_wiki_folder()
+                    ui.notify("All knowledge deleted.", type="info")
+                    _reopen("Knowledge")
+            finally:
+                _deleting_knowledge = False
+
+        with ui.row().classes("w-full"):
+            ui.button("🗑️ Delete all knowledge", on_click=_delete_all_knowledge).props("flat color=negative")
 
     # ── Voice Tab ────────────────────────────────────────────────────
 
@@ -1723,7 +1936,7 @@ def open_settings(
                     with ui.tabs().props("vertical").classes("w-full h-full") as tabs:
                         tab_models = ui.tab("Models", icon="smart_toy")
                         tab_cloud = ui.tab("Cloud", icon="cloud")
-                        tab_mem = ui.tab("Memory", icon="psychology")
+                        tab_knowledge = ui.tab("Knowledge", icon="psychology")
                         tab_voice = ui.tab("Voice", icon="mic")
                         tab_fs = ui.tab("System", icon="terminal")
                         tab_tracker = ui.tab("Tracker", icon="checklist")
@@ -1736,7 +1949,8 @@ def open_settings(
                         tab_utils = ui.tab("Utilities", icon="build")
                         _tab_map = {
                             "Models": tab_models, "Cloud": tab_cloud,
-                            "Memory": tab_mem, "Voice": tab_voice,
+                            "Knowledge": tab_knowledge,
+                            "Voice": tab_voice,
                             "System": tab_fs, "Tracker": tab_tracker,
                             "Documents": tab_docs, "Search": tab_tools,
                             "Skills": tab_skills,
@@ -1767,8 +1981,8 @@ def open_settings(
                             _build_utilities_tab()
                         with ui.tab_panel(tab_tracker).classes("px-6 py-4"):
                             _build_tracker_tab()
-                        with ui.tab_panel(tab_mem).classes("px-6 py-4"):
-                            _build_memory_tab()
+                        with ui.tab_panel(tab_knowledge).classes("px-6 py-4"):
+                            _build_knowledge_tab()
                         with ui.tab_panel(tab_voice).classes("px-6 py-4"):
                             _build_voice_tab()
                         with ui.tab_panel(tab_channels).classes("px-6 py-4"):
