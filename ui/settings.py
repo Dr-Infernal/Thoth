@@ -513,6 +513,42 @@ def open_settings(
                   on_change=lambda e: setattr(vsvc, "enabled", e.value)
         ).tooltip("Allow the agent to capture images from your webcam.")
 
+        # ── Image Generation ─────────────────────────────────────────
+        ui.separator()
+        ui.label("🎨 Image Generation").classes("text-h6")
+        ui.label(
+            "Generate and edit images using AI models. Requires an OpenAI or OpenRouter API key."
+        ).classes("text-grey-6 text-sm")
+
+        from tools.image_gen_tool import get_available_image_models, DEFAULT_MODEL
+        _ig_tool = tool_registry.get_tool("image_gen")
+        _ig_enabled = tool_registry.is_enabled("image_gen") if _ig_tool else False
+        _ig_model = _ig_tool.get_config("model", DEFAULT_MODEL) if _ig_tool else DEFAULT_MODEL
+
+        _ig_model_opts = get_available_image_models()
+        if not _ig_model_opts:
+            ui.label(
+                "⚠️ No API keys configured. Add an OpenAI or OpenRouter key in the Cloud tab."
+            ).classes("text-warning text-sm")
+        else:
+            # Ensure the current value is in the options (may be from another provider)
+            if _ig_model not in _ig_model_opts:
+                _ig_model = next(iter(_ig_model_opts))
+                if _ig_tool:
+                    _ig_tool.set_config("model", _ig_model)
+            ui.select(
+                label="Image model",
+                options=_ig_model_opts,
+                value=_ig_model,
+                on_change=lambda e: _ig_tool.set_config("model", e.value) if _ig_tool else None,
+            ).classes("w-full")
+
+        ui.switch(
+            "Enable image generation",
+            value=_ig_enabled,
+            on_change=lambda e: tool_registry.set_enabled("image_gen", e.value),
+        ).tooltip("Allow the agent to generate and edit images.")
+
     # ── Cloud Tab ────────────────────────────────────────────────────
 
     def _build_cloud_tab() -> None:
@@ -878,7 +914,7 @@ def open_settings(
             "filesystem", "shell", "gmail", "documents", "calendar", "timer",
             "url_reader", "calculator", "weather", "vision", "chart",
             "system_info", "conversation_search", "memory", "tracker",
-            "browser", "telegram", "task",
+            "browser", "telegram", "task", "image_gen",
         }
         for tool in tool_registry.get_all_tools():
             if tool.name in skip_tools:
@@ -928,6 +964,16 @@ def open_settings(
                 if cfg_type == "text":
                     ui.input(
                         cfg_label, value=current_cfg or "",
+                        on_change=lambda e, t=tool, k=cfg_key: t.set_config(k, e.value),
+                    ).classes("w-full")
+                elif cfg_type == "select":
+                    options = spec.get("options", [])
+                    labels_map = spec.get("labels", {})
+                    option_labels = {o: labels_map.get(o, o) for o in options}
+                    ui.select(
+                        option_labels,
+                        value=current_cfg or cfg_default,
+                        label=cfg_label,
                         on_change=lambda e, t=tool, k=cfg_key: t.set_config(k, e.value),
                     ).classes("w-full")
                 elif cfg_type == "multicheck":
@@ -1056,101 +1102,213 @@ def open_settings(
             current_ops, fs_tool,
         )
 
-    # ── Gmail Tab ────────────────────────────────────────────────────
+    # ── Google Account Tab (unified Gmail + Calendar) ──────────────
 
-    def _build_gmail_tab() -> None:
+    def _build_google_account_tab() -> None:
+        import shutil
         gmail_tool = tool_registry.get_tool("gmail")
-        if not gmail_tool:
-            ui.label("Gmail tool not found.").classes("text-negative")
+        cal_tool = tool_registry.get_tool("calendar")
+        if not gmail_tool or not cal_tool:
+            ui.label("Gmail or Calendar tool not found.").classes("text-negative")
             return
 
-        ui.label("📧 Gmail Integration").classes("text-h6")
-        ui.label("Connect Thoth to your Gmail account.").classes("text-grey-6 text-sm")
+        # Canonical credentials location
+        from tools.gmail_tool import _GMAIL_DIR, DEFAULT_CREDENTIALS_PATH as _GMAIL_CREDS_DEFAULT
+        from tools.calendar_tool import DEFAULT_TOKEN_PATH as _CAL_TOKEN_PATH
 
-        ui.switch(
-            "Enable Gmail tool",
-            value=tool_registry.is_enabled("gmail"),
-            on_change=lambda e: tool_registry.set_enabled("gmail", e.value),
-        ).tooltip(gmail_tool.description)
+        ui.label("Google Account").classes("text-h6")
+        ui.label(
+            "Connect Gmail and Google Calendar with a single sign-in."
+        ).classes("text-grey-6 text-sm")
 
-        with ui.expansion("📋 Setup Instructions"):
-            ui.markdown(
-                "1. Go to [Google Cloud Console](https://console.cloud.google.com) → New Project\n"
-                "2. Enable **Gmail API**\n"
-                "3. Create OAuth client ID (Desktop app)\n"
-                "4. Download credentials.json\n"
-                "5. Click Authenticate below",
-                extras=['code-friendly', 'fenced-code-blocks', 'tables'],
-            )
+        # ── Enable switches ──
+        with ui.row().classes("gap-8 items-center"):
+            ui.switch(
+                "Gmail",
+                value=tool_registry.is_enabled("gmail"),
+                on_change=lambda e: tool_registry.set_enabled("gmail", e.value),
+            ).tooltip(gmail_tool.description)
+            ui.switch(
+                "Calendar",
+                value=tool_registry.is_enabled("calendar"),
+                on_change=lambda e: tool_registry.set_enabled("calendar", e.value),
+            ).tooltip(cal_tool.description)
 
         ui.separator()
 
+        # ── Setup wizard (stepper) ──
+        with ui.expansion("Setup Guide — first-time setup", icon="help_outline").classes("w-full"):
+            with ui.stepper().props("vertical").classes("w-full") as stepper:
+                with ui.step("Create Google Cloud Project"):
+                    ui.markdown(
+                        "1. Open [Google Cloud Console](https://console.cloud.google.com)\n"
+                        "2. Click the project dropdown (top bar) → **New Project**\n"
+                        "3. Name it anything (e.g. *Thoth*) → **Create**\n"
+                        "4. Make sure the new project is selected in the dropdown",
+                    )
+                    with ui.stepper_navigation():
+                        ui.button("Next", on_click=stepper.next)
+                with ui.step("Enable APIs"):
+                    ui.markdown(
+                        "1. Go to **APIs & Services → Library**\n"
+                        "2. Search for **Gmail API** → click it → **Enable**\n"
+                        "3. Search for **Google Calendar API** → click it → **Enable**",
+                    )
+                    with ui.stepper_navigation():
+                        ui.button("Next", on_click=stepper.next)
+                        ui.button("Back", on_click=stepper.previous).props("flat")
+                with ui.step("Configure OAuth Consent"):
+                    ui.markdown(
+                        "1. Go to **APIs & Services → OAuth consent screen**\n"
+                        '2. Select **External** → **Create**\n'
+                        "3. Fill in App name (e.g. *Thoth*), your email → **Save and Continue**\n"
+                        "4. On **Scopes** page → just click **Save and Continue**\n"
+                        "5. On **Test users** → **Add Users** → add your Gmail address → **Save**",
+                    )
+                    with ui.stepper_navigation():
+                        ui.button("Next", on_click=stepper.next)
+                        ui.button("Back", on_click=stepper.previous).props("flat")
+                with ui.step("Create OAuth Client ID"):
+                    ui.markdown(
+                        "1. Go to **APIs & Services → Credentials**\n"
+                        "2. Click **+ Create Credentials → OAuth client ID**\n"
+                        "3. Application type → **Desktop app**\n"
+                        "4. Name it anything → **Create**\n"
+                        "5. Click **Download JSON** (saves as `client_secret_...json`)",
+                    )
+                    with ui.stepper_navigation():
+                        ui.button("Next", on_click=stepper.next)
+                        ui.button("Back", on_click=stepper.previous).props("flat")
+                with ui.step("Select Credentials & Authenticate"):
+                    ui.markdown(
+                        "Use the **Browse** button below to select the downloaded JSON file, "
+                        "then click **Authenticate Google**. A browser window will open for sign-in.",
+                    )
+                    with ui.stepper_navigation():
+                        ui.button("Back", on_click=stepper.previous).props("flat")
+
+        ui.separator()
+
+        # ── Credentials path + browse + auto-copy ──
         creds_default = gmail_tool.config_schema.get("credentials_path", {}).get("default", "")
         current_creds = gmail_tool.get_config("credentials_path", creds_default)
         creds_input = ui.input(
             "credentials.json path", value=current_creds or "",
-            on_change=lambda e: gmail_tool.set_config("credentials_path", e.value),
-        ).classes("w-full")
+        ).classes("w-full").props("readonly")
 
-        async def _browse_creds():
+        async def _browse_and_copy():
             path = await browse_file(
-                "Select credentials.json",
+                "Select credentials.json (or client_secret_*.json)",
                 os.path.dirname(current_creds) if current_creds else "",
                 [("JSON files", "*.json")],
             )
-            if path:
-                creds_input.value = path
-                gmail_tool.set_config("credentials_path", path)
-
-        ui.button("Browse…", on_click=_browse_creds).props("flat dense")
-        ui.separator()
-
-        if gmail_tool.has_credentials_file():
-            if gmail_tool.is_authenticated():
+            if not path:
+                return
+            src = pathlib.Path(path)
+            dest = _GMAIL_DIR / "credentials.json"
+            # Auto-copy to canonical location if not already there
+            if src.resolve() != dest.resolve():
                 try:
-                    _g_status, _g_detail = gmail_tool.check_token_health()
-                except Exception:
-                    _g_status, _g_detail = "valid", ""
-                if _g_status in ("valid", "refreshed"):
-                    _g_lbl = "token healthy" if _g_status == "valid" else "token refreshed"
-                    ui.label(f"✅ Gmail connected — {_g_lbl}").classes("text-positive")
-                elif _g_status == "expired":
-                    ui.label("⚠️ Gmail token expired — re-authenticate below").classes("text-warning")
-                elif _g_status == "error":
-                    ui.label(f"⚠️ Gmail token error — {_g_detail}").classes("text-warning")
-                else:
-                    ui.label("✅ Authenticated with Gmail").classes("text-positive")
+                    shutil.copy2(str(src), str(dest))
+                    ui.notify(f"Copied to {dest}", type="info")
+                except Exception as exc:
+                    ui.notify(f"Copy failed: {exc}", type="negative")
+                    # Fall back to using the original path
+                    creds_input.value = path
+                    gmail_tool.set_config("credentials_path", path)
+                    cal_tool.set_config("credentials_path", path)
+                    return
+            canonical = str(dest)
+            creds_input.value = canonical
+            gmail_tool.set_config("credentials_path", canonical)
+            cal_tool.set_config("credentials_path", canonical)
+            ui.notify("Credentials ready — click Authenticate Google", type="positive")
 
-                async def _reauth_gmail():
-                    try:
-                        token_path = gmail_tool._get_token_path()
-                        if os.path.isfile(token_path):
-                            os.remove(token_path)
-                        await run.io_bound(gmail_tool.authenticate)
-                        clear_agent_cache()
-                        ui.notify("✅ Gmail re-authenticated!", type="positive")
-                        _reopen("Gmail")
-                    except Exception as e:
-                        ui.notify(f"Auth failed: {e}", type="negative")
-
-                ui.button("🔄 Re-authenticate", on_click=_reauth_gmail).props("flat dense")
-            else:
-                ui.label("🔑 Credentials found but not authenticated.").classes("text-warning")
-
-                async def _auth_gmail():
-                    try:
-                        await run.io_bound(gmail_tool.authenticate)
-                        clear_agent_cache()
-                        ui.notify("✅ Gmail authenticated!", type="positive")
-                        _reopen("Gmail")
-                    except Exception as e:
-                        ui.notify(f"Auth failed: {e}", type="negative")
-
-                ui.button("Authenticate…", on_click=_auth_gmail)
-        else:
-            ui.label("Point path above to your credentials.json").classes("text-grey-6 text-sm")
+        ui.button("Browse…", on_click=_browse_and_copy, icon="folder_open").props("flat dense")
 
         ui.separator()
+
+        # ── Combined auth status ──
+        _has_creds = gmail_tool.has_credentials_file()
+        _gmail_authed = gmail_tool.is_authenticated()
+        _cal_authed = cal_tool.is_authenticated()
+        _both_authed = _gmail_authed and _cal_authed
+
+        def _show_token_status(label: str, tool, authed: bool):
+            if not authed:
+                ui.label(f"⬜ {label} — not authenticated").classes("text-grey-6 text-sm")
+                return
+            try:
+                status, detail = tool.check_token_health()
+            except Exception:
+                status, detail = "valid", ""
+            if status in ("valid", "refreshed"):
+                ui.label(f"✅ {label} — token healthy").classes("text-positive text-sm")
+            elif status == "expired":
+                ui.label(f"⚠️ {label} — token expired").classes("text-warning text-sm")
+            elif status == "error":
+                ui.label(f"⚠️ {label} — {detail}").classes("text-warning text-sm")
+            else:
+                ui.label(f"✅ {label} — connected").classes("text-positive text-sm")
+
+        with ui.column().classes("gap-1"):
+            _show_token_status("Gmail", gmail_tool, _gmail_authed)
+            _show_token_status("Calendar", cal_tool, _cal_authed)
+
+        # ── Combined authenticate / re-authenticate ──
+        def _do_combined_auth():
+            """Single OAuth flow with both Gmail + Calendar scopes."""
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            from tools.gmail_tool import GMAIL_SCOPES, DEFAULT_TOKEN_PATH as _GMAIL_TOKEN
+            from tools.calendar_tool import CALENDAR_SCOPES
+
+            creds_path = gmail_tool._get_credentials_path()
+            combined_scopes = GMAIL_SCOPES + CALENDAR_SCOPES
+
+            flow = InstalledAppFlow.from_client_secrets_file(creds_path, combined_scopes)
+            creds = flow.run_local_server(port=0)
+
+            # Write token to both locations
+            pathlib.Path(_GMAIL_TOKEN).parent.mkdir(parents=True, exist_ok=True)
+            pathlib.Path(_GMAIL_TOKEN).write_text(creds.to_json())
+            pathlib.Path(_CAL_TOKEN_PATH).parent.mkdir(parents=True, exist_ok=True)
+            pathlib.Path(_CAL_TOKEN_PATH).write_text(creds.to_json())
+
+        if _has_creds:
+            if _both_authed:
+                async def _reauth_google():
+                    try:
+                        # Remove both tokens
+                        for tp in (gmail_tool._get_token_path(), cal_tool._get_token_path()):
+                            if os.path.isfile(tp):
+                                os.remove(tp)
+                        await run.io_bound(_do_combined_auth)
+                        clear_agent_cache()
+                        ui.notify("✅ Google account re-authenticated!", type="positive")
+                        _reopen("Google")
+                    except Exception as e:
+                        ui.notify(f"Auth failed: {e}", type="negative")
+
+                ui.button("Re-authenticate Google", on_click=_reauth_google, icon="refresh").props("flat dense")
+            else:
+                async def _auth_google():
+                    try:
+                        await run.io_bound(_do_combined_auth)
+                        clear_agent_cache()
+                        ui.notify("✅ Google account authenticated!", type="positive")
+                        _reopen("Google")
+                    except Exception as e:
+                        ui.notify(f"Auth failed: {e}", type="negative")
+
+                ui.button("Authenticate Google", on_click=_auth_google, icon="login").props("outlined")
+        else:
+            ui.label(
+                "Select your credentials file above to get started."
+            ).classes("text-grey-6 text-sm")
+
+        # ── Gmail operation checkboxes ──
+        ui.separator()
+        ui.label("Gmail Operations").classes("text-subtitle2")
         from tools.gmail_tool import _READ_OPS, _COMPOSE_OPS, _SEND_OPS
         ops_default = gmail_tool.config_schema.get("selected_operations", {}).get("default", [])
         current_ops = gmail_tool.get_config("selected_operations", ops_default)
@@ -1161,100 +1319,9 @@ def open_settings(
             current_ops, gmail_tool,
         )
 
-    # ── Calendar Tab ─────────────────────────────────────────────────
-
-    def _build_calendar_tab() -> None:
-        cal_tool = tool_registry.get_tool("calendar")
-        if not cal_tool:
-            ui.label("Calendar tool not found.").classes("text-negative")
-            return
-
-        ui.label("📅 Google Calendar").classes("text-h6")
-        ui.label("Connect Thoth to Google Calendar.").classes("text-grey-6 text-sm")
-
-        ui.switch(
-            "Enable Calendar tool",
-            value=tool_registry.is_enabled("calendar"),
-            on_change=lambda e: tool_registry.set_enabled("calendar", e.value),
-        ).tooltip(cal_tool.description)
-
-        with ui.expansion("📋 Setup Instructions"):
-            ui.markdown(
-                "Uses the same Google Cloud credentials as Gmail.\n\n"
-                "1. Enable **Google Calendar API**\n"
-                "2. Point credentials path below\n"
-                "3. Click Authenticate",
-                extras=['code-friendly', 'fenced-code-blocks', 'tables'],
-            )
-
+        # ── Calendar operation checkboxes ──
         ui.separator()
-
-        cal_creds_default = cal_tool.config_schema.get("credentials_path", {}).get("default", "")
-        current_cal_creds = cal_tool.get_config("credentials_path", cal_creds_default)
-        cal_creds_input = ui.input(
-            "credentials.json path", value=current_cal_creds or "",
-            on_change=lambda e: cal_tool.set_config("credentials_path", e.value),
-        ).classes("w-full")
-
-        async def _browse_cal_creds():
-            path = await browse_file(
-                "Select credentials.json",
-                os.path.dirname(current_cal_creds) if current_cal_creds else "",
-                [("JSON files", "*.json")],
-            )
-            if path:
-                cal_creds_input.value = path
-                cal_tool.set_config("credentials_path", path)
-
-        ui.button("Browse…", on_click=_browse_cal_creds).props("flat dense")
-        ui.separator()
-
-        if cal_tool.has_credentials_file():
-            if cal_tool.is_authenticated():
-                try:
-                    _c_status, _c_detail = cal_tool.check_token_health()
-                except Exception:
-                    _c_status, _c_detail = "valid", ""
-                if _c_status in ("valid", "refreshed"):
-                    _c_lbl = "token healthy" if _c_status == "valid" else "token refreshed"
-                    ui.label(f"✅ Calendar connected — {_c_lbl}").classes("text-positive")
-                elif _c_status == "expired":
-                    ui.label("⚠️ Calendar token expired — re-authenticate below").classes("text-warning")
-                elif _c_status == "error":
-                    ui.label(f"⚠️ Calendar token error — {_c_detail}").classes("text-warning")
-                else:
-                    ui.label("✅ Authenticated with Calendar").classes("text-positive")
-
-                async def _reauth_cal():
-                    try:
-                        token_path = cal_tool._get_token_path()
-                        if os.path.isfile(token_path):
-                            os.remove(token_path)
-                        await run.io_bound(cal_tool.authenticate)
-                        clear_agent_cache()
-                        ui.notify("✅ Calendar re-authenticated!", type="positive")
-                        _reopen("Calendar")
-                    except Exception as e:
-                        ui.notify(f"Auth failed: {e}", type="negative")
-
-                ui.button("🔄 Re-authenticate", on_click=_reauth_cal).props("flat dense")
-            else:
-                ui.label("🔑 Credentials found but not authenticated.").classes("text-warning")
-
-                async def _auth_cal():
-                    try:
-                        await run.io_bound(cal_tool.authenticate)
-                        clear_agent_cache()
-                        ui.notify("✅ Calendar authenticated!", type="positive")
-                        _reopen("Calendar")
-                    except Exception as e:
-                        ui.notify(f"Auth failed: {e}", type="negative")
-
-                ui.button("Authenticate…", on_click=_auth_cal)
-        else:
-            ui.label("Point path above to your credentials.json").classes("text-grey-6 text-sm")
-
-        ui.separator()
+        ui.label("Calendar Operations").classes("text-subtitle2")
         from tools.calendar_tool import (
             _READ_OPS as CAL_READ_OPS,
             _WRITE_OPS as CAL_WRITE_OPS,
@@ -1712,15 +1779,6 @@ def open_settings(
     def _build_channels_tab() -> None:
         from channels.telegram import is_configured as tg_configured, is_running as tg_running
         from channels.telegram import start_bot as _tg_start_bot, stop_bot as _tg_stop_bot
-        from channels.email import (
-            is_configured as email_configured,
-            is_running as email_running,
-            get_last_error as email_last_error,
-            start_polling as _email_start,
-            stop_polling as _email_stop,
-            get_poll_interval as _email_poll_interval,
-            set_poll_interval as _email_set_poll_interval,
-        )
         from channels import config as _ch_config
 
         ui.label("📱 Messaging Channels").classes("text-h6")
@@ -1815,68 +1873,6 @@ def open_settings(
 
         ui.separator().classes("mt-6")
 
-        # ── Email ────────────────────────────────────────────────────
-        ui.label("📧 Email Channel").classes("text-h6")
-        ui.label("Send an email with [Thoth] in the subject line to run a query.").classes("text-grey-6 text-sm")
-
-        with ui.expansion("📖 Setup Guide", icon="help_outline").classes("w-full"):
-            ui.markdown(
-                "### Quick Setup\n"
-                "1. Enable **Gmail** tool and complete OAuth sign-in\n"
-                "2. Click **▶️ Start Polling**\n"
-                "3. Send yourself an email with `[Thoth]` in the subject",
-                extras=['code-friendly', 'fenced-code-blocks', 'tables'],
-            ).classes("text-sm")
-
-        ui.separator()
-
-        email_status_container = ui.row().classes("items-center gap-2 mt-2")
-        _update_email_status(email_status_container, email_configured, email_running, email_last_error)
-
-        current_interval = _email_poll_interval()
-        interval_label = ui.label(f"Poll interval: {current_interval}s").classes("text-sm mt-2")
-
-        def _on_interval_change(e):
-            val = int(e.value)
-            _email_set_poll_interval(val)
-            interval_label.text = f"Poll interval: {val}s"
-
-        ui.slider(
-            min=10, max=300, step=10, value=current_interval,
-            on_change=_on_interval_change
-        ).classes("w-full")
-
-        ui.separator()
-        ui.label("Email Control").classes("text-subtitle2 mt-2")
-
-        async def _start_email():
-            if not email_configured():
-                ui.notify("Gmail OAuth not set up — enable the Gmail tool first", type="warning")
-                return
-            try:
-                ok = await _email_start()
-                if ok:
-                    _ch_config.set("email", "auto_start", True)
-                    ui.notify("✅ Email polling started!", type="positive")
-                else:
-                    ui.notify("⚠️ Could not start — check Gmail OAuth", type="warning")
-            except Exception as exc:
-                ui.notify(f"Error: {exc}", type="negative")
-            _update_email_status(email_status_container, email_configured, email_running, email_last_error)
-
-        async def _stop_email():
-            try:
-                await _email_stop()
-                _ch_config.set("email", "auto_start", False)
-                ui.notify("Email polling stopped", type="info")
-            except Exception as exc:
-                ui.notify(f"Error: {exc}", type="negative")
-            _update_email_status(email_status_container, email_configured, email_running, email_last_error)
-
-        with ui.row().classes("gap-2"):
-            ui.button("▶️ Start Polling", on_click=_start_email).props("color=positive")
-            ui.button("⏹️ Stop Polling", on_click=_stop_email).props("color=negative flat")
-
     # ══════════════════════════════════════════════════════════════════
     # STATUS HELPERS (used by Channels tab)
     # ══════════════════════════════════════════════════════════════════
@@ -1894,22 +1890,22 @@ def open_settings(
                 ui.icon("warning", color="orange").classes("text-lg")
                 ui.label("Not configured").classes("text-orange text-sm")
 
-    def _update_email_status(container, email_configured, email_running, email_last_error):
-        container.clear()
-        with container:
-            last_err = email_last_error()
-            if last_err:
-                ui.icon("error", color="red").classes("text-lg")
-                ui.label(last_err).classes("text-red text-sm")
-            elif email_running():
-                ui.icon("check_circle", color="green").classes("text-lg")
-                ui.label("Polling — checking for [Thoth] emails").classes("text-green text-sm")
-            elif email_configured():
-                ui.icon("pause_circle", color="blue").classes("text-lg")
-                ui.label("Gmail OAuth ready — click Start").classes("text-blue text-sm")
-            else:
-                ui.icon("warning", color="orange").classes("text-lg")
-                ui.label("Gmail OAuth not set up").classes("text-orange text-sm")
+    # ══════════════════════════════════════════════════════════════════
+    # PLUGINS TAB
+    # ══════════════════════════════════════════════════════════════════
+
+    def _build_plugins_tab() -> None:
+        from plugins.ui_settings import build_plugins_tab as _build_tab
+
+        def _open_marketplace():
+            try:
+                from plugins.ui_marketplace import open_marketplace_dialog
+                open_marketplace_dialog(on_install=lambda: _reopen("Plugins"))
+            except Exception as exc:
+                logger.warning("Marketplace not available: %s", exc)
+                ui.notify("Marketplace not available yet", type="info")
+
+        _build_tab(on_browse_marketplace=_open_marketplace)
 
     # ══════════════════════════════════════════════════════════════════
     # DIALOG SHELL
@@ -1943,10 +1939,10 @@ def open_settings(
                         tab_docs = ui.tab("Documents", icon="description")
                         tab_tools = ui.tab("Search", icon="search")
                         tab_skills = ui.tab("Skills", icon="auto_fix_high")
-                        tab_gmail = ui.tab("Gmail", icon="email")
-                        tab_cal = ui.tab("Calendar", icon="event")
+                        tab_google = ui.tab("Google", icon="account_circle")
                         tab_channels = ui.tab("Channels", icon="forum")
                         tab_utils = ui.tab("Utilities", icon="build")
+                        tab_plugins = ui.tab("Plugins", icon="extension")
                         _tab_map = {
                             "Models": tab_models, "Cloud": tab_cloud,
                             "Knowledge": tab_knowledge,
@@ -1954,8 +1950,10 @@ def open_settings(
                             "System": tab_fs, "Tracker": tab_tracker,
                             "Documents": tab_docs, "Search": tab_tools,
                             "Skills": tab_skills,
-                            "Gmail": tab_gmail, "Calendar": tab_cal,
+                            "Google": tab_google,
+                            "Gmail": tab_google, "Calendar": tab_google,
                             "Channels": tab_channels, "Utilities": tab_utils,
+                            "Plugins": tab_plugins,
                         }
 
                 _initial = _tab_map.get(initial_tab, tab_models)
@@ -1973,10 +1971,8 @@ def open_settings(
                             _build_skills_tab()
                         with ui.tab_panel(tab_fs).classes("px-6 py-4"):
                             _build_system_access_tab()
-                        with ui.tab_panel(tab_gmail).classes("px-6 py-4"):
-                            _build_gmail_tab()
-                        with ui.tab_panel(tab_cal).classes("px-6 py-4"):
-                            _build_calendar_tab()
+                        with ui.tab_panel(tab_google).classes("px-6 py-4"):
+                            _build_google_account_tab()
                         with ui.tab_panel(tab_utils).classes("px-6 py-4"):
                             _build_utilities_tab()
                         with ui.tab_panel(tab_tracker).classes("px-6 py-4"):
@@ -1987,5 +1983,7 @@ def open_settings(
                             _build_voice_tab()
                         with ui.tab_panel(tab_channels).classes("px-6 py-4"):
                             _build_channels_tab()
+                        with ui.tab_panel(tab_plugins).classes("px-6 py-4"):
+                            _build_plugins_tab()
 
     p.settings_dlg.open()

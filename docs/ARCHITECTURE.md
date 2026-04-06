@@ -19,6 +19,8 @@
 - [Vision](#vision)
 - [Tasks & Scheduling](#tasks--scheduling)
 - [Messaging Channels](#messaging-channels)
+- [Image Generation](#image-generation)
+- [Plugin System & Marketplace](#plugin-system--marketplace)
 - [Habit & Health Tracker](#habit--health-tracker)
 - [Desktop App](#desktop-app)
 - [Chat & Conversations](#chat--conversations)
@@ -33,7 +35,7 @@
 ## ReAct Agent Architecture
 
 - **Autonomous tool use** — the agent decides which tools to call, when, and how many times, based on your question
-- **24 tools / 67 sub-tools** — web search, email, calendar, file management, shell access, browser automation, Telegram messaging, vision, memory, scheduled tasks, habit tracking, and more (see [Tools](#tools))
+- **25 tools / 70 sub-tools** — web search, email, calendar, file management, shell access, browser automation, Telegram messaging, vision, image generation, memory, scheduled tasks, habit tracking, and more (see [Tools](#tools))
 - **Streaming responses** — tokens stream in real-time with a typing indicator
 - **Thinking indicators** — shows when the model is reasoning before responding
 - **Smart context management** — automatic conversation summarization compresses older turns when token usage exceeds 80% of the context window, preserving the 5 most recent turns and a running summary; a hard trim at 85% drops oldest messages as a safety net; oversized tool outputs (e.g. large PDF reads) are proportionally shrunk so multi-tool chains fit within context; accurate token counting via tiktoken (cl100k_base)
@@ -203,8 +205,11 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 - **Unified task engine** — create named, multi-step tasks that run sequentially in a fresh thread, powered by APScheduler
 - **7 schedule types** — `daily`, `weekly`, `weekdays`, `weekends`, `interval` (minutes), `cron` (full cron expression), `delay_minutes` (one-shot quick timer with notification)
 - **Template variables** — use `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}`, `{{task_id}}` in prompts — replaced at runtime; `{{task_id}}` lets prompts reference their own task for self-management (e.g. self-disable after a condition is met)
-- **Channel delivery** — tasks can deliver their output to Telegram or Email after execution; per-task `delivery_channel` and `delivery_target` configuration
+- **Channel delivery** — tasks can deliver their output to any registered channel (Telegram, etc.) after execution; per-task `delivery_channel` and `delivery_target` configuration
 - **Per-task model override** — each task can specify a different LLM; the engine loads the override, runs the task, then restores the default
+- **Persistent threads** — `persistent_thread_id` reuses the same conversation thread across task runs
+- **Notify-only mode** — `notify_only` flag fires a notification without agent invocation
+- **Skills override** — per-task skill selection via `skills_override`
 - **Prompt chaining** — each step sees the output of the previous step, enabling research → summarise → action pipelines
 - **Always-background execution** — tasks always run in the background so you can keep chatting; the sidebar shows a ⏳ indicator while running
 - **Background permissions** — background tasks use a tiered permission system: safe operations always run, low-risk operations (move file, send email) are allowed with optional per-task allowlists, and irreversible operations (file delete, memory delete) are always blocked; configure allowed shell command prefixes and email recipients per-task in the "🔒 Background permissions" section of the task editor
@@ -218,12 +223,89 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 
 ## Messaging Channels
 
-- **Telegram bot** — connect a Telegram bot via Bot API token; messages are processed by the full ReAct agent with all tools available; each chat gets its own conversation thread; supports interrupt-based approval for destructive actions (reply APPROVE/DENY); `/model` command to list and switch models (local or cloud); corrupt thread recovery with user-friendly messages; HTML-formatted responses
-- **Telegram tool** — the agent can proactively send messages, photos, and documents to any Telegram chat via `send_telegram_message`, `send_telegram_photo`, and `send_telegram_document`
-- **Email channel** — polls Gmail for unread emails with `[Thoth]` in the subject line (from your own address only); each Gmail thread gets its own agent conversation thread; replies inline; interrupt-based approval via email reply; corrupt thread recovery
-- **Gmail attachments** — `send_gmail_message` and `create_gmail_draft` support file attachments; files are MIME-encoded automatically; workspace-relative paths are resolved
-- **Auto-start** — channels can be set to start automatically when Thoth launches
+Thoth uses a generic **Channel ABC** — any messaging platform can plug in by subclassing `Channel`, declaring its capabilities, and registering itself. The system auto-generates LangChain tools and Settings UI for each registered channel.
+
+### Channel Architecture
+
+- **`Channel` ABC** — abstract base class all channel adapters inherit from; lifecycle methods `start()`, `stop()`, `is_configured()`, `is_running()`; outbound methods `send_message()`, `send_photo()`, `send_document()`, `send_approval_request()`; extensibility hooks `extra_tools()` and `build_custom_ui()`
+- **`ChannelCapabilities`** — declarative feature flags per channel: `photo_in`, `photo_out`, `voice_in`, `document_in`, `buttons`, `streaming`, `reactions`, `slash_commands`; the UI and tool factory read these to auto-generate tooling
+- **`ConfigField`** — describes user-configurable fields (name, label, type, required flag) that render automatically in the Settings UI
+- **Channel registry** — `register()` at import time, `all_channels()`, `running_channels()`, `configured_channels()`; central routing via `deliver(channel_name, target, text)` with validation; used by the task engine for delivery
+- **Shared media pipeline** — `channels/media.py` provides reusable media processing for any channel: `transcribe_audio()` (faster-whisper, OGG/MP3/WAV/WebM), `analyze_image()` (Vision service), `extract_document_text()` (PDF/CSV/JSON/plain-text with truncation), `save_inbound_file()` (persist to `~/.thoth/inbox/`)
+- **Tool factory** — `channels/tool_factory.py` auto-generates LangChain tools for each registered channel based on capabilities: `send_{name}_message`, `send_{name}_photo`, `send_{name}_document`; Pydantic input schemas; multi-strategy file path resolution (absolute, workspace-relative, tracker exports, cwd)
+- **Channel config** — per-channel key-value store in `~/.thoth/channels_config.json`
+- **Auto-start** — channels with `auto_start` enabled start automatically when Thoth launches
 - **Settings UI** — configure, start/stop, and manage channels from Settings → Channels tab
+
+### Telegram
+
+- **Full ReAct agent access** — messages processed by the full agent with all tools available; each chat gets its own conversation thread
+- **Voice messages** — inbound voice/audio transcribed via faster-whisper through the shared media pipeline; transcript sent to agent as user text
+- **Photo messages** — inbound photos analyzed via Vision service; analysis sent to agent with optional caption
+- **Document handling** — inbound documents saved to `~/.thoth/inbox/`, text extracted (PDF, CSV, JSON, plain text), file path + extracted content + caption sent to agent as one message
+- **Image generation delivery** — retrieves the last generated image from the image gen tool’s side-channel and sends it as a photo
+- **Emoji reactions** — real-time status feedback using Telegram's native reaction API: 👀 (processing), 👍 (success), 💔 (error); graceful fallback if bot lacks permission
+- **Interrupt approval** — tool calls requiring human approval render as inline keyboard buttons (Approve / Deny)
+- **Proactive messaging** — the agent can send messages, photos, and documents to any Telegram chat via `send_telegram_message`, `send_telegram_photo`, `send_telegram_document`
+- **`/model` command** — list and switch models (local or cloud) from within Telegram
+- **Auto-recovery** — handles orphaned tool calls gracefully; offers fresh thread on persistent failures; corrupt thread recovery with user-friendly messages
+- **HTML formatting** — responses formatted with Telegram-compatible HTML
+- **Bot commands** — registered with BotFather for discoverability
+
+### Gmail Tools
+
+- **Gmail attachments** — `send_gmail_message` and `create_gmail_draft` support file attachments; files are MIME-encoded automatically; workspace-relative paths are resolved
+
+---
+
+## Image Generation
+
+- **Generate images** — create images from text prompts via OpenAI/OpenRouter; supports `gpt-image-1`, `gpt-image-1.5`, `gpt-image-1-mini` models with configurable size (`1024x1024`, `1536x1024`, `1024x1536`) and quality (`low`, `medium`, `high`)
+- **Edit images** — modify existing images with a text prompt; image sources: `"last"` (most recent generation), filename (from attachment cache), or file path on disk
+- **Side-channel rendering** — `_last_generated_image` global holds the base64 image data; the UI streaming layer picks it up and renders it inline in chat; automatically cleared after retrieval
+- **Attachment cache** — pasted and attached images are stored in `_image_cache` (populated by `ui/streaming.py`) so the agent can reference them by filename for editing
+- **Channel delivery** — Telegram (and future channels) retrieve the generated image from the side-channel and send it as a photo message
+- **Base64 data-URI** — auto-detects PNG/JPEG/WebP/GIF format from image bytes and renders with the correct MIME type
+- **Model selector** — configurable in Settings → Models; default `openai/gpt-image-1.5`
+
+---
+
+## Plugin System & Marketplace
+
+A sandboxed, hot-reloadable extension system that lets anyone add new tools and skills without touching core code.
+
+### Plugin Architecture
+
+- **Plugin API** — `PluginAPI` bridge object and `PluginTool` base class are the only core imports a plugin needs; provides `get_config()`, `set_config()`, `get_secret()`, `set_secret()`, `register_tool()`, `register_skill()`
+- **Plugin API v2** — `_run()` method override for cleaner interface; `background_allowed` and `destructive` flags for safety gating; rich return types (dicts, lists)
+- **Manifest system** — each plugin declares metadata in `plugin.json`: ID, version, author, description, tools, skills, settings schema, API keys, and Python dependencies; validated against a strict schema (ID regex, semver, required fields)
+- **Security sandbox** — static scan blocks `eval()`, `exec()`, `os.system()`, `subprocess`, and `__import__()`; import guard prevents loading from core modules (`tools`, `agent`, `models`, `ui`); `register()` call has a 5-second timeout
+- **Dependency safety** — freezes core dependency versions before installing plugin deps; blocks downgrades that could break Thoth
+- **State persistence** — enable/disable state, config values, and API key secrets stored in `plugin_state.json` and `plugin_secrets.json` (restricted file permissions) under `~/.thoth/`
+- **Hot reload** — "Reload Plugins" button in Settings clears the registry and re-runs discovery without restarting the app; agent cache is invalidated automatically
+- **Skill auto-discovery** — `SKILL.md` files in a plugin’s `skills/` directory are detected and injected into the agent’s system prompt alongside built-in skills
+- **Version gating** — plugins declare `min_thoth_version`; loader rejects incompatible plugins with a clear error message
+
+### Marketplace
+
+- **Marketplace client** — fetches and caches the plugin index from a GitHub-hosted `index.json` with TTL-based refresh; provides search, tag filtering, and update detection
+- **Browse dialog** — NiceGUI dialog with search bar, tag filter pills, and one-click install buttons
+- **Install/update/uninstall** — downloads plugin archives, validates before install, manages `~/.thoth/installed_plugins/`; duplicate installs rejected; security violations block installation
+- **Auto-reload** — after marketplace install/update, plugins are automatically reloaded and agent cache cleared so new tools are available immediately
+- **Update detection** — `check_updates()` compares installed versions against the marketplace index
+
+### Plugin Settings UI
+
+- **Card grid** — each plugin rendered as a card with icon, name, version badge, description, tool/skill count badges, and enable/disable toggle
+- **Missing API key warnings** — cards show a warning badge when required secrets are not configured
+- **Per-plugin config dialog** — opens plugin details with API key inputs, settings controls, tools/skills list, and actions (update, uninstall)
+- **Empty state** — "No plugins installed" with a marketplace call-to-action
+
+### Core Integration
+
+- **`app.py`** — calls `load_plugins()` asynchronously at startup; logs loaded/failed counts; surfaces failures as startup warnings
+- **`agent.py`** — injects plugin tools into the LangChain tools list and plugin skills into the system prompt; `clear_agent_cache()` ensures new tools take effect after reload
+- **`ui/settings.py`** — wires the Plugins tab and marketplace dialog button
 
 ---
 
@@ -314,8 +396,8 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 
 | File | Purpose |
 |------|---------|
-| **`app.py`** + **`ui/`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (13 tabs including Cloud), tabbed home screen (Tasks + Activity + Knowledge graph), status monitor panel with animated avatar, 17 health-check pills, and diagnosis button (`status_bar.py` + `status_checks.py`), Task Edit dialog, file attachment handling with clipboard paste and drag-and-drop, streaming event loop with error recovery, Playwright PDF export, voice bar, first-launch setup wizard (Local/Cloud paths), per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network), Mermaid diagram rendering (mermaid.js), OAuth token health checks (startup + periodic 6 h re-check), right-click context menu (pywebview), centralized logging configuration |
-| **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator with thinking/reasoning token extraction, interrupt handling for destructive actions, live token usage reporting, graph-enhanced auto-recall with memory IDs and relation context, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off), task cancellation via stop_event, displaced tool-call auto-repair |
+| **`app.py`** + **`ui/`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (13 tabs including Cloud, Plugins, and Channels), tabbed home screen (Tasks + Activity + Knowledge graph), status monitor panel with animated avatar, 17 health-check pills, and diagnosis button (`status_bar.py` + `status_checks.py`), Task Edit dialog, file attachment handling with clipboard paste and drag-and-drop, streaming event loop with error recovery, Playwright PDF export, voice bar, first-launch setup wizard (Local/Cloud paths), Google Account setup wizard, per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network), Mermaid diagram rendering (mermaid.js), image generation inline rendering, OAuth token health checks (startup + periodic 6 h re-check), right-click context menu (pywebview), plugin marketplace dialog, centralized logging configuration |
+| **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator with thinking/reasoning token extraction, interrupt handling for destructive actions, live token usage reporting, graph-enhanced auto-recall with memory IDs and relation context, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off), task cancellation via stop_event, displaced tool-call auto-repair, plugin tool + channel tool injection, `clear_agent_cache()` for reload |
 | **`threads.py`** | SQLite-backed thread metadata, `SqliteSaver` checkpointer for persisting LangGraph conversation state, and per-thread image sidecar persistence (`thread_ui/`) |
 | **`memory.py`** | Backward-compatible memory wrapper — delegates all operations to `knowledge_graph.py`, mapping legacy column names (`category`/`content` to `entity_type`/`description`); provides `save_memory`, `find_by_subject`, `update_memory`, `delete_memory`, `semantic_search`, and `count_memories` with unchanged signatures |
 | **`knowledge_graph.py`** | Personal knowledge graph engine — SQLite entity + relation tables (WAL mode), NetworkX DiGraph for traversal, FAISS vector index for semantic search; entity CRUD with alias resolution, relation CRUD with cascade delete, `graph_enhanced_recall()` for semantic + graph expansion, `graph_to_vis_json()` for visualization; deterministic dedup via normalized subject matching |
@@ -334,10 +416,11 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 | **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts entities and relations as structured triples, two-pass dedup (entities with alias merging, then relations with subject-to-ID resolution), User entity pre-population, excludes active threads, runs on startup + every 6 hours |
 | **`skills.py`** | Skills engine — discovers, loads, and caches bundled and user skill definitions from `SKILL.md` files with YAML frontmatter; builds prompt text for enabled skills injected into the system prompt; config persistence in `~/.thoth/skills_config.json` |
 | **`bundled_skills/`** | 10 built-in skill packages (Brain Dump, Daily Briefing, Data Analyst, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) — each a directory containing a `SKILL.md` instruction file |
-| **`tasks.py`** | Task engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, sequential prompt execution, background runner with threading, channel delivery (Telegram/Email), per-task model override, run history persistence, task stop/cancel, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
+| **`tasks.py`** | Task engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, sequential prompt execution, background runner with threading, channel delivery (any registered channel), per-task model override, persistent threads, notify-only mode, skills override, run history persistence, task stop/cancel, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
 | **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue with `toast_type` support (positive/negative); error toasts render as persistent red banners; coordinates task completion chimes and timer alerts |
-| **`channels/`** | Messaging channel adapters — Telegram bot (long polling, interrupt approval, corrupt thread recovery, HTML formatting) and Email channel (Gmail polling, interrupt approval, corrupt thread recovery, sender-only filter), with shared config store |
-| **`tools/`** | 24 self-registering tool modules + base class + registry |
+| **`channels/`** | Messaging channel framework — `Channel` ABC with capability declarations, channel registry with auto-start and delivery routing, shared media pipeline (transcribe/analyze/extract/save), tool factory for auto-generated LangChain tools per channel, per-channel config store; Telegram adapter with voice/photo/document inbound, emoji reactions, interrupt buttons, image gen delivery, `/model` command, and HTML formatting |
+| **`tools/`** | 25 self-registering tool modules + base class + registry |
+| **`plugins/`** | Plugin runtime — `PluginAPI` bridge, `PluginTool` base class, manifest validation, security scanner, dependency sandbox, state/secrets persistence, loader, installer, marketplace client, and settings/marketplace UI |
 | **`static/`** | Bundled JS libraries — `vis-network.min.js` for knowledge graph visualization, `mermaid.min.js` for diagram rendering |
 
 ---
@@ -364,7 +447,8 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── voice_settings.json     # Whisper model size preference
 ├── processed_files.json    # Tracks indexed documents
 ├── tasks.db                # Task definitions, schedules, run history & delivery config
-├── channels_config.json    # Channel settings (Telegram, Email auto-start)
+├── channels_config.json    # Channel settings (Telegram auto-start, per-channel config)
+├── inbox/                  # Inbound files received via messaging channels
 ├── shell_history.json      # Shell command history per thread
 ├── skills_config.json      # Skill enable/disable state
 ├── user_config.json        # Avatar emoji & ring color preferences
@@ -379,6 +463,9 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── browser_profile/        # Playwright persistent browser profile (cookies, logins, localStorage)
 ├── browser_history.json    # Browser browsing history
 ├── wiki/                   # Obsidian-compatible markdown vault export
+├── installed_plugins/      # Marketplace-installed plugins
+├── plugin_state.json       # Plugin enable/disable state and config values
+├── plugin_secrets.json     # Plugin API key secrets (restricted file permissions)
 └── kokoro/                 # Kokoro TTS model & voice data
 ```
 
@@ -394,27 +481,42 @@ Most open-source AI assistants are **developer tools disguised as products** —
 
 **Thoth is different.** One-click installer, native desktop GUI, works out of the box on Windows and macOS, zero accounts required. Install it, launch it, start talking. No terminal expertise needed, no Docker, no YAML — just a private AI assistant that works.
 
+### Why not just use ChatGPT?
+
+| | ChatGPT / Claude / Gemini | Thoth |
+|---|---|---|
+| **Your data** | Stored on provider servers, subject to their privacy policies | Stays on your machine — always. With opt-in cloud models, only the current conversation is sent to the LLM provider; memories, files, and history never leave |
+| **Conversations** | Owned by the provider — can be deleted, leaked, or used for training | Stored locally in SQLite, fully yours, exportable anytime |
+| **Cost** | $20+/month per subscription | Free with local models. Cloud models use pay-per-token APIs — typically pennies per conversation with smart context trimming |
+| **Memory** | Limited, opaque, provider-controlled | Personal knowledge graph — entities, relationships, visual explorer, fully yours |
+| **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, shell, browser, webcam — 25 tools, 70 sub-operations, plus a plugin marketplace for third-party extensions |
+| **Customisation** | Pick a model, write a system prompt | Swap models per conversation or per task, build scheduled tasks with cron/daily/weekly/interval triggers, mix local and cloud models freely |
+| **Voice** | Cloud-processed speech | Local Whisper STT + Kokoro TTS — never leaves your mic |
+| **Availability** | Requires internet, subject to outages & rate limits | Local models work offline; cloud models available when connected |
+
+> **Bottom line:** Cloud AI assistants rent you access to someone else's system. Thoth gives you **personal AI sovereignty** — run local models for full privacy, add cloud when you need it, and keep your data on your machine either way.
+
 ### How is Thoth different from OpenClaw?
 
-[OpenClaw](https://github.com/openclaw/openclaw) is a solid open-source project, but it targets a different audience and solves a different problem. OpenClaw is a **developer-oriented messaging infrastructure platform**: it routes LLM calls to 25+ chat surfaces like WhatsApp, Slack, and Discord. It supports both cloud and local models, but getting it running requires Node.js, Docker, YAML config files, and considerable developer expertise.
+[OpenClaw](https://github.com/openclaw/openclaw) is the most popular open-source personal AI assistant (~350k stars). It's a powerful multi-channel gateway built for developers comfortable in the terminal. Here's how the two compare:
 
-Thoth is a **desktop AI assistant for everyone**: one-click install, native GUI, everything configurable from the settings panel — no terminal, no config files, no Docker. Whether you use local or cloud models, all your data stays on your machine — only the LLM inference can optionally go to the cloud.
-
-> **Pick Thoth** if you want a private, full-featured AI assistant with a polished desktop experience — local-first with optional cloud models, a personal knowledge graph, health tracking, and zero setup friction.
-> **Pick OpenClaw** if you're a developer who wants to build a cloud-powered assistant that connects to every chat platform you already use.
-
-| | OpenClaw | Thoth |
+| | Thoth | OpenClaw |
 |---|---|---|
-| **Target audience** | Developers comfortable with Node.js, Docker, and YAML | Everyone — one-click installer, native GUI, zero config files |
-| **LLM execution** | Cloud or local (requires manual Docker/config setup) | Local via Ollama (default) or opt-in cloud (OpenAI, OpenRouter) — switchable from the GUI |
-| **Data privacy** | Depends on your configuration | All data stays local — conversations, memories, files, history. Only LLM calls touch the cloud when using cloud models |
-| **Setup** | Node.js + Docker + YAML + channel config + API keys | One-click installer (Windows/macOS); cloud setup needs just an API key |
-| **Ongoing cost** | Free software, but typically requires paid API keys | Free with local models; cloud models billed per-token (pennies per conversation with smart trimming) |
-| **Offline capability** | Requires configuration for local LLMs | Local models work fully offline out of the box |
-| **Long-term memory** | Session compaction + pruning | Personal knowledge graph — entities, relations, visual explorer, semantic search, auto-extraction |
-| **Health & Habit Tracking** | ❌ None | Conversational tracker for meds, symptoms, exercise, periods — streaks, adherence, and trend analysis |
-| **Voice** | ElevenLabs (cloud TTS), wake words on Apple devices | Local Whisper STT + Kokoro TTS — fully offline, 10 voices |
-| **Tools** | Browser automation, Canvas, Skills platform | 24 tools / 67 sub-ops — Gmail, Calendar, filesystem, shell, browser, vision, habit tracker, charts, Wolfram, and more |
-| **Desktop experience** | macOS menu bar app, WebChat | Native desktop window with system tray, splash screen, dark mode UI |
-| **Tasks** | Cron jobs + webhooks | Named tasks with 7 schedule types, stop/cancel, channel delivery, per-task model override, and template variables |
-| **Platforms** | macOS (primary), Linux, Windows via WSL2 only | Windows & macOS |
+| **Getting started** | **One-click installer** (`.exe` / `.dmg`) — download, run, done. Built-in setup wizard, no terminal required | `npm install -g openclaw@latest` → CLI onboarding. Requires Node.js 24. Windows needs WSL2 (no native Windows support) |
+| **Local AI (offline)** | **Local-first** — Ollama with 39 curated models out of the box. Works fully offline. Cloud is opt-in | Cloud-first design — requires an API key to start. Local model support through provider config |
+| **Memory** | **Personal knowledge graph** — 10 entity types, typed directional relations, visual explorer, FAISS semantic search + 1-hop graph expansion, memory decay, orphan repair | Flat markdown files (`MEMORY.md` + daily notes) with semantic search. No structured graph |
+| **Knowledge refinement** | **Dream Cycle** — nightly duplicate merging (≥0.93 similarity), description enrichment from conversation context, relationship inference, 3-layer anti-contamination system, dream journal | Dreaming (experimental) — Light/Deep/REM phases that promote short-term signals to long-term memory via scoring thresholds |
+| **Document intelligence** | **Map-reduce LLM pipeline** — extracts structured entities and relations into the knowledge graph with source provenance. Supports PDF, DOCX, EPUB, HTML, Markdown | File read/write/edit operations in the workspace |
+| **Wiki vault** | **Obsidian-compatible export** — one `.md` per entity with `[[wiki-links]]`, YAML frontmatter, and per-type indexes | Not available |
+| **Voice** | **Fully local** — faster-whisper STT + Kokoro TTS with 10 voices. Audio never leaves your machine | ElevenLabs (cloud TTS) + system fallback. Voice Wake on macOS/iOS |
+| **Health tracking** | **Built-in tracker** — medications, symptoms, exercise, mood, sleep, periods. Streak analysis, CSV export, Plotly charts | Not available |
+| **Tools** | 25 tools / 70 sub-operations — Gmail, Calendar, Arxiv, YouTube, Wolfram Alpha, Plotly charts, wiki vault, habit tracker, image generation | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
+| **Messaging channels** | Telegram (voice, photo, documents, reactions, buttons) + Gmail. *Slack, Discord, WhatsApp, Teams coming soon* | **23+ channels** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, and many more |
+| **Autonomous agents** | **Background tasks as sub-agents** — each task overrides model, skills, and permissions independently. Multiple run in parallel with their own persistent threads | Multi-agent routing with isolated sessions per sender/channel |
+| **Desktop app** | Native window (pywebview) + system tray on **Windows & macOS**. One-click installers for both | macOS menu bar app. No native Windows app (WSL2 required). iOS & Android companion apps |
+| **Canvas** | Mermaid diagrams and Plotly charts rendered inline | A2UI — agent-driven interactive visual workspace |
+| **Plugins** | Sandboxed plugin marketplace with hot-reload and security scanning | npm plugin ecosystem + ClawHub skill registry. Large community catalog |
+| **Privacy** | All data local. No account, no server, no telemetry. API keys stored locally — Thoth has no servers | Self-hosted gateway. Data stays on your machine. Some channel integrations require external services |
+| **Cost** | **Free** with local models. Cloud: pay-per-token (pennies/conversation) | Free + open source. Requires a cloud API key to function |
+
+> **In short:** OpenClaw is a powerful gateway for developers who want their AI assistant on every messaging platform. Thoth is built for people who want **personal AI sovereignty** — local-first intelligence, a structured knowledge graph that grows with you, one-click setup, and tools that work without touching a terminal. Different philosophies, both open source.

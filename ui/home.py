@@ -429,23 +429,11 @@ def _build_activity_content(container) -> None:
             ui.separator().classes("q-my-sm")
             ui.label("📡 Channels").classes("text-subtitle1 font-bold")
             from channels.telegram import is_configured as tg_ok, is_running as tg_on
-            from channels.email import (
-                is_configured as em_ok, is_running as em_on,
-                get_last_error as em_err,
-            )
             _any_channel = False
             if tg_ok():
                 _any_channel = True
                 dot = "🟢" if tg_on() else "🔴"
                 lbl = "Running" if tg_on() else "Stopped"
                 ui.label(f"{dot} Telegram — {lbl}").classes("text-sm q-ml-sm")
-            if em_ok():
-                _any_channel = True
-                dot = "🟢" if em_on() else "🔴"
-                lbl = "Running" if em_on() else "Stopped"
-                err = em_err()
-                if err:
-                    lbl += f" — {err}"
-                ui.label(f"{dot} Email — {lbl}").classes("text-sm q-ml-sm")
             if not _any_channel:
                 ui.label("No channels configured.").classes("text-grey-6 text-sm q-ml-sm")

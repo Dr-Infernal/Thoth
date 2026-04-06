@@ -17,6 +17,7 @@ from nicegui import events, run, ui
 
 from ui.state import AppState, P, _active_generations
 from ui.constants import ALLOWED_UPLOAD_SUFFIXES, welcome_message, EXAMPLE_PROMPTS
+from ui.render import render_image_with_save
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +282,7 @@ def build_chat(
                     for _img in _reattach_gen.captured_images:
                         try:
                             with _reattach_gen.tool_col:
-                                ui.image(f"data:image/jpeg;base64,{_img}").classes("w-80 rounded")
+                                render_image_with_save(_img)
                         except Exception:
                             pass
                     _reattach_gen.assistant_md = ui.markdown(

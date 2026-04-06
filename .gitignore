@@ -35,6 +35,9 @@ _*.py
 # Old workflows module (replaced by tasks.py in v3.5.0)
 workflows.py
 
+# Plugin monorepo (separate repo: siddsachar/thoth-plugins)
+monorepo/
+
 # Test files
 CLOUD_MODE_TEST_PLAN.md
 _README_OLD.md

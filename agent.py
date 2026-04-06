@@ -403,6 +403,18 @@ def _pre_model_trim(state: dict) -> dict:
     except Exception as exc:
         logger.debug("Skill injection skipped (non-fatal): %s", exc)
 
+    # Plugin skills — appended after built-in skills
+    try:
+        from plugins import registry as _plugin_reg
+        plugin_skills_text = _plugin_reg.get_skills_prompt()
+        if plugin_skills_text:
+            plugin_skills_msg = SystemMessage(content=plugin_skills_text)
+            # Insert after the skills msg (or after time_msg if no skills)
+            _ins_idx = insert_idx + (2 if skills_text else 1)
+            trimmed.insert(_ins_idx, plugin_skills_msg)
+    except Exception as exc:
+        logger.debug("Plugin skill injection skipped: %s", exc)
+
     # ── Auto-recall: inject relevant memories before the last user msg ───
     # Embed the latest human message and pull the top-5 most relevant
     # memories from the FAISS index, then expand 1 hop in the knowledge
@@ -913,6 +925,16 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                 lc_tools.extend(tool_obj.as_langchain_tools())
                 destructive_names.update(tool_obj.destructive_tool_names)
 
+        # Append tools from enabled plugins (totally separate registry)
+        try:
+            from plugins import registry as plugin_registry_mod
+            lc_tools.extend(plugin_registry_mod.get_langchain_tools())
+            destructive_names.update(plugin_registry_mod.get_destructive_names())
+            _plugin_bg_allowed = plugin_registry_mod.get_background_allowed_names()
+        except Exception as exc:
+            logger.debug("Plugin tool injection skipped: %s", exc)
+            _plugin_bg_allowed = set()
+
         if is_background:
             # Tiered background permissions:
             # ALWAYS BLOCKED: file_delete, delete_calendar, delete_memory,
@@ -925,7 +947,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
             _ALWAYS_ALLOWED_BG = {
                 "workspace_move_file", "move_calendar_event",
                 "send_gmail_message",
-            }
+            } | _plugin_bg_allowed
             # run_command is NOT in destructive_names (shell self-gates),
             # so it's already kept.  We only strip the hard-blocked ones.
             lc_tools = [t for t in lc_tools

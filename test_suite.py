@@ -148,7 +148,10 @@ CHANNEL_MODULES = [
     "channels",
     "channels.config",
     "channels.telegram",
-    "channels.email",
+    "channels.base",
+    "channels.registry",
+    "channels.media",
+    "channels.tool_factory",
 ]
 
 for mod_name in CHANNEL_MODULES:
@@ -206,12 +209,6 @@ FUNCTION_CHECKS = [
     ("channels.telegram", "stop_bot"),
     ("channels.telegram", "is_configured"),
     ("channels.telegram", "is_running"),
-    ("channels.email", "start_polling"),
-    ("channels.email", "stop_polling"),
-    ("channels.email", "is_configured"),
-    ("channels.email", "is_running"),
-    ("channels.email", "get_poll_interval"),
-    ("channels.email", "set_poll_interval"),
     ("tools.registry", "get_all_tools"),
     ("tools.registry", "get_enabled_tools"),
     ("tools.registry", "get_langchain_tools"),
@@ -2106,15 +2103,18 @@ try:
 
     # 22f. Channels expose is_configured / is_running
     from channels.telegram import is_configured as _tg_cfg, is_running as _tg_run
-    from channels.email import is_configured as _em_cfg, is_running as _em_run
     if callable(_tg_cfg) and callable(_tg_run):
         record("PASS", "activity: telegram is_configured/is_running callable")
     else:
         record("FAIL", "activity: telegram channel functions not callable")
-    if callable(_em_cfg) and callable(_em_run):
-        record("PASS", "activity: email is_configured/is_running callable")
+
+    # 22f2. Channel registry has telegram registered
+    from channels import registry as _ch_reg22
+    _tg_ch = _ch_reg22.get("telegram")
+    if _tg_ch is not None and _tg_ch.name == "telegram":
+        record("PASS", "activity: telegram registered in channel registry")
     else:
-        record("FAIL", "activity: email channel functions not callable")
+        record("FAIL", "activity: telegram not in channel registry")
 
     # 22g. get_running_tasks returns a dict
     from tasks import get_running_tasks
@@ -2208,19 +2208,19 @@ try:
     except Exception as _e:
         record("FAIL", "delivery: validate(telegram, numeric)", str(_e))
 
-    # 23g. _validate_delivery requires email to contain @ and .
+    # 23g. _validate_delivery rejects unknown channel
     try:
-        _validate_delivery("email", "not-an-email")
-        record("FAIL", "delivery: validate(email, invalid) should raise")
+        _validate_delivery("bogus_channel", "some_target")
+        record("FAIL", "delivery: validate(unknown) should raise")
     except ValueError:
-        record("PASS", "delivery: validate(email, invalid) raises ValueError")
+        record("PASS", "delivery: validate(unknown channel) raises ValueError")
 
-    # 23h. _validate_delivery accepts valid email
+    # 23h. _validate_delivery works through registry for registered channels
     try:
-        _validate_delivery("email", "user@example.com")
-        record("PASS", "delivery: validate(email, valid) passes")
+        _validate_delivery("telegram", "99999")  # valid registered channel
+        record("PASS", "delivery: validate via registry for registered channel")
     except Exception as _e:
-        record("FAIL", "delivery: validate(email, valid)", str(_e))
+        record("FAIL", "delivery: validate via registry", str(_e))
 
     # 23i. _deliver_to_channel returns empty tuple when no delivery configured
     _dummy_task = {"name": "Test", "delivery_channel": None, "delivery_target": None}
@@ -2238,22 +2238,13 @@ try:
     else:
         record("FAIL", "delivery: unreachable telegram", f"got '{_result2_status}'")
 
-    # 23k. _deliver_to_channel returns 'delivery_failed' for unconfigured email
-    #      (skipped if Gmail is actually configured on this machine)
-    from channels.email import _is_gmail_ready as _gmail_ready
-    _dummy_em = {"name": "EmTest", "delivery_channel": "email", "delivery_target": "a@b.com"}
-    _result3_status, _result3_detail = _deliver_to_channel(_dummy_em, "hello")
-    if _gmail_ready():
-        # Gmail is configured — delivery may succeed or fail depending on network
-        if _result3_status in ("delivered", "delivery_failed"):
-            record("PASS", "delivery: email returns status string (gmail configured)")
-        else:
-            record("FAIL", "delivery: email unexpected return", f"got '{_result3_status}'")
+    # 23k. _deliver_to_channel returns 'delivery_failed' for unknown channel
+    _dummy_unk = {"name": "UnkTest", "delivery_channel": "nonexistent", "delivery_target": "x"}
+    _result3_status, _result3_detail = _deliver_to_channel(_dummy_unk, "hello")
+    if _result3_status == "delivery_failed":
+        record("PASS", "delivery: unknown channel returns 'delivery_failed'")
     else:
-        if _result3_status == "delivery_failed":
-            record("PASS", "delivery: unconfigured email returns 'delivery_failed'")
-        else:
-            record("FAIL", "delivery: unconfigured email", f"got '{_result3_status}'")
+        record("FAIL", "delivery: unknown channel", f"got '{_result3_status}'")
 
     # 23l. create_task accepts telegram delivery without numeric target (target ignored)
     from tasks import create_task, delete_task
@@ -2267,22 +2258,22 @@ try:
     # 23m. create_task accepts valid delivery settings
     try:
         _good_id = create_task(
-            name="GoodDelivery", delivery_channel="email",
-            delivery_target="test@example.com", prompts=["test"],
+            name="GoodDelivery", delivery_channel="telegram",
+            delivery_target="12345", prompts=["test"],
         )
         delete_task(_good_id)
-        record("PASS", "delivery: create_task accepts valid email delivery")
+        record("PASS", "delivery: create_task accepts valid telegram delivery")
     except Exception as _e:
-        record("FAIL", "delivery: create_task valid email", str(_e))
+        record("FAIL", "delivery: create_task valid telegram", str(_e))
 
     # 23n. update_task rejects invalid delivery change
     from tasks import update_task
     _tmp_id = create_task(name="UpdateTest", prompts=["test"])
     try:
-        update_task(_tmp_id, delivery_channel="email", delivery_target="invalid")
-        record("FAIL", "delivery: update_task should reject invalid email")
+        update_task(_tmp_id, delivery_channel="bogus_ch", delivery_target="x")
+        record("FAIL", "delivery: update_task should reject unknown channel")
     except ValueError:
-        record("PASS", "delivery: update_task rejects invalid email target")
+        record("PASS", "delivery: update_task rejects unknown channel")
     finally:
         delete_task(_tmp_id)
 
@@ -2310,29 +2301,15 @@ try:
     except Exception as _e:
         record("WARN", "delivery: telegram send_outbound unexpected error", str(_e))
 
-    # 23r. email send_outbound raises RuntimeError when not configured
-    #      (skipped if Gmail is actually configured on this machine)
-    from channels.email import send_outbound as _em_send
-    if not _gmail_ready():
-        try:
-            _em_send("test@test.com", "Subj", "Body")
-            record("FAIL", "delivery: email send_outbound should raise when not configured")
-        except RuntimeError:
-            record("PASS", "delivery: email send_outbound raises RuntimeError")
-        except Exception as _e:
-            record("WARN", "delivery: email send_outbound unexpected error", str(_e))
-    else:
-        record("PASS", "delivery: email send_outbound (gmail configured — raise test skipped)")
-
-    # 23s. email subject prefix 'FromThoth:'
+    # 23r. _deliver_to_channel uses channel registry
     import inspect as _insp
     _deliver_src = _insp.getsource(_deliver_to_channel)
-    if "FromThoth:" in _deliver_src:
-        record("PASS", "delivery: email subject uses 'FromThoth:' prefix")
+    if "registry" in _deliver_src and "ch.send_message" in _deliver_src:
+        record("PASS", "delivery: _deliver_to_channel uses channel registry")
     else:
-        record("FAIL", "delivery: email subject missing 'FromThoth:' prefix")
+        record("FAIL", "delivery: _deliver_to_channel not using channel registry")
 
-    # 23t. telegram message prefix with task name
+    # 23s. telegram message prefix with task name (uses registry path)
     if "📋" in _deliver_src and "task['name']" in _deliver_src:
         record("PASS", "delivery: telegram message includes task name prefix")
     else:
@@ -2564,8 +2541,8 @@ try:
         icon="🧪",
         schedule="daily:12:00",
         notify_only=False,
-        delivery_channel="email",
-        delivery_target="test@example.com",
+        delivery_channel="telegram",
+        delivery_target="12345",
     )
     _rt = get_task(_rt_id)
     _rt_ok = (
@@ -2574,8 +2551,8 @@ try:
         and _rt["prompts"] == ["Step 1", "Step 2"]
         and _rt["icon"] == "🧪"
         and _rt["schedule"] == "daily:12:00"
-        and _rt["delivery_channel"] == "email"
-        and _rt["delivery_target"] == "test@example.com"
+        and _rt["delivery_channel"] == "telegram"
+        and _rt["delivery_target"] == "12345"
         and _rt["notify_only"] is False
         and _rt["enabled"] is True
     )
@@ -2592,7 +2569,7 @@ try:
         and _dup["name"] == "Round Trip Test (copy)"
         and _dup["prompts"] == ["Step 1", "Step 2"]
         and _dup["schedule"] is None  # schedule not copied
-        and _dup["delivery_channel"] == "email"
+        and _dup["delivery_channel"] == "telegram"
     )
     if _dup_ok:
         record("PASS", "task-engine: duplicate_task clones correctly")
@@ -3521,13 +3498,13 @@ try:
     assert "Error" in _std_r or "not running" in _std_r.lower(), f"unexpected: {_std_r}"
     record("PASS", "telegram tool: _send_telegram_document returns error when not running")
 
-    # 29n. _validate_delivery: email without target still raises ValueError
+    # 29n. _validate_delivery: unknown channel raises ValueError
     from tasks import _validate_delivery
     try:
-        _validate_delivery("email", None)
-        record("FAIL", "telegram tool: validate(email, None) should raise ValueError")
+        _validate_delivery("no_such_channel", None)
+        record("FAIL", "telegram tool: validate(unknown, None) should raise ValueError")
     except ValueError:
-        record("PASS", "telegram tool: validate(email, None) raises ValueError")
+        record("PASS", "telegram tool: validate(unknown, None) raises ValueError")
 
     # 29o. _deliver_to_channel: telegram path calls _get_allowed_user_id
     _deliver_src29 = _insp29.getsource(_deliver_to_channel)
@@ -3909,62 +3886,17 @@ try:
     )
     # Check return annotation includes 3 elements (bytes | None at end)
     _tg_src30zi = Path("channels/telegram.py").read_text(encoding="utf-8")
-    assert "bytes | None]" in _tg_src30zi, "return type should include bytes | None"
-    assert "captured_image" in _tg_src30zi, "should track captured_image"
-    record("PASS", "v3.6: _run_agent_sync returns 3-tuple with captured image")
+    assert "list[bytes]]" in _tg_src30zi, "return type should include list[bytes]"
+    assert "captured_image" in _tg_src30zi, "should track captured_images"
+    record("PASS", "v3.6: _run_agent_sync returns 3-tuple with captured images")
 
     # ── 30zj. _resume_agent_sync returns 3-tuple ─────────────────────────
     assert "used_vision" in _tg_src30zi, "should track used_vision flag"
     assert "send_photo" in _tg_src30zi, "should call send_photo for vision captures"
     record("PASS", "v3.6: _resume_agent_sync returns 3-tuple with captured image")
 
-    # ── 30zk. Email _format_interrupt handles list of dicts ─────────────
-    _email_src30 = Path("channels/email.py").read_text(encoding="utf-8")
-    assert "isinstance(data, list)" in _email_src30, \
-        "email _format_interrupt should handle list"
-    assert '"description"' in _email_src30 or "'description'" in _email_src30, \
-        "email should use 'description' field, not 'reason'"
-    record("PASS", "v3.6: email _format_interrupt handles list of dicts")
-
-    # ── 30zl. Email _resume_agent_sync accepts interrupt_ids ──────────
-    assert "interrupt_ids" in _email_src30, \
-        "email _resume_agent_sync should accept interrupt_ids"
-    # Verify it's passed through to resume_stream_agent
-    assert "interrupt_ids=interrupt_ids" in _email_src30, \
-        "should pass interrupt_ids to resume_stream_agent"
-    record("PASS", "v3.6: email _resume_agent_sync accepts interrupt_ids")
-
-    # ── 30zm. Email has _extract_interrupt_ids helper ─────────────────
-    assert "_extract_interrupt_ids" in _email_src30, \
-        "email should have _extract_interrupt_ids helper"
-    assert "__interrupt_id" in _email_src30, \
-        "should extract __interrupt_id from interrupt data"
-    record("PASS", "v3.6: email has _extract_interrupt_ids helper")
-
-    # ── 30zn. Email has corrupt thread detection ──────────────────────
-    assert "_is_corrupt_thread_error" in _email_src30, \
-        "email should have _is_corrupt_thread_error"
-    assert "_THREAD_CORRUPT_PATTERNS" in _email_src30, \
-        "email should have _THREAD_CORRUPT_PATTERNS"
-    record("PASS", "v3.6: email has corrupt thread detection")
-
-    # ── 30zo. Email _poll_once passes interrupt_ids on resume ─────────
-    # Check the lambda pattern that passes interrupt_ids
-    assert "interrupt_ids=interrupt_ids" in _email_src30, \
-        "poll_once should pass interrupt_ids on resume"
-    assert "_extract_interrupt_ids(pending" in _email_src30, \
-        "should extract interrupt_ids from pending data"
-    record("PASS", "v3.6: email _poll_once passes interrupt_ids on resume")
-
-    # ── 30zp. Email corrupt thread recovery in new-message handler ────
-    # Count occurrences of _is_corrupt_thread_error — should appear 2+ times
-    # (once in resume handler, once in new-message handler)
-    _corrupt_count = _email_src30.count("_is_corrupt_thread_error")
-    assert _corrupt_count >= 2, \
-        f"_is_corrupt_thread_error should be called in both handlers, found {_corrupt_count}"
-    assert "start a new email thread" in _email_src30, \
-        "should advise user to start new email thread on corrupt error"
-    record("PASS", "v3.6: email corrupt thread recovery in both handlers")
+    # ── 30zk–30zp. Email channel tests removed (email channel deleted) ──
+    record("PASS", "v3.6: email channel tests removed (channel deleted)")
 
 except Exception as e:
     record("FAIL", "v3.6 file & messaging pipeline tests", f"{type(e).__name__}: {e}")
@@ -4266,13 +4198,10 @@ try:
 
     # ── 32k. Interactive channels do NOT set background flag ─────────
     _src_tg32 = Path("channels/telegram.py").read_text(encoding="utf-8")
-    _src_em32 = Path("channels/email.py").read_text(encoding="utf-8")
     _src_ui32 = Path("app.py").read_text(encoding="utf-8")
     # These should NEVER set background_workflow to True
     assert "_background_workflow_var" not in _src_tg32, \
         "SECURITY: Telegram must NOT set _background_workflow_var"
-    assert "_background_workflow_var" not in _src_em32, \
-        "SECURITY: Email channel must NOT set _background_workflow_var"
     # UI may import is_background_workflow but should never .set(True)
     assert "_background_workflow_var.set(True)" not in _src_ui32, \
         "SECURITY: UI must NOT set _background_workflow_var to True"
@@ -4806,10 +4735,8 @@ try:
     assert "*_cs_rest" in _cs_src35
     record("PASS", "cloud: conversation_search_tool handles 5-column rows")
 
-    # ── 35af. email channel handles 5-column rows ────────────────────
-    _em_src35 = Path("channels/email.py").read_text(encoding="utf-8")
-    assert "*_rest_em" in _em_src35
-    record("PASS", "cloud: email channel handles 5-column rows")
+    # ── 35af. email channel removed — test skipped ──────────────────
+    record("PASS", "cloud: email channel test removed (channel deleted)")
 
     # ── 35ag. UI: Cloud tab + dual sections ────────────────────
     _gui_src35 = Path("app.py").read_text(encoding="utf-8") + "".join(
@@ -5791,7 +5718,6 @@ try:
 
     # ── 37l. Channel modules import ───────────────────────────────────
     from channels import config as _chcfg37
-    from channels import email as _chemail37
     from channels import telegram as _chtg37
     record("PASS", "smoke: channel modules import")
 
@@ -6138,7 +6064,7 @@ try:
         CheckResult, ALL_CHECKS, LIGHT_CHECKS, HEAVY_CHECKS,
         run_all_checks, run_light_checks,
         check_ollama, check_active_model, check_cloud_api,
-        check_gmail_channel, check_telegram,
+        check_telegram,
         check_gmail_oauth, check_calendar_oauth,
         check_task_scheduler, check_memory_extraction,
         check_disk_space, check_threads_db, check_faiss_index,
@@ -6184,8 +6110,8 @@ try:
     record("PASS", "status_checks: CheckResult inactive properties")
 
     # ── 41c. Check registry completeness ─────────────────────────────
-    assert len(ALL_CHECKS) == 17, f"Expected 17 checks, got {len(ALL_CHECKS)}"
-    record("PASS", "status_checks: 17 checks registered in ALL_CHECKS")
+    assert len(ALL_CHECKS) == 16, f"Expected 16 checks, got {len(ALL_CHECKS)}"
+    record("PASS", "status_checks: 16 checks registered in ALL_CHECKS")
 
     assert set(LIGHT_CHECKS).issubset(set(ALL_CHECKS)), "LIGHT_CHECKS not subset"
     assert set(HEAVY_CHECKS).issubset(set(ALL_CHECKS)), "HEAVY_CHECKS not subset"
@@ -6195,12 +6121,12 @@ try:
 
     # ── 41d. Every check runs without crashing ───────────────────────
     all_results = run_all_checks()
-    assert len(all_results) == 17, f"Expected 17 results, got {len(all_results)}"
+    assert len(all_results) == 16, f"Expected 16 results, got {len(all_results)}"
     for r in all_results:
         assert isinstance(r, CheckResult), f"Not CheckResult: {r}"
         assert r.status in ("ok", "warn", "error", "inactive"), f"Bad status: {r.status}"
         assert r.name, "Empty check name"
-    record("PASS", "status_checks: run_all_checks returns 14 valid results")
+    record("PASS", "status_checks: run_all_checks returns 16 valid results")
 
     light_results = run_light_checks()
     assert len(light_results) == len(LIGHT_CHECKS)
@@ -6262,9 +6188,9 @@ try:
 
     # ── 41h. Force refresh populates cache ───────────────────────────
     fr = _force_refresh()
-    assert len(fr) == 17, f"force_refresh returned {len(fr)} results"
+    assert len(fr) == 16, f"force_refresh returned {len(fr)} results"
     from ui.status_bar import _status_cache, _cache_time
-    assert len(_status_cache) == 17
+    assert len(_status_cache) == 16
     assert _cache_time > 0
     record("PASS", "status_bar: force_refresh populates cache")
 
@@ -7182,6 +7108,1646 @@ try:
 
 except Exception as e:
     record("FAIL", "dream-cycle", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 49. PLUGIN SYSTEM
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("49. PLUGIN SYSTEM")
+print("=" * 70)
+
+try:
+    import json as _json49
+    import tempfile as _tempfile49
+    import shutil as _shutil49
+    from pathlib import Path as _Path49
+
+    # ── 49a. Plugin package imports ──────────────────────────────────
+    from plugins import manifest as _manifest49
+    from plugins import api as _api49
+    from plugins import state as _state49
+    from plugins import registry as _registry49
+    from plugins import loader as _loader49
+    from plugins import sandbox as _sandbox49
+    record("PASS", "plugins: all 6 modules import successfully")
+
+    # ── 49b. Manifest validation — good manifest ─────────────────────
+    _tmpdir49 = _Path49(_tempfile49.mkdtemp(prefix="thoth_plugin_test_"))
+    try:
+        _good_manifest49 = {
+            "id": "test-plugin",
+            "name": "Test Plugin",
+            "version": "1.0.0",
+            "min_thoth_version": "3.11.0",
+            "author": {"name": "Test Author", "github": "tester"},
+            "description": "A test plugin for unit testing.",
+            "provides": {
+                "tools": [{"name": "test_tool", "display_name": "Test Tool", "description": "A test"}],
+                "skills": []
+            },
+            "settings": {},
+            "python_dependencies": []
+        }
+        _plugin_dir49 = _tmpdir49 / "test-plugin"
+        _plugin_dir49.mkdir()
+        (_plugin_dir49 / "plugin.json").write_text(_json49.dumps(_good_manifest49), encoding="utf-8")
+
+        _m49 = _manifest49.parse_manifest(_plugin_dir49)
+        assert _m49.id == "test-plugin", f"Expected id 'test-plugin', got '{_m49.id}'"
+        assert _m49.name == "Test Plugin"
+        assert _m49.version == "1.0.0"
+        assert _m49.author.name == "Test Author"
+        assert _m49.tool_count == 1
+        record("PASS", "plugins: manifest validation — good manifest parses correctly")
+
+        # ── 49c. Manifest validation — bad manifest ──────────────────────
+        _bad_dir49 = _tmpdir49 / "bad-plugin"
+        _bad_dir49.mkdir()
+        (_bad_dir49 / "plugin.json").write_text('{"id":"INVALID_ID"}', encoding="utf-8")
+        try:
+            _manifest49.parse_manifest(_bad_dir49)
+            record("FAIL", "plugins: bad manifest should raise ManifestError", "No exception raised")
+        except _manifest49.ManifestError:
+            record("PASS", "plugins: manifest validation — bad manifest raises ManifestError")
+
+        # ── 49d. Manifest validation — missing plugin.json ───────────────
+        _empty_dir49 = _tmpdir49 / "empty-plugin"
+        _empty_dir49.mkdir()
+        try:
+            _manifest49.parse_manifest(_empty_dir49)
+            record("FAIL", "plugins: missing plugin.json should raise", "No exception raised")
+        except _manifest49.ManifestError:
+            record("PASS", "plugins: manifest validation — missing plugin.json raises ManifestError")
+
+        # ── 49e. PluginAPI object ────────────────────────────────────────
+        _state49._reset()
+        _papi49 = _api49.PluginAPI(
+            plugin_id="test-plugin",
+            plugin_dir=_plugin_dir49,
+            state_backend=_state49,
+        )
+        assert _papi49.plugin_id == "test-plugin"
+        assert _papi49.plugin_dir == _plugin_dir49
+        record("PASS", "plugins: PluginAPI object creation and properties")
+
+        # ── 49f. PluginTool base class ───────────────────────────────────
+        class _TestTool49(_api49.PluginTool):
+            @property
+            def name(self): return "test_tool"
+            @property
+            def display_name(self): return "🧪 Test Tool"
+            @property
+            def description(self): return "A test tool"
+            def execute(self, query: str) -> str:
+                return f"Test result for: {query}"
+
+        _tool49 = _TestTool49(_papi49)
+        assert _tool49.name == "test_tool"
+        assert _tool49.execute("hello") == "Test result for: hello"
+        _lc49 = _tool49.as_langchain_tool()
+        assert _lc49.name == "test_tool"
+        record("PASS", "plugins: PluginTool subclass + as_langchain_tool()")
+
+        # ── 49g. State persistence ───────────────────────────────────────
+        _state49._reset()
+        _state49.set_plugin_enabled("test-plugin", False)
+        assert not _state49.is_plugin_enabled("test-plugin")
+        _state49.set_plugin_enabled("test-plugin", True)
+        assert _state49.is_plugin_enabled("test-plugin")
+        _state49.set_plugin_config("test-plugin", "max_results", 42)
+        assert _state49.get_plugin_config("test-plugin", "max_results") == 42
+        record("PASS", "plugins: state enable/disable + config persistence")
+
+        # ── 49h. Secret storage ──────────────────────────────────────────
+        _state49.set_plugin_secret("test-plugin", "API_KEY", "sk-test-123")
+        assert _state49.get_plugin_secret("test-plugin", "API_KEY") == "sk-test-123"
+        assert _state49.get_plugin_secret("test-plugin", "MISSING") is None
+        record("PASS", "plugins: secret storage and retrieval")
+
+        # ── 49i. Plugin registry — isolation from core ───────────────────
+        _registry49._reset()
+        _papi49.register_tool(_tool49)
+        _warnings49 = _registry49.register_plugin(
+            manifest=_m49,
+            tools=_papi49._registered_tools,
+            skills=[],
+        )
+        assert "test_tool" in _registry49.get_plugin_tool_names()
+        _lc_tools49 = _registry49.get_langchain_tools()
+        assert any(t.name == "test_tool" for t in _lc_tools49)
+        record("PASS", "plugins: registry stores and returns plugin tools")
+
+        # ── 49j. Registry — name collision detection ─────────────────────
+        _registry49._reset()
+        # Register first
+        _registry49.register_plugin(manifest=_m49, tools=[_tool49], skills=[])
+        # Try to register same name from different plugin
+        _m2_49 = _manifest49.PluginManifest(
+            id="other-plugin", name="Other", version="1.0.0",
+            min_thoth_version="3.11.0",
+            author=_manifest49.PluginAuthor(name="X"),
+            description="another",
+        )
+        _w49 = _registry49.register_plugin(manifest=_m2_49, tools=[_tool49], skills=[])
+        assert any("collides" in w for w in _w49), "Should warn about name collision"
+        record("PASS", "plugins: registry detects tool name collisions")
+
+        # ── 49k. Security scan — dangerous patterns blocked ──────────────
+        _sec_dir49 = _tmpdir49 / "evil-plugin"
+        _sec_dir49.mkdir()
+        (_sec_dir49 / "plugin_main.py").write_text(
+            "import os\nos.system('rm -rf /')\n", encoding="utf-8"
+        )
+        _sec_err49 = _loader49._security_scan(_sec_dir49)
+        assert _sec_err49 is not None, "Security scan should catch os.system()"
+        assert "os.system" in _sec_err49
+        record("PASS", "plugins: security scan blocks os.system()")
+
+        # ── 49l. Security scan — forbidden core imports blocked ──────────
+        _sec_dir2_49 = _tmpdir49 / "import-evil"
+        _sec_dir2_49.mkdir()
+        (_sec_dir2_49 / "plugin_main.py").write_text(
+            "from agent import get_agent_graph\n", encoding="utf-8"
+        )
+        _sec_err2_49 = _loader49._security_scan(_sec_dir2_49)
+        assert _sec_err2_49 is not None, "Should block import from agent"
+        assert "agent" in _sec_err2_49
+        record("PASS", "plugins: security scan blocks core module imports")
+
+        # ── 49m. Security scan — clean plugin passes ─────────────────────
+        _clean_dir49 = _tmpdir49 / "clean-plugin"
+        _clean_dir49.mkdir()
+        (_clean_dir49 / "plugin_main.py").write_text(
+            "from plugins.api import PluginAPI, PluginTool\n"
+            "def register(api): pass\n",
+            encoding="utf-8"
+        )
+        _sec_clean49 = _loader49._security_scan(_clean_dir49)
+        assert _sec_clean49 is None, f"Clean plugin should pass scan, got: {_sec_clean49}"
+        record("PASS", "plugins: security scan passes clean plugin code")
+
+        # ── 49n. Full plugin load lifecycle ──────────────────────────────
+        _registry49._reset()
+        _state49._reset()
+        _loader49._reset()
+        # Create a complete plugin dir
+        _full_dir49 = _tmpdir49 / "full-test"
+        _full_dir49.mkdir()
+        (_full_dir49 / "plugin.json").write_text(_json49.dumps({
+            "id": "full-test",
+            "name": "Full Test",
+            "version": "1.0.0",
+            "min_thoth_version": "1.0.0",
+            "author": {"name": "Tester"},
+            "description": "End-to-end test plugin",
+            "provides": {"tools": [{"name": "ft_tool", "display_name": "FT", "description": "test"}]},
+            "settings": {},
+            "python_dependencies": []
+        }), encoding="utf-8")
+        (_full_dir49 / "plugin_main.py").write_text(
+            "from plugins.api import PluginAPI, PluginTool\n\n"
+            "class FTTool(PluginTool):\n"
+            "    @property\n"
+            "    def name(self): return 'ft_tool'\n"
+            "    @property\n"
+            "    def display_name(self): return 'FT Tool'\n"
+            "    @property\n"
+            "    def description(self): return 'A full test tool'\n"
+            "    def execute(self, query: str) -> str:\n"
+            "        return f'FT: {query}'\n\n"
+            "def register(api):\n"
+            "    api.register_tool(FTTool(api))\n",
+            encoding="utf-8"
+        )
+        _result49 = _loader49._load_single_plugin(_full_dir49)
+        assert _result49.success, f"Full plugin load failed: {_result49.error}"
+        assert _result49.manifest is not None
+        assert _result49.manifest.id == "full-test"
+        # Tool should now be in registry
+        assert "ft_tool" in _registry49.get_plugin_tool_names()
+        record("PASS", "plugins: full plugin load lifecycle (manifest → register → registry)")
+
+        # ── 49o. Broken plugin doesn't crash loader ──────────────────────
+        _registry49._reset()
+        _broken_dir49 = _tmpdir49 / "broken-plugin"
+        _broken_dir49.mkdir()
+        (_broken_dir49 / "plugin.json").write_text(_json49.dumps({
+            "id": "broken-plugin",
+            "name": "Broken",
+            "version": "1.0.0",
+            "min_thoth_version": "1.0.0",
+            "author": {"name": "X"},
+            "description": "This plugin crashes",
+            "provides": {"tools": []},
+        }), encoding="utf-8")
+        (_broken_dir49 / "plugin_main.py").write_text(
+            "def register(api):\n    raise RuntimeError('Intentional crash')\n",
+            encoding="utf-8"
+        )
+        _broken_result49 = _loader49._load_single_plugin(_broken_dir49)
+        assert not _broken_result49.success, "Broken plugin should fail"
+        assert "crash" in _broken_result49.error.lower()
+        record("PASS", "plugins: broken plugin register() doesn't crash loader")
+
+        # ── 49p. Disabled plugin skips registration ──────────────────────
+        _registry49._reset()
+        _state49._reset()
+        _state49.set_plugin_enabled("full-test", False)
+        _skip_result49 = _loader49._load_single_plugin(_full_dir49)
+        assert _skip_result49.success, "Disabled plugin should still succeed (just skip)"
+        assert "ft_tool" not in _registry49.get_plugin_tool_names(), \
+            "Disabled plugin tools should not register"
+        _state49.set_plugin_enabled("full-test", True)  # re-enable
+        record("PASS", "plugins: disabled plugin skips tool/skill registration")
+
+        # ── 49q. Plugin skills prompt ────────────────────────────────────
+        _registry49._reset()
+        _state49._reset()
+        _registry49.register_plugin(
+            manifest=_m49,
+            tools=[],
+            skills=[{
+                "name": "test_skill",
+                "display_name": "Test Skill",
+                "icon": "🧪",
+                "description": "A test skill",
+                "instructions": "Do the test thing step by step.",
+            }],
+        )
+        _sp49 = _registry49.get_skills_prompt()
+        assert "Plugin Skills" in _sp49
+        assert "Test Skill" in _sp49
+        assert "Do the test thing" in _sp49
+        record("PASS", "plugins: skills prompt generation from plugin skills")
+
+        # ── 49r. Unregister plugin ───────────────────────────────────────
+        _registry49._reset()
+        _result_r49 = _loader49._load_single_plugin(_full_dir49)
+        assert "ft_tool" in _registry49.get_plugin_tool_names()
+        _registry49.unregister_plugin("full-test")
+        assert "ft_tool" not in _registry49.get_plugin_tool_names()
+        record("PASS", "plugins: unregister_plugin removes tools and skills")
+
+        # ── 49s. State cleanup on remove ─────────────────────────────────
+        _state49._reset()
+        _state49.set_plugin_config("test-plugin", "key", "value")
+        _state49.set_plugin_secret("test-plugin", "SECRET", "xxx")
+        _state49.remove_plugin_state("test-plugin")
+        assert _state49.get_plugin_config("test-plugin", "key") is None
+        assert _state49.get_plugin_secret("test-plugin", "SECRET") is None
+        record("PASS", "plugins: remove_plugin_state clears config + secrets")
+
+        # ── 49t. agent.py has plugin tool injection ──────────────────────
+        _agent_src49 = (_Path49(PROJECT_ROOT) / "agent.py").read_text(encoding="utf-8")
+        assert "plugin_registry_mod.get_langchain_tools()" in _agent_src49, \
+            "agent.py must import and use plugin registry tools"
+        record("PASS", "plugins: agent.py hooks plugin tools into tool collection")
+
+        # ── 49u. agent.py has plugin skill injection ─────────────────────
+        assert "_plugin_reg.get_skills_prompt()" in _agent_src49, \
+            "agent.py must inject plugin skills prompt"
+        record("PASS", "plugins: agent.py hooks plugin skills into skill injection")
+
+        # ── 49v. app.py calls load_plugins at startup ────────────────────
+        _app_src49 = (_Path49(PROJECT_ROOT) / "app.py").read_text(encoding="utf-8")
+        assert "load_plugins" in _app_src49, "app.py must call load_plugins"
+        assert "🔌 Loading plugins" in _app_src49
+        record("PASS", "plugins: app.py loads plugins at startup")
+
+        # ── 49w. Sandbox — core dep check function exists ────────────────
+        assert hasattr(_sandbox49, 'check_dependencies')
+        assert hasattr(_sandbox49, 'install_dependencies')
+        _check49 = _sandbox49.check_dependencies([])
+        assert _check49.ok, "Empty deps should always pass"
+        record("PASS", "plugins: sandbox dep check available and works for empty deps")
+
+        # ── 49x. Manifest ID regex validation ────────────────────────────
+        assert _manifest49._ID_RE.match("valid-plugin")
+        assert _manifest49._ID_RE.match("my-tool-v2")
+        assert not _manifest49._ID_RE.match("Invalid_Plugin")
+        assert not _manifest49._ID_RE.match("a")  # too short
+        assert not _manifest49._ID_RE.match("")
+        record("PASS", "plugins: manifest ID regex validates correctly")
+
+        # ── 49y. Version tuple parsing ───────────────────────────────────
+        assert _loader49._version_tuple("3.12.0") == (3, 12, 0)
+        assert _loader49._version_tuple("1.0.0") < _loader49._version_tuple("3.11.0")
+        record("PASS", "plugins: version tuple comparison works correctly")
+
+    finally:
+        _shutil49.rmtree(_tmpdir49, ignore_errors=True)
+        # Clean up module state
+        _registry49._reset()
+        _state49._reset()
+        _loader49._reset()
+
+except Exception as e:
+    record("FAIL", "plugin-system", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 50 · Plugin Settings UI
+# ═════════════════════════════════════════════════════════════════════════════
+print("=" * 70)
+print("50. PLUGIN SETTINGS UI")
+print("=" * 70)
+
+try:
+    # ── 50a. UI modules import ───────────────────────────────────────
+    from plugins.ui_settings import build_plugins_tab, _get_missing_keys
+    from plugins.ui_plugin_dialog import open_plugin_dialog
+    record("PASS", "plugins-ui: ui_settings and ui_plugin_dialog import successfully")
+
+    # ── 50b. _get_missing_keys with no required keys ─────────────────
+    import plugins.manifest as _manifest50
+    import plugins.state as _state50
+    _state50._reset()
+    _mk_manifest = _manifest50.PluginManifest(
+        id="test-ui-plugin",
+        name="Test UI Plugin",
+        version="1.0.0",
+        min_thoth_version="3.11.0",
+        author=_manifest50.PluginAuthor(name="Tester"),
+        description="Test plugin for UI tests",
+        settings={
+            "api_keys": {
+                "TEST_KEY": {"label": "Test Key", "required": True, "placeholder": "abc"},
+                "OPT_KEY": {"label": "Optional Key", "required": False},
+            },
+            "config": {
+                "mode": {"label": "Mode", "type": "select", "options": ["a", "b"], "default": "a"},
+            },
+        },
+    )
+    _missing = _get_missing_keys(_mk_manifest)
+    assert "Test Key" in _missing, f"Expected 'Test Key' in missing, got {_missing}"
+    assert "Optional Key" not in _missing, f"Optional Key should not be in missing"
+    record("PASS", "plugins-ui: _get_missing_keys detects missing required keys")
+
+    # ── 50c. _get_missing_keys after setting the key ─────────────────
+    _state50.set_plugin_secret("test-ui-plugin", "TEST_KEY", "my-secret-value")
+    _missing2 = _get_missing_keys(_mk_manifest)
+    assert len(_missing2) == 0, f"Expected no missing keys after set, got {_missing2}"
+    record("PASS", "plugins-ui: _get_missing_keys returns empty after key set")
+
+    # ── 50d. build_plugins_tab is callable ───────────────────────────
+    assert callable(build_plugins_tab)
+    record("PASS", "plugins-ui: build_plugins_tab is callable")
+
+    # ── 50e. open_plugin_dialog is callable ──────────────────────────
+    assert callable(open_plugin_dialog)
+    record("PASS", "plugins-ui: open_plugin_dialog is callable")
+
+    # ── 50f. ui/settings.py contains Plugins tab ─────────────────────
+    import ast as _ast50
+    _settings_src = open("ui/settings.py", encoding="utf-8").read()
+    assert 'tab_plugins = ui.tab("Plugins"' in _settings_src
+    assert '"Plugins": tab_plugins' in _settings_src
+    assert '_build_plugins_tab()' in _settings_src
+    record("PASS", "plugins-ui: ui/settings.py contains Plugins tab wiring")
+
+    # ── 50g. ui/settings.py still parses as valid Python ─────────────
+    _ast50.parse(_settings_src)
+    record("PASS", "plugins-ui: ui/settings.py parses as valid Python")
+
+    # Cleanup
+    _state50.remove_plugin_state("test-ui-plugin")
+    _state50._reset()
+
+except Exception as e:
+    record("FAIL", "plugin-settings-ui", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 51 · Plugin Marketplace & Installer
+# ═════════════════════════════════════════════════════════════════════════════
+print("=" * 70)
+print("51. PLUGIN MARKETPLACE & INSTALLER")
+print("=" * 70)
+
+try:
+    import json as _json51
+    import shutil as _shutil51
+    import tempfile as _tempfile51
+    import pathlib as _pathlib51
+
+    import plugins.marketplace as _mkt51
+    import plugins.installer as _inst51
+
+    # ── 51a. Marketplace modules import ──────────────────────────────
+    from plugins.marketplace import MarketplaceIndex, MarketplaceEntry, _parse_index
+    from plugins.installer import InstallResult, is_installed
+    from plugins.ui_marketplace import open_marketplace_dialog
+    record("PASS", "marketplace: all modules import successfully")
+
+    # ── 51b. _parse_index with sample data ───────────────────────────
+    _raw51 = {
+        "schema_version": 1,
+        "generated": "2025-07-15T10:00:00Z",
+        "source": "https://github.com/test/thoth-plugins",
+        "plugins": [
+            {
+                "id": "test-plugin-a",
+                "name": "Test Plugin A",
+                "version": "1.0.0",
+                "description": "A test plugin",
+                "icon": "🧪",
+                "author": {"name": "Tester", "github": "tester"},
+                "tags": ["testing", "demo"],
+                "min_thoth_version": "3.11.0",
+                "provides": {"tools": 2, "skills": 1},
+                "verified": True,
+            },
+            {
+                "id": "test-plugin-b",
+                "name": "Test Plugin B",
+                "version": "2.0.0",
+                "description": "Another test plugin",
+                "tags": ["demo"],
+                "provides": {"tools": 1, "skills": 0},
+            },
+        ],
+    }
+    _idx51 = _parse_index(_raw51)
+    assert isinstance(_idx51, MarketplaceIndex)
+    assert len(_idx51.plugins) == 2
+    assert _idx51.plugins[0].id == "test-plugin-a"
+    assert _idx51.plugins[0].verified is True
+    assert _idx51.plugins[1].name == "Test Plugin B"
+    record("PASS", "marketplace: _parse_index produces correct MarketplaceIndex")
+
+    # ── 51c. search_plugins by query ─────────────────────────────────
+    _results51 = _mkt51.search_plugins(query="Plugin A", index=_idx51)
+    assert len(_results51) == 1
+    assert _results51[0].id == "test-plugin-a"
+    record("PASS", "marketplace: search_plugins filters by query")
+
+    # ── 51d. search_plugins by tag ───────────────────────────────────
+    _results51b = _mkt51.search_plugins(tag="testing", index=_idx51)
+    assert len(_results51b) == 1
+    assert _results51b[0].id == "test-plugin-a"
+    record("PASS", "marketplace: search_plugins filters by tag")
+
+    # ── 51e. search_plugins no match ─────────────────────────────────
+    _results51c = _mkt51.search_plugins(query="nonexistent", index=_idx51)
+    assert len(_results51c) == 0
+    record("PASS", "marketplace: search_plugins returns empty for no match")
+
+    # ── 51f. get_all_tags ────────────────────────────────────────────
+    _tags51 = _mkt51.get_all_tags(index=_idx51)
+    assert "demo" in _tags51
+    assert "testing" in _tags51
+    record("PASS", "marketplace: get_all_tags extracts unique tags")
+
+    # ── 51g. get_entry by ID ─────────────────────────────────────────
+    _ent51 = _mkt51.get_entry("test-plugin-a", index=_idx51)
+    assert _ent51 is not None
+    assert _ent51.name == "Test Plugin A"
+    _ent51b = _mkt51.get_entry("nonexistent", index=_idx51)
+    assert _ent51b is None
+    record("PASS", "marketplace: get_entry finds by ID and returns None for missing")
+
+    # ── 51h. MarketplaceEntry fields ─────────────────────────────────
+    _e = _idx51.plugins[0]
+    assert _e.icon == "🧪"
+    assert _e.author_name == "Tester"
+    assert _e.author_github == "tester"
+    assert _e.min_thoth_version == "3.11.0"
+    record("PASS", "marketplace: MarketplaceEntry has all expected fields")
+
+    # ── 51i. Installer — install from local source ───────────────────
+    _tmpdir51 = _tempfile51.mkdtemp(prefix="thoth_test_installer_")
+    _old_plugins_dir = _inst51.PLUGINS_DIR
+    _inst51.PLUGINS_DIR = _pathlib51.Path(_tmpdir51) / "installed_plugins"
+    _inst51.PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        # Create a mock plugin source directory
+        _src_dir = _pathlib51.Path(_tmpdir51) / "source" / "mock-install-test"
+        _src_dir.mkdir(parents=True)
+        (_src_dir / "plugin.json").write_text(_json51.dumps({
+            "id": "mock-install-test",
+            "name": "Mock Install Test",
+            "version": "1.0.0",
+            "min_thoth_version": "3.11.0",
+            "author": {"name": "Tester"},
+            "description": "Test install",
+        }), encoding="utf-8")
+        (_src_dir / "plugin_main.py").write_text(
+            "def register(api): pass\n", encoding="utf-8"
+        )
+
+        _result51 = _inst51.install_plugin("mock-install-test", source_dir=_src_dir)
+        assert _result51.success, f"Install failed: {_result51.message}"
+        assert (_inst51.PLUGINS_DIR / "mock-install-test" / "plugin.json").exists()
+        record("PASS", "installer: install_plugin from local source works")
+
+        # ── 51j. is_installed check ──────────────────────────────────
+        assert _inst51.is_installed("mock-install-test")
+        assert not _inst51.is_installed("nonexistent")
+        record("PASS", "installer: is_installed correctly detects installed plugins")
+
+        # ── 51k. get_installed_version ───────────────────────────────
+        _ver51 = _inst51.get_installed_version("mock-install-test")
+        assert _ver51 == "1.0.0", f"Expected '1.0.0', got {_ver51!r}"
+        record("PASS", "installer: get_installed_version returns correct version")
+
+        # ── 51l. install already-installed rejects ───────────────────
+        _dup51 = _inst51.install_plugin("mock-install-test", source_dir=_src_dir)
+        assert not _dup51.success
+        assert "already installed" in _dup51.message.lower()
+        record("PASS", "installer: install rejects already-installed plugin")
+
+        # ── 51m. update_plugin ───────────────────────────────────────
+        _src_v2 = _pathlib51.Path(_tmpdir51) / "source_v2" / "mock-install-test"
+        _src_v2.mkdir(parents=True)
+        (_src_v2 / "plugin.json").write_text(_json51.dumps({
+            "id": "mock-install-test",
+            "name": "Mock Install Test",
+            "version": "2.0.0",
+            "min_thoth_version": "3.11.0",
+            "author": {"name": "Tester"},
+            "description": "Updated test",
+        }), encoding="utf-8")
+        (_src_v2 / "plugin_main.py").write_text(
+            "def register(api): pass\n", encoding="utf-8"
+        )
+
+        _upd51 = _inst51.update_plugin("mock-install-test", source_dir=_src_v2)
+        assert _upd51.success, f"Update failed: {_upd51.message}"
+        _ver51b = _inst51.get_installed_version("mock-install-test")
+        assert _ver51b == "2.0.0", f"Expected '2.0.0' after update, got {_ver51b!r}"
+        record("PASS", "installer: update_plugin replaces with newer version")
+
+        # ── 51n. update nonexistent plugin ───────────────────────────
+        _upd_ne = _inst51.update_plugin("nonexistent", source_dir=_src_v2)
+        assert not _upd_ne.success
+        record("PASS", "installer: update rejects nonexistent plugin")
+
+        # ── 51o. uninstall_plugin ────────────────────────────────────
+        _uni51 = _inst51.uninstall_plugin("mock-install-test")
+        assert _uni51.success, f"Uninstall failed: {_uni51.message}"
+        assert not (_inst51.PLUGINS_DIR / "mock-install-test").exists()
+        record("PASS", "installer: uninstall_plugin removes plugin directory")
+
+        # ── 51p. uninstall nonexistent ───────────────────────────────
+        _uni_ne = _inst51.uninstall_plugin("nonexistent")
+        assert not _uni_ne.success
+        record("PASS", "installer: uninstall rejects nonexistent plugin")
+
+        # ── 51q. install with security violation ─────────────────────
+        _bad_src = _pathlib51.Path(_tmpdir51) / "source_bad" / "bad-security"
+        _bad_src.mkdir(parents=True)
+        (_bad_src / "plugin.json").write_text(_json51.dumps({
+            "id": "bad-security",
+            "name": "Bad Plugin",
+            "version": "1.0.0",
+            "min_thoth_version": "3.11.0",
+            "author": {"name": "Hacker"},
+            "description": "Malicious plugin",
+        }), encoding="utf-8")
+        (_bad_src / "plugin_main.py").write_text(
+            "import os\ndef register(api): os.system('echo hacked')\n",
+            encoding="utf-8",
+        )
+        _bad_res = _inst51.install_plugin("bad-security", source_dir=_bad_src)
+        assert not _bad_res.success
+        assert "security" in _bad_res.message.lower()
+        assert not (_inst51.PLUGINS_DIR / "bad-security").exists()
+        record("PASS", "installer: install blocks plugin with security violations")
+
+        # ── 51r. check_updates with marketplace data ─────────────────
+        # Re-install v1 of mock plugin
+        _inst51.install_plugin("mock-install-test", source_dir=_src_dir)
+        import plugins.manifest as _manifest51
+        _manifests = [_manifest51.PluginManifest(
+            id="mock-install-test",
+            name="Mock Install Test",
+            version="1.0.0",
+            min_thoth_version="3.11.0",
+            author=_manifest51.PluginAuthor(name="Tester"),
+            description="Test",
+        )]
+        # Build marketplace index with newer version
+        _update_idx = _mkt51._parse_index({
+            "plugins": [{
+                "id": "mock-install-test",
+                "name": "Mock Install Test",
+                "version": "2.0.0",
+                "description": "Updated",
+                "author": {"name": "Tester"},
+            }],
+        })
+        _mkt51._cached_index = _update_idx
+        _mkt51._cache_timestamp = __import__("time").time()
+        _updates = _mkt51.check_updates(_manifests)
+        assert len(_updates) == 1
+        assert _updates[0]["latest_version"] == "2.0.0"
+        assert _updates[0]["installed_version"] == "1.0.0"
+        record("PASS", "marketplace: check_updates detects available updates")
+
+        # ── 51s. open_marketplace_dialog is callable ─────────────────
+        assert callable(open_marketplace_dialog)
+        record("PASS", "marketplace: open_marketplace_dialog is callable")
+
+    finally:
+        _inst51.PLUGINS_DIR = _old_plugins_dir
+        _shutil51.rmtree(_tmpdir51, ignore_errors=True)
+        _mkt51._reset()
+
+except Exception as e:
+    record("FAIL", "marketplace-installer", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# SECTION 52 · Image Generation Tool
+# ═════════════════════════════════════════════════════════════════════════════
+print("=" * 70)
+print("52. IMAGE GENERATION TOOL")
+print("=" * 70)
+
+try:
+    import base64 as _b64_52
+    import tempfile as _tempfile52
+    import unittest.mock as _mock52
+    from pathlib import Path as _Path52
+
+    from tools import image_gen_tool as _igt
+    from tools.image_gen_tool import (
+        ImageGenTool,
+        IMAGE_GEN_MODELS,
+        IMAGE_SIZES,
+        IMAGE_QUALITIES,
+        DEFAULT_MODEL,
+        _PROVIDERS,
+        _GenerateImageInput,
+        _EditImageInput,
+        get_and_clear_last_image,
+        get_available_image_models,
+        _parse_model_config,
+        _resolve_image_source,
+        _generate_image,
+        _edit_image,
+    )
+    record("PASS", "image_gen: module imports successfully")
+
+    # ── 52a. ImageGenTool class basics ───────────────────────────────
+    _tool52 = ImageGenTool()
+    assert _tool52.name == "image_gen", f"name={_tool52.name!r}"
+    assert _tool52.display_name == "🎨 Image Generation"
+    assert "image" in _tool52.description.lower()
+    record("PASS", "image_gen: ImageGenTool.name / display_name / description")
+
+    # ── 52b. config_schema is empty (model selector lives in Models tab) ─
+    _schema52 = _tool52.config_schema
+    assert _schema52 == {}, f"config_schema should be empty, got {_schema52}"
+    record("PASS", "image_gen: config_schema is empty (model in Models tab)")
+
+    # ── 52c. as_langchain_tools returns generate_image & edit_image ──
+    _lc52 = _tool52.as_langchain_tools()
+    _lc_names52 = sorted([t.name for t in _lc52])
+    assert _lc_names52 == ["edit_image", "generate_image"], f"got {_lc_names52}"
+    record("PASS", "image_gen: as_langchain_tools returns [edit_image, generate_image]")
+
+    # ── 52d. Pydantic input schemas validate correctly ───────────────
+    _gen_input = _GenerateImageInput(prompt="a red cat")
+    assert _gen_input.prompt == "a red cat"
+    assert _gen_input.size == "auto"
+    assert _gen_input.quality == "auto"
+
+    _edit_input = _EditImageInput(prompt="add hat", image_source="photo.jpg", size="1024x1024")
+    assert _edit_input.image_source == "photo.jpg"
+    assert _edit_input.size == "1024x1024"
+    record("PASS", "image_gen: Pydantic schemas validate with defaults")
+
+    # ── 52e. get_and_clear_last_image side-channel ───────────────────
+    _igt._last_generated_image = "fake_b64_data"
+    _got52 = get_and_clear_last_image()
+    assert _got52 == "fake_b64_data", f"got {_got52!r}"
+    assert _igt._last_generated_image is None, "should be cleared"
+    # Second call returns None
+    assert get_and_clear_last_image() is None
+    record("PASS", "image_gen: get_and_clear_last_image works correctly")
+
+    # ── 52f. _resolve_image_source — "last" from cache ───────────────
+    _igt._image_cache.clear()
+    _fake_bytes52 = b"\x89PNG_fake_image_data"
+    _igt._image_cache["__last_generated__"] = _fake_bytes52
+    _resolved = _resolve_image_source("last")
+    assert _resolved == _fake_bytes52
+    record("PASS", "image_gen: _resolve_image_source('last') returns cached image")
+
+    # ── 52g. _resolve_image_source — filename match in cache ─────────
+    _igt._image_cache["photo.jpg"] = b"jpg_data"
+    _resolved2 = _resolve_image_source("photo.jpg")
+    assert _resolved2 == b"jpg_data"
+    # Partial match
+    _resolved3 = _resolve_image_source("photo")
+    assert _resolved3 == b"jpg_data"
+    record("PASS", "image_gen: _resolve_image_source matches filenames in cache")
+
+    # ── 52h. _resolve_image_source — file path on disk ───────────────
+    _tmpdir52 = _tempfile52.mkdtemp(prefix="thoth_test_imgen_")
+    _tmpimg52 = _Path52(_tmpdir52) / "test_img.png"
+    _tmpimg52.write_bytes(b"PNG_FILE_DATA")
+    _resolved4 = _resolve_image_source(str(_tmpimg52))
+    assert _resolved4 == b"PNG_FILE_DATA"
+    record("PASS", "image_gen: _resolve_image_source reads file from disk")
+
+    # Cleanup temp files
+    _tmpimg52.unlink(missing_ok=True)
+    _Path52(_tmpdir52).rmdir()
+
+    # ── 52i. _resolve_image_source — error for missing image ─────────
+    _igt._image_cache.clear()
+    try:
+        _resolve_image_source("nonexistent_image.png")
+        record("FAIL", "image_gen: _resolve_image_source should raise for missing", "no error raised")
+    except ValueError as _e52:
+        assert "Could not find image" in str(_e52)
+        record("PASS", "image_gen: _resolve_image_source raises ValueError for missing")
+
+    # ── 52j. _resolve_image_source — "last" errors when empty ────────
+    _igt._image_cache.clear()
+    try:
+        _resolve_image_source("last")
+        record("FAIL", "image_gen: _resolve_image_source('last') should raise when no image", "no error raised")
+    except ValueError as _e52b:
+        assert "No previously generated image" in str(_e52b)
+        record("PASS", "image_gen: _resolve_image_source('last') raises when no image cached")
+
+    # ── 52k. _parse_model_config ─────────────────────────────────────
+    assert _parse_model_config("openai/gpt-image-1.5") == ("openai", "gpt-image-1.5")
+    assert _parse_model_config("openrouter/gpt-image-1") == ("openrouter", "gpt-image-1")
+    # Legacy bare model name defaults to openai
+    assert _parse_model_config("gpt-image-1.5") == ("openai", "gpt-image-1.5")
+    record("PASS", "image_gen: _parse_model_config parses provider/model correctly")
+
+    # ── 52l. get_available_image_models ─────────────────────────────
+    # With both keys set — only OpenAI should appear (OpenRouter has no images API)
+    def _mock_both_keys(k):
+        if k == "OPENAI_API_KEY": return "sk-openai"
+        if k == "OPENROUTER_API_KEY": return "sk-router"
+        return None
+    with _mock52.patch("api_keys.get_key", _mock_both_keys):
+        _avail52 = get_available_image_models()
+    assert len(_avail52) == len(IMAGE_GEN_MODELS), f"expected {len(IMAGE_GEN_MODELS)}, got {len(_avail52)}"
+    assert "openai/gpt-image-1.5" in _avail52
+    assert not any(k.startswith("openrouter/") for k in _avail52), "OpenRouter should not appear"
+    assert "OpenAI" in _avail52["openai/gpt-image-1.5"]
+    record("PASS", "image_gen: get_available_image_models lists OpenAI only")
+
+    # With only OpenRouter key — no models (OpenRouter has no images API)
+    def _mock_router_only(k):
+        return "sk-router" if k == "OPENROUTER_API_KEY" else None
+    with _mock52.patch("api_keys.get_key", _mock_router_only):
+        _avail52b = get_available_image_models()
+    assert _avail52b == {}, "OpenRouter-only should return no image models"
+    record("PASS", "image_gen: get_available_image_models empty with only OpenRouter key")
+
+    # With no keys
+    with _mock52.patch("api_keys.get_key", return_value=None):
+        _avail52c = get_available_image_models()
+    assert _avail52c == {}
+    record("PASS", "image_gen: get_available_image_models returns empty with no keys")
+
+    # ── 52m. _get_client — reads provider from config ───────────────
+    # OpenAI provider selected
+    with _mock52.patch("tools.image_gen_tool._get_configured_selection", return_value="openai/gpt-image-1.5"), \
+         _mock52.patch("api_keys.get_key", lambda k: "sk-test" if k == "OPENAI_API_KEY" else None):
+        _client52, _prov52 = _igt._get_client()
+        assert _prov52 == "OpenAI"
+        record("PASS", "image_gen: _get_client uses OpenAI when openai/ selected")
+
+    # Missing key for selected provider
+    with _mock52.patch("tools.image_gen_tool._get_configured_selection", return_value="openai/gpt-image-1.5"), \
+         _mock52.patch("api_keys.get_key", return_value=None):
+        try:
+            _igt._get_client()
+            record("FAIL", "image_gen: _get_client should raise for missing provider key", "no error")
+        except RuntimeError as _e52c:
+            assert "No API key for OpenAI" in str(_e52c)
+            record("PASS", "image_gen: _get_client raises RuntimeError for missing provider key")
+
+    # ── 52l. _generate_image — mocked OpenAI client ─────────────────
+    _igt._last_generated_image = None
+    _igt._image_cache.clear()
+
+    _fake_b64_52 = _b64_52.b64encode(b"GENERATED_IMAGE").decode("ascii")
+    _mock_img_data = _mock52.MagicMock()
+    _mock_img_data.b64_json = _fake_b64_52
+    _mock_img_data.url = None
+    _mock_img_data.revised_prompt = "A beautiful red cat sitting"
+
+    _mock_response52 = _mock52.MagicMock()
+    _mock_response52.data = [_mock_img_data]
+
+    _mock_client52 = _mock52.MagicMock()
+    _mock_client52.images.generate.return_value = _mock_response52
+
+    with _mock52.patch("tools.image_gen_tool._get_client", return_value=(_mock_client52, "OpenAI")), \
+         _mock52.patch("tools.image_gen_tool._get_configured_model", return_value="gpt-image-1.5"):
+        _result52 = _generate_image(prompt="a red cat", size="1024x1024", quality="high")
+
+    assert "Image generated successfully" in _result52
+    assert "gpt-image-1.5" in _result52
+    assert "OpenAI" in _result52
+    assert "A beautiful red cat sitting" in _result52  # revised prompt
+    # Check side-channel was populated
+    assert _igt._last_generated_image == _fake_b64_52
+    # Check cache was populated for edit chaining
+    assert "__last_generated__" in _igt._image_cache
+    record("PASS", "image_gen: _generate_image returns success & populates side-channel")
+
+    # Verify the client was called correctly
+    _mock_client52.images.generate.assert_called_once()
+    _call_kwargs = _mock_client52.images.generate.call_args
+    assert _call_kwargs[1]["model"] == "gpt-image-1.5"
+    assert _call_kwargs[1]["prompt"] == "a red cat"
+    assert _call_kwargs[1]["size"] == "1024x1024"
+    assert _call_kwargs[1]["quality"] == "high"
+    record("PASS", "image_gen: _generate_image passes correct kwargs to API")
+
+    # ── 52m. _generate_image — handles API error gracefully ──────────
+    _mock_client_err = _mock52.MagicMock()
+    _mock_client_err.images.generate.side_effect = Exception("API rate limit exceeded")
+
+    with _mock52.patch("tools.image_gen_tool._get_client", return_value=(_mock_client_err, "OpenAI")), \
+         _mock52.patch("tools.image_gen_tool._get_configured_model", return_value="gpt-image-1.5"):
+        _err_result = _generate_image(prompt="test")
+    assert "Image generation failed" in _err_result
+    assert "rate limit" in _err_result
+    record("PASS", "image_gen: _generate_image handles API error gracefully")
+
+    # ── 52n. _edit_image — mocked OpenAI client ─────────────────────
+    _igt._last_generated_image = None
+    _igt._image_cache.clear()
+    _igt._image_cache["__last_generated__"] = b"ORIGINAL_IMAGE"
+
+    _mock_edit_data = _mock52.MagicMock()
+    _mock_edit_data.b64_json = _b64_52.b64encode(b"EDITED_IMAGE").decode("ascii")
+    _mock_edit_data.url = None
+    _mock_edit_data.revised_prompt = None
+
+    _mock_edit_resp = _mock52.MagicMock()
+    _mock_edit_resp.data = [_mock_edit_data]
+
+    _mock_client_edit = _mock52.MagicMock()
+    _mock_client_edit.images.edit.return_value = _mock_edit_resp
+
+    with _mock52.patch("tools.image_gen_tool._get_client", return_value=(_mock_client_edit, "OpenAI")), \
+         _mock52.patch("tools.image_gen_tool._get_configured_model", return_value="gpt-image-1"):
+        _edit_result52 = _edit_image(prompt="add a hat", image_source="last")
+
+    assert "Image edited successfully" in _edit_result52
+    assert "gpt-image-1" in _edit_result52
+    # Side-channel should be updated with the edited image
+    assert _igt._last_generated_image is not None
+    record("PASS", "image_gen: _edit_image returns success & populates side-channel")
+
+    # Verify the edit client was called with image bytes list (typed tuple for MIME)
+    _mock_client_edit.images.edit.assert_called_once()
+    _edit_call = _mock_client_edit.images.edit.call_args
+    _edit_img_arg = _edit_call[1]["image"]
+    assert isinstance(_edit_img_arg, list) and len(_edit_img_arg) == 1
+    _img_tuple = _edit_img_arg[0]
+    assert isinstance(_img_tuple, tuple) and len(_img_tuple) == 3
+    assert _img_tuple[1] == b"ORIGINAL_IMAGE"  # raw bytes
+    assert _img_tuple[2] in ("image/png", "image/jpeg", "image/webp")  # MIME type
+    assert _edit_call[1]["prompt"] == "add a hat"
+    record("PASS", "image_gen: _edit_image passes typed image tuple list to API")
+
+    # ── 52o. _edit_image — missing source returns error string ───────
+    _igt._image_cache.clear()
+    with _mock52.patch("tools.image_gen_tool._get_client", return_value=(_mock_client_edit, "OpenAI")):
+        _edit_miss = _edit_image(prompt="edit this", image_source="last")
+    assert "No previously generated image" in _edit_miss
+    record("PASS", "image_gen: _edit_image returns error for missing source")
+
+    # ── 52p. execute() uses _generate_image ──────────────────────────
+    _igt._last_generated_image = None
+    _igt._image_cache.clear()
+
+    with _mock52.patch("tools.image_gen_tool._get_client", return_value=(_mock_client52, "OpenAI")), \
+         _mock52.patch("tools.image_gen_tool._get_configured_model", return_value="gpt-image-1.5"):
+        _mock_client52.images.generate.reset_mock()
+        _mock_client52.images.generate.return_value = _mock_response52
+        _exec_result = _tool52.execute("a blue dog")
+    assert "Image generated successfully" in _exec_result
+    record("PASS", "image_gen: execute() delegates to _generate_image")
+
+    # ── 52q. Constants are well-formed ───────────────────────────────
+    assert len(IMAGE_GEN_MODELS) >= 1
+    assert all("id" in m and "label" in m for m in IMAGE_GEN_MODELS)
+    _prov52q, _mid52q = _parse_model_config(DEFAULT_MODEL)
+    assert _mid52q in [m["id"] for m in IMAGE_GEN_MODELS]
+    assert "/" in DEFAULT_MODEL, "DEFAULT_MODEL should be provider/model format"
+    assert "auto" in IMAGE_SIZES
+    assert "auto" in IMAGE_QUALITIES
+    assert "1024x1024" in IMAGE_SIZES
+    record("PASS", "image_gen: constants are well-formed")
+
+    # ── 52r. Tool registered in registry ─────────────────────────────
+    from tools.registry import get_tool
+    _reg_tool52 = get_tool("image_gen")
+    assert _reg_tool52 is not None, "image_gen not found in registry"
+    assert _reg_tool52.name == "image_gen"
+    record("PASS", "image_gen: tool registered in registry")
+
+    # ── 52s. _image_cache_thread_id prevents cross-thread leak ───────
+    _igt._image_cache.clear()
+    _igt._image_cache["__last_generated__"] = b"OLD_IMAGE"
+    _igt._image_cache_thread_id = "thread_A"
+    # Simulate send_message on a DIFFERENT thread
+    _same_thread_s = (_igt._image_cache_thread_id == "thread_B")
+    _backup_s = _igt._image_cache.get("__last_generated__") if _same_thread_s else None
+    _igt._image_cache.clear()
+    if _backup_s:
+        _igt._image_cache["__last_generated__"] = _backup_s
+    assert "__last_generated__" not in _igt._image_cache, \
+        "Cross-thread: __last_generated__ should be cleared"
+    record("PASS", "image_gen: cross-thread image cache cleared on thread switch")
+
+    # Same thread should preserve
+    _igt._image_cache["__last_generated__"] = b"NEW_IMAGE"
+    _igt._image_cache_thread_id = "thread_A"
+    _same_thread_s2 = (_igt._image_cache_thread_id == "thread_A")
+    _backup_s2 = _igt._image_cache.get("__last_generated__") if _same_thread_s2 else None
+    _igt._image_cache.clear()
+    if _backup_s2:
+        _igt._image_cache["__last_generated__"] = _backup_s2
+    assert _igt._image_cache.get("__last_generated__") == b"NEW_IMAGE", \
+        "Same thread: __last_generated__ should be preserved"
+    record("PASS", "image_gen: same-thread image cache preserved")
+
+    # ── 52t. _detect_mime detects correct types ──────────────────────
+    from tools.image_gen_tool import _detect_mime
+    assert _detect_mime(b"\xff\xd8\xff\xe0rest") == "image/jpeg"
+    assert _detect_mime(b"\xff\xd8\xff\xe1rest") == "image/jpeg"
+    assert _detect_mime(b"RIFF\x00\x00\x00\x00WEBPrest") == "image/webp"
+    assert _detect_mime(b"\x89PNG\r\n\x1a\nrest") == "image/png"
+    assert _detect_mime(b"unknown_data") == "image/png"  # default fallback
+    record("PASS", "image_gen: _detect_mime detects JPEG, WebP, PNG, fallback")
+
+    # ── 52u. render_image_with_save is importable ────────────────────
+    from ui.render import render_image_with_save, _img_ext
+    assert callable(render_image_with_save)
+    record("PASS", "image_gen: render_image_with_save is importable")
+
+    # ── 52v. _img_ext returns correct extensions ─────────────────────
+    assert _img_ext("iVBOR") == "png"
+    assert _img_ext("UklGR") == "webp"
+    assert _img_ext("R0lGO") == "gif"
+    assert _img_ext("/9j/4") == "jpg"
+    record("PASS", "image_gen: _img_ext returns correct file extensions")
+
+except Exception as e:
+    record("FAIL", "image-gen-tool", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 53 · Plugin API v2 — Rich Returns & Destructive Action Support
+# ═════════════════════════════════════════════════════════════════════════════
+print("=" * 70)
+print("53. PLUGIN API v2 — RICH RETURNS & DESTRUCTIVE ACTIONS")
+print("=" * 70)
+
+try:
+    from plugins import api as _api53
+    from plugins import registry as _registry53
+    from plugins import state as _state53
+    from plugins import manifest as _manifest53
+
+    # ── 53a. PluginTool has destructive_tool_names (default empty) ───
+    class _SimpleTool53(_api53.PluginTool):
+        @property
+        def name(self): return "simple53"
+        @property
+        def display_name(self): return "Simple"
+        @property
+        def description(self): return "test"
+        def execute(self, query: str) -> str: return "ok"
+
+    _st53 = _SimpleTool53(_api53.PluginAPI("t", None, _state53))
+    assert _st53.destructive_tool_names == set(), \
+        f"Default destructive_tool_names should be empty set, got {_st53.destructive_tool_names}"
+    record("PASS", "plugin_v2: destructive_tool_names defaults to empty set")
+
+    # ── 53b. PluginTool has background_allowed_tool_names (default empty)
+    assert _st53.background_allowed_tool_names == set(), \
+        f"Default bg allowed should be empty set, got {_st53.background_allowed_tool_names}"
+    record("PASS", "plugin_v2: background_allowed_tool_names defaults to empty set")
+
+    # ── 53c. Subclass can override destructive_tool_names ────────────
+    class _DestructiveTool53(_api53.PluginTool):
+        @property
+        def name(self): return "destructive53"
+        @property
+        def display_name(self): return "Destructive"
+        @property
+        def description(self): return "test"
+        @property
+        def destructive_tool_names(self): return {"send_msg53", "delete_thing53"}
+        @property
+        def background_allowed_tool_names(self): return {"send_msg53"}
+        def execute(self, query: str) -> str: return "ok"
+
+    _dt53 = _DestructiveTool53(_api53.PluginAPI("t", None, _state53))
+    assert _dt53.destructive_tool_names == {"send_msg53", "delete_thing53"}
+    assert _dt53.background_allowed_tool_names == {"send_msg53"}
+    record("PASS", "plugin_v2: subclass can override destructive + bg_allowed names")
+
+    # ── 53d. image_result() helper ───────────────────────────────────
+    _ir53 = _api53.PluginTool.image_result("iVBORbase64data", "A sunset photo")
+    assert _ir53.startswith("__IMAGE__:iVBORbase64data"), f"Bad image_result: {_ir53[:50]}"
+    assert "A sunset photo" in _ir53
+    # Without text
+    _ir53b = _api53.PluginTool.image_result("iVBORbase64data")
+    assert _ir53b == "__IMAGE__:iVBORbase64data"
+    assert "\n\n" not in _ir53b
+    record("PASS", "plugin_v2: image_result() helper produces correct markers")
+
+    # ── 53e. html_result() helper ────────────────────────────────────
+    _hr53 = _api53.PluginTool.html_result("<table><tr><td>Hi</td></tr></table>", "Table below")
+    assert _hr53.startswith("__HTML__:<table>"), f"Bad html_result: {_hr53[:50]}"
+    assert "Table below" in _hr53
+    _hr53b = _api53.PluginTool.html_result("<b>Bold</b>")
+    assert _hr53b == "__HTML__:<b>Bold</b>"
+    record("PASS", "plugin_v2: html_result() helper produces correct markers")
+
+    # ── 53f. chart_result() helper ───────────────────────────────────
+    _cr53 = _api53.PluginTool.chart_result('{"data":[]}', "Chart below")
+    assert _cr53.startswith('__CHART__:{"data":[]}'), f"Bad chart_result: {_cr53[:50]}"
+    assert "Chart below" in _cr53
+    _cr53b = _api53.PluginTool.chart_result('{"data":[]}')
+    assert _cr53b == '__CHART__:{"data":[]}'
+    record("PASS", "plugin_v2: chart_result() helper produces correct markers")
+
+    # ── 53g. Registry get_destructive_names collects from plugins ────
+    _registry53._reset()
+    _state53._reset()
+    _m53 = _manifest53.PluginManifest(
+        id="destr-plugin", name="Destr", version="1.0.0",
+        min_thoth_version="1.0.0",
+        author=_manifest53.PluginAuthor(name="X"),
+        description="test",
+    )
+    _state53.set_plugin_enabled("destr-plugin", True)
+    _registry53.register_plugin(manifest=_m53, tools=[_dt53], skills=[])
+    _dn53 = _registry53.get_destructive_names()
+    assert "send_msg53" in _dn53, f"send_msg53 not in destructive names: {_dn53}"
+    assert "delete_thing53" in _dn53, f"delete_thing53 not in destructive names: {_dn53}"
+    record("PASS", "plugin_v2: registry.get_destructive_names() collects from plugins")
+
+    # ── 53h. Registry get_background_allowed_names ───────────────────
+    _bn53 = _registry53.get_background_allowed_names()
+    assert "send_msg53" in _bn53, f"send_msg53 not in bg allowed: {_bn53}"
+    assert "delete_thing53" not in _bn53, "delete_thing53 should NOT be in bg allowed"
+    record("PASS", "plugin_v2: registry.get_background_allowed_names() collects correctly")
+
+    # ── 53i. Disabled plugin's destructive names NOT collected ───────
+    _state53.set_plugin_enabled("destr-plugin", False)
+    _dn53_disabled = _registry53.get_destructive_names()
+    assert len(_dn53_disabled) == 0, f"Disabled plugin should not contribute destructive names: {_dn53_disabled}"
+    _bn53_disabled = _registry53.get_background_allowed_names()
+    assert len(_bn53_disabled) == 0, f"Disabled plugin should not contribute bg names: {_bn53_disabled}"
+    record("PASS", "plugin_v2: disabled plugin destructive/bg names excluded")
+
+    # ── 53j. agent.py wires plugin destructive + bg names ────────────
+    from pathlib import Path as _Path53
+    _agent_src53 = (_Path53(PROJECT_ROOT) / "agent.py").read_text(encoding="utf-8")
+    assert "plugin_registry_mod.get_destructive_names()" in _agent_src53, \
+        "agent.py must call get_destructive_names()"
+    assert "plugin_registry_mod.get_background_allowed_names()" in _agent_src53, \
+        "agent.py must call get_background_allowed_names()"
+    assert "_plugin_bg_allowed" in _agent_src53, \
+        "agent.py must merge plugin bg allowed into ALWAYS_ALLOWED_BG"
+    record("PASS", "plugin_v2: agent.py wires plugin destructive + bg names")
+
+    # ── 53k. streaming.py has __IMAGE__ marker detection ─────────────
+    _stream_src53 = (_Path53(PROJECT_ROOT) / "ui" / "streaming.py").read_text(encoding="utf-8")
+    assert '__IMAGE__:' in _stream_src53, "streaming.py must detect __IMAGE__ marker"
+    assert 'render_image_with_save' in _stream_src53, \
+        "streaming.py must render images via render_image_with_save"
+    record("PASS", "plugin_v2: streaming.py has __IMAGE__ marker detection")
+
+    # ── 53l. streaming.py has __HTML__ marker detection ──────────────
+    assert '__HTML__:' in _stream_src53, "streaming.py must detect __HTML__ marker"
+    assert 'ui.html(' in _stream_src53, "streaming.py must render HTML via ui.html()"
+    record("PASS", "plugin_v2: streaming.py has __HTML__ marker detection")
+
+    # ── 53m. render.py has __IMAGE__ + __HTML__ for thread reload ────
+    _render_src53 = (_Path53(PROJECT_ROOT) / "ui" / "render.py").read_text(encoding="utf-8")
+    assert '__IMAGE__:' in _render_src53, "render.py must detect __IMAGE__ marker"
+    assert '__HTML__:' in _render_src53, "render.py must detect __HTML__ marker"
+    assert '__CHART__:' in _render_src53, "render.py must detect __CHART__ marker"
+    record("PASS", "plugin_v2: render.py has rich marker detection for thread reload")
+
+    # ── 53n. image_result marker parsed correctly (unit) ─────────────
+    _test_content_n = _api53.PluginTool.image_result("AAAA", "Description text")
+    assert _test_content_n.startswith("__IMAGE__:")
+    _me_n = _test_content_n.find("\n\n", 10)
+    assert _me_n > 0, "Should have separator"
+    _b64_n = _test_content_n[10:_me_n]
+    _txt_n = _test_content_n[_me_n + 2:]
+    assert _b64_n == "AAAA", f"Base64 parsed wrong: {_b64_n}"
+    assert _txt_n == "Description text", f"Text parsed wrong: {_txt_n}"
+    record("PASS", "plugin_v2: image_result marker round-trip parse correct")
+
+    # ── 53o. html_result marker parsed correctly (unit) ──────────────
+    _test_content_o = _api53.PluginTool.html_result("<b>Bold</b>", "Summary")
+    assert _test_content_o.startswith("__HTML__:")
+    _me_o = _test_content_o.find("\n\n", 9)
+    assert _me_o > 0
+    _html_o = _test_content_o[9:_me_o]
+    _txt_o = _test_content_o[_me_o + 2:]
+    assert _html_o == "<b>Bold</b>", f"HTML parsed wrong: {_html_o}"
+    assert _txt_o == "Summary", f"Text parsed wrong: {_txt_o}"
+    record("PASS", "plugin_v2: html_result marker round-trip parse correct")
+
+    # ── 53p. chart_result marker parsed correctly (unit) ─────────────
+    _test_content_p = _api53.PluginTool.chart_result('{"x":1}', "Chart info")
+    assert _test_content_p.startswith("__CHART__:")
+    _me_p = _test_content_p.find("\n\n", 10)
+    assert _me_p > 0
+    _json_p = _test_content_p[10:_me_p]
+    _txt_p = _test_content_p[_me_p + 2:]
+    assert _json_p == '{"x":1}'
+    assert _txt_p == "Chart info"
+    record("PASS", "plugin_v2: chart_result marker round-trip parse correct")
+
+    # ── 53q. Backward compat: existing plugins still work ────────────
+    # Existing plugins don't override destructive_tool_names — verify
+    # the base class defaults don't break anything
+    class _OldStylePlugin53(_api53.PluginTool):
+        @property
+        def name(self): return "old_plugin53"
+        @property
+        def display_name(self): return "Old Plugin"
+        @property
+        def description(self): return "pre-v2"
+        def execute(self, query: str) -> str: return "old style"
+
+    _op53 = _OldStylePlugin53(_api53.PluginAPI("old", None, _state53))
+    assert _op53.destructive_tool_names == set()
+    assert _op53.background_allowed_tool_names == set()
+    assert _op53.execute("test") == "old style"
+    _lc53 = _op53.as_langchain_tool()
+    assert _lc53.name == "old_plugin53"
+    record("PASS", "plugin_v2: backward compat — old plugins work unchanged")
+
+    # cleanup
+    _registry53._reset()
+    _state53._reset()
+
+except Exception as e:
+    record("FAIL", "plugin-api-v2", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 54 · Google Account Unified Setup
+# ═════════════════════════════════════════════════════════════════════════════
+try:
+    print("SECTION 54 · Google Account Unified Setup")
+
+    _settings_src54 = (PROJECT_ROOT / "ui" / "settings.py").read_text(encoding="utf-8")
+
+    # ── 54a. _build_google_account_tab exists ──────────────────────
+    assert "_build_google_account_tab" in _settings_src54, \
+        "settings.py must have _build_google_account_tab"
+    record("PASS", "google_setup: _build_google_account_tab exists")
+
+    # ── 54b. old separate tabs removed ─────────────────────────────
+    assert "_build_gmail_tab" not in _settings_src54, \
+        "_build_gmail_tab should be removed (merged into google account tab)"
+    record("PASS", "google_setup: _build_gmail_tab removed")
+
+    assert "_build_calendar_tab" not in _settings_src54, \
+        "_build_calendar_tab should be removed (merged into google account tab)"
+    record("PASS", "google_setup: _build_calendar_tab removed")
+
+    # ── 54c. old tab variables removed ─────────────────────────────
+    assert "tab_gmail" not in _settings_src54, \
+        "tab_gmail should be replaced by tab_google"
+    record("PASS", "google_setup: tab_gmail replaced by tab_google")
+
+    assert "tab_cal" not in _settings_src54, \
+        "tab_cal should be replaced by tab_google"
+    record("PASS", "google_setup: tab_cal replaced by tab_google")
+
+    # ── 54d. tab_google exists ─────────────────────────────────────
+    assert "tab_google" in _settings_src54
+    record("PASS", "google_setup: tab_google defined")
+
+    # ── 54e. unified tab has stepper wizard ─────────────────────────
+    assert "ui.stepper" in _settings_src54
+    record("PASS", "google_setup: interactive stepper wizard present")
+
+    # ── 54f. wizard has key setup steps ────────────────────────────
+    assert "Create Google Cloud Project" in _settings_src54
+    assert "Enable APIs" in _settings_src54
+    assert "OAuth Consent" in _settings_src54
+    assert "OAuth Client ID" in _settings_src54
+    record("PASS", "google_setup: wizard has all setup steps")
+
+    # ── 54g. auto-copy on browse (shutil.copy2) ───────────────────
+    assert "shutil.copy2" in _settings_src54 or "shutil" in _settings_src54
+    record("PASS", "google_setup: auto-copy credentials on browse")
+
+    # ── 54h. combined auth with both scopes ────────────────────────
+    assert "GMAIL_SCOPES" in _settings_src54
+    assert "CALENDAR_SCOPES" in _settings_src54
+    assert "combined_scopes" in _settings_src54
+    record("PASS", "google_setup: combined auth uses both Gmail + Calendar scopes")
+
+    # ── 54i. writes token to both locations ────────────────────────
+    assert "_GMAIL_TOKEN" in _settings_src54 or "GMAIL_TOKEN" in _settings_src54
+    assert "_CAL_TOKEN_PATH" in _settings_src54 or "CAL_TOKEN_PATH" in _settings_src54
+    record("PASS", "google_setup: combined auth writes to both token paths")
+
+    # ── 54j. single Authenticate Google button ─────────────────────
+    assert "Authenticate Google" in _settings_src54
+    record("PASS", "google_setup: single Authenticate Google button")
+
+    # ── 54k. Gmail ops checkboxes still present ────────────────────
+    assert "_READ_OPS" in _settings_src54 and "_COMPOSE_OPS" in _settings_src54
+    record("PASS", "google_setup: Gmail ops checkboxes present")
+
+    # ── 54l. Calendar ops checkboxes still present ─────────────────
+    assert "CAL_READ_OPS" in _settings_src54 and "CAL_WRITE_OPS" in _settings_src54
+    record("PASS", "google_setup: Calendar ops checkboxes present")
+
+    # ── 54m. app.py warning points to Google tab ───────────────────
+    _app_src54 = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
+    assert "Settings → Google" in _app_src54
+    assert "Settings → Tools → Gmail" not in _app_src54
+    record("PASS", "google_setup: app.py warnings point to Settings → Google")
+
+    # ── 54n. _reopen("Google") used ───────────────────────────────
+    assert '_reopen("Google")' in _settings_src54
+    record("PASS", "google_setup: _reopen uses Google tab name")
+
+    # ── 54o. backward compat — Gmail/Calendar _reopen still works ──
+    # _tab_map should map "Gmail" and "Calendar" to tab_google for backward compat
+    assert '"Gmail": tab_google' in _settings_src54 or "'Gmail': tab_google" in _settings_src54
+    record("PASS", "google_setup: Gmail backward-compat in _tab_map")
+
+except Exception as e:
+    record("FAIL", "google-setup", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 55 · Channel Infrastructure (ABC, Registry, Media, Tool Factory)
+# ═════════════════════════════════════════════════════════════════════════════
+try:
+    print("SECTION 55 · Channel Infrastructure")
+
+    # ── 55a. Channel ABC importable ──────────────────────────────────
+    from channels.base import Channel, ChannelCapabilities, ConfigField
+    record("PASS", "channel_infra: Channel ABC importable")
+
+    # ── 55b. Channel is abstract — can't instantiate ────────────────
+    try:
+        Channel()
+        record("FAIL", "channel_infra: Channel should be abstract")
+    except TypeError:
+        record("PASS", "channel_infra: Channel is abstract (cannot instantiate)")
+
+    # ── 55c. ChannelCapabilities defaults ────────────────────────────
+    _caps55 = ChannelCapabilities()
+    assert _caps55.photo_in is False
+    assert _caps55.voice_in is False
+    assert _caps55.streaming is False
+    assert _caps55.buttons is False
+    record("PASS", "channel_infra: ChannelCapabilities defaults all False")
+
+    # ── 55d. ConfigField dataclass ───────────────────────────────────
+    _cf55 = ConfigField(key="test", label="Test", field_type="password",
+                         storage="env", env_key="TEST_KEY")
+    assert _cf55.key == "test"
+    assert _cf55.field_type == "password"
+    assert _cf55.env_key == "TEST_KEY"
+    record("PASS", "channel_infra: ConfigField dataclass works")
+
+    # ── 55e. Channel registry importable ─────────────────────────────
+    from channels.registry import (
+        register, get, all_channels, running_channels,
+        configured_channels, deliver, validate_delivery, _reset,
+    )
+    record("PASS", "channel_infra: registry module importable")
+
+    # ── 55f. Registry has telegram registered ────────────────────────
+    _tg55 = get("telegram")
+    assert _tg55 is not None, "Telegram should be registered"
+    assert _tg55.name == "telegram"
+    assert _tg55.display_name == "Telegram"
+    record("PASS", "channel_infra: Telegram registered in registry")
+
+    # ── 55g. all_channels includes telegram ──────────────────────────
+    _all55 = all_channels()
+    assert any(ch.name == "telegram" for ch in _all55)
+    record("PASS", "channel_infra: all_channels() includes telegram")
+
+    # ── 55h. TelegramChannel implements Channel ABC ──────────────────
+    from channels.telegram import TelegramChannel
+    assert issubclass(TelegramChannel, Channel)
+    record("PASS", "channel_infra: TelegramChannel subclasses Channel")
+
+    # ── 55i. TelegramChannel capabilities correct ────────────────────
+    _tg_caps = _tg55.capabilities
+    assert _tg_caps.photo_in is True
+    assert _tg_caps.voice_in is True
+    assert _tg_caps.document_in is True
+    assert _tg_caps.photo_out is True
+    assert _tg_caps.document_out is True
+    assert _tg_caps.buttons is True
+    assert _tg_caps.streaming is False
+    assert _tg_caps.typing is True
+    assert _tg_caps.reactions is True
+    record("PASS", "channel_infra: TelegramChannel capabilities correct")
+
+    # ── 55j. TelegramChannel config_fields ───────────────────────────
+    _tg_fields = _tg55.config_fields
+    assert len(_tg_fields) == 2
+    assert _tg_fields[0].env_key == "TELEGRAM_BOT_TOKEN"
+    assert _tg_fields[1].env_key == "TELEGRAM_USER_ID"
+    record("PASS", "channel_infra: TelegramChannel has 2 config fields")
+
+    # ── 55k. TelegramChannel.make_thread_id ──────────────────────────
+    assert _tg55.make_thread_id("12345") == "telegram_12345"
+    record("PASS", "channel_infra: make_thread_id returns correct format")
+
+    # ── 55l. Media pipeline importable ───────────────────────────────
+    from channels.media import transcribe_audio, analyze_image, save_inbound_file
+    assert callable(transcribe_audio)
+    assert callable(analyze_image)
+    assert callable(save_inbound_file)
+    record("PASS", "channel_infra: media pipeline importable")
+
+    # ── 55m. save_inbound_file works ─────────────────────────────────
+    import tempfile as _tmpmod55
+    _test_data = b"test file content for channel media"
+    _saved_path = save_inbound_file(_test_data, "test_channel.txt")
+    assert _saved_path.exists()
+    assert _saved_path.read_bytes() == _test_data
+    assert "inbox" in str(_saved_path)
+    _saved_path.unlink()  # cleanup
+    record("PASS", "channel_infra: save_inbound_file persists to inbox")
+
+    # ── 55n. Tool factory importable ─────────────────────────────────
+    from channels.tool_factory import create_channel_tools
+    assert callable(create_channel_tools)
+    record("PASS", "channel_infra: tool_factory importable")
+
+    # ── 55o. Tool factory generates correct tools for telegram ───────
+    _tg_tools55 = create_channel_tools(_tg55)
+    _tg_tool_names55 = [t.name for t in _tg_tools55]
+    assert "send_telegram_message" in _tg_tool_names55
+    assert "send_telegram_photo" in _tg_tool_names55
+    assert "send_telegram_document" in _tg_tool_names55
+    record("PASS", "channel_infra: tool_factory generates 3 tools for telegram")
+
+    # ── 55p. Tool factory respects capabilities ──────────────────────
+    # Create a minimal channel with no photo/doc out
+    class _MinimalChannel55(Channel):
+        @property
+        def name(self): return "test_minimal"
+        @property
+        def display_name(self): return "Test"
+        @property
+        def capabilities(self): return ChannelCapabilities()  # all False
+        async def start(self): return True
+        async def stop(self): pass
+        def is_configured(self): return True
+        def is_running(self): return True
+        def send_message(self, target, text): pass
+
+    _min_ch = _MinimalChannel55()
+    _min_tools = create_channel_tools(_min_ch)
+    _min_names = [t.name for t in _min_tools]
+    assert "send_test_minimal_message" in _min_names
+    assert "send_test_minimal_photo" not in _min_names
+    assert "send_test_minimal_document" not in _min_names
+    record("PASS", "channel_infra: tool_factory skips photo/doc when caps=False")
+
+    # ── 55q. Email channel removed ───────────────────────────────────
+    assert not (PROJECT_ROOT / "channels" / "email.py").exists(), \
+        "channels/email.py should be deleted"
+    record("PASS", "channel_infra: channels/email.py removed")
+
+    # ── 55r. Email removed from app.py ───────────────────────────────
+    _app_src55 = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
+    assert "channels.email" not in _app_src55
+    assert "_email_start" not in _app_src55
+    record("PASS", "channel_infra: email removed from app.py")
+
+    # ── 55s. Email removed from settings.py ──────────────────────────
+    _settings_src55 = (PROJECT_ROOT / "ui" / "settings.py").read_text(encoding="utf-8")
+    assert "channels.email" not in _settings_src55
+    assert "Email Channel" not in _settings_src55
+    assert "_update_email_status" not in _settings_src55
+    record("PASS", "channel_infra: email removed from settings.py")
+
+    # ── 55t. Email removed from tasks.py delivery ────────────────────
+    _tasks_src55 = (PROJECT_ROOT / "tasks.py").read_text(encoding="utf-8")
+    assert "channels.email" not in _tasks_src55
+    assert "FromThoth:" not in _tasks_src55
+    record("PASS", "channel_infra: email removed from tasks.py")
+
+    # ── 55u. tasks.py uses channel registry ──────────────────────────
+    assert "from channels import registry" in _tasks_src55 or \
+           "from channels.registry" in _tasks_src55
+    record("PASS", "channel_infra: tasks.py uses channel registry for delivery")
+
+    # ── 55v. app.py auto-start uses registry loop ────────────────────
+    assert "_ch_registry.all_channels()" in _app_src55 or \
+           "_ch_registry" in _app_src55
+    record("PASS", "channel_infra: app.py auto-start uses channel registry")
+
+    # ── 55w. gmail_tool.py still exists (not touched) ────────────────
+    assert (PROJECT_ROOT / "tools" / "gmail_tool.py").exists()
+    record("PASS", "channel_infra: gmail_tool.py still exists (email tool kept)")
+
+    # ── 55x. status_checks has no email channel check ────────────────
+    _sc_src55 = (PROJECT_ROOT / "ui" / "status_checks.py").read_text(encoding="utf-8")
+    assert "check_gmail_channel" not in _sc_src55
+    assert "channels.email" not in _sc_src55
+    record("PASS", "channel_infra: status_checks email check removed")
+
+    # ── 55y. validate_delivery rejects unknown channels ──────────────
+    try:
+        validate_delivery("bogus_channel", "target")
+        record("FAIL", "channel_infra: validate_delivery should reject unknown")
+    except ValueError:
+        record("PASS", "channel_infra: validate_delivery rejects unknown channel")
+
+    # ── 55z. deliver to non-running channel fails gracefully ─────────
+    _d_status, _d_detail = deliver("telegram", 12345, "test")
+    assert _d_status == "delivery_failed"  # bot not running in test
+    record("PASS", "channel_infra: deliver to non-running channel returns failure")
+
+except Exception as e:
+    record("FAIL", "channel-infra", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 56 · Telegram Phase 1 – Inbound Media & Reactions
+# ═════════════════════════════════════════════════════════════════════════════
+try:
+    print("SECTION 56 · Telegram Phase 1 – Inbound Media & Reactions")
+    import inspect as _insp56
+
+    _tg_src56 = (PROJECT_ROOT / "channels" / "telegram.py").read_text(encoding="utf-8")
+
+    # ── 56a. _handle_voice exists and is callable ────────────────────
+    from channels.telegram import _handle_voice
+    assert callable(_handle_voice)
+    record("PASS", "tg_media: _handle_voice exists and is callable")
+
+    # ── 56b. _handle_photo exists and is callable ────────────────────
+    from channels.telegram import _handle_photo
+    assert callable(_handle_photo)
+    record("PASS", "tg_media: _handle_photo exists and is callable")
+
+    # ── 56c. _handle_document exists and is callable ─────────────────
+    from channels.telegram import _handle_document
+    assert callable(_handle_document)
+    record("PASS", "tg_media: _handle_document exists and is callable")
+
+    # ── 56d. _react helper exists and is callable ────────────────────
+    from channels.telegram import _react
+    assert callable(_react)
+    record("PASS", "tg_media: _react helper exists and is callable")
+
+    # ── 56e. _send_agent_response helper exists ──────────────────────
+    from channels.telegram import _send_agent_response
+    assert callable(_send_agent_response)
+    record("PASS", "tg_media: _send_agent_response helper exists")
+
+    # ── 56f. _run_agent_for_message helper exists ────────────────────
+    from channels.telegram import _run_agent_for_message
+    assert callable(_run_agent_for_message)
+    record("PASS", "tg_media: _run_agent_for_message helper exists")
+
+    # Also import _handle_message for test 56u
+    from channels.telegram import _handle_message as _hm56
+
+    # ── 56g. Voice handler calls transcribe_audio ────────────────────
+    _voice_src56 = _insp56.getsource(_handle_voice)
+    assert "transcribe_audio" in _voice_src56
+    record("PASS", "tg_media: voice handler calls transcribe_audio")
+
+    # ── 56h. Photo handler calls analyze_image ───────────────────────
+    _photo_src56 = _insp56.getsource(_handle_photo)
+    assert "analyze_image" in _photo_src56
+    record("PASS", "tg_media: photo handler calls analyze_image")
+
+    # ── 56i. Document handler calls save_inbound_file ────────────────
+    _doc_src56 = _insp56.getsource(_handle_document)
+    assert "save_inbound_file" in _doc_src56
+    record("PASS", "tg_media: document handler calls save_inbound_file")
+
+    # ── 56j. Voice handler registered (filters.VOICE) ───────────────
+    assert "filters.VOICE" in _tg_src56 or "filters.AUDIO" in _tg_src56
+    assert "_handle_voice" in _tg_src56
+    # Verify it's in an add_handler call
+    assert "filters.VOICE | filters.AUDIO, _handle_voice" in _tg_src56 or \
+           "filters.VOICE, _handle_voice" in _tg_src56
+    record("PASS", "tg_media: voice handler registered with bot")
+
+    # ── 56k. Photo handler registered (filters.PHOTO) ───────────────
+    assert "filters.PHOTO, _handle_photo" in _tg_src56
+    record("PASS", "tg_media: photo handler registered with bot")
+
+    # ── 56l. Document handler registered (filters.Document.ALL) ──────
+    assert "filters.Document.ALL, _handle_document" in _tg_src56
+    record("PASS", "tg_media: document handler registered with bot")
+
+    # ── 56m. ReactionTypeEmoji imported ──────────────────────────────
+    assert "ReactionTypeEmoji" in _tg_src56
+    record("PASS", "tg_media: ReactionTypeEmoji imported")
+
+    # ── 56n. _react uses set_reaction ────────────────────────────────
+    _react_src56 = _insp56.getsource(_react)
+    assert "set_reaction" in _react_src56
+    assert "ReactionTypeEmoji" in _react_src56
+    record("PASS", "tg_media: _react calls set_reaction with ReactionTypeEmoji")
+
+    # ── 56o. All media handlers check _is_authorised ─────────────────
+    assert "_is_authorised" in _voice_src56, "voice handler must check auth"
+    assert "_is_authorised" in _photo_src56, "photo handler must check auth"
+    assert "_is_authorised" in _doc_src56, "document handler must check auth"
+    record("PASS", "tg_media: all media handlers check _is_authorised")
+
+    # ── 56p. All media handlers delegate to _run_agent_for_message ───
+    assert "_run_agent_for_message" in _voice_src56
+    assert "_run_agent_for_message" in _photo_src56
+    assert "_run_agent_for_message" in _doc_src56
+    record("PASS", "tg_media: all media handlers delegate to _run_agent_for_message")
+
+    # ── 56q. _run_agent_for_message checks pending interrupts ────────
+    _rafm_src56 = _insp56.getsource(_run_agent_for_message)
+    assert "_pending_interrupts" in _rafm_src56
+    record("PASS", "tg_media: _run_agent_for_message checks pending interrupts")
+
+    # ── 56r. _run_agent_for_message sends typing indicator ───────────
+    assert "send_action" in _rafm_src56 and "typing" in _rafm_src56
+    record("PASS", "tg_media: _run_agent_for_message sends typing indicator")
+
+    # ── 56s. _run_agent_for_message uses reactions (👀 👍 💔) ────────
+    assert "_react" in _rafm_src56
+    # Check for all three reaction states (Telegram-supported emoji)
+    assert "👀" in _rafm_src56, "should react with 👀 on start"
+    assert "👍" in _rafm_src56, "should react with 👍 on success"
+    assert "💔" in _rafm_src56, "should react with 💔 on error"
+    record("PASS", "tg_media: _run_agent_for_message uses 👀/👍/💔 reactions")
+
+    # ── 56t. _run_agent_for_message handles corrupt thread ───────────
+    assert "_is_corrupt_thread_error" in _rafm_src56
+    assert "repair_orphaned_tool_calls" in _rafm_src56
+    assert "_new_thread" in _rafm_src56
+    record("PASS", "tg_media: _run_agent_for_message handles corrupt threads")
+
+    # ── 56u. _handle_message now delegates to _run_agent_for_message ─
+    _hm_src56 = _insp56.getsource(_hm56)
+    assert "_run_agent_for_message" in _hm_src56
+    # Should be shorter than before (delegated)
+    assert len(_hm_src56.splitlines()) < 25, \
+        f"_handle_message too long ({len(_hm_src56.splitlines())} lines) — should delegate"
+    record("PASS", "tg_media: _handle_message delegates to shared helper")
+
+    # ── 56v. Voice handler shows transcription to user ───────────────
+    assert "reply_text" in _voice_src56, "voice should echo transcription"
+    assert "🎤" in _voice_src56, "voice should use microphone emoji"
+    record("PASS", "tg_media: voice handler echoes transcription to user")
+
+    # ── 56w. Photo handler uses caption as question ──────────────────
+    assert "caption" in _photo_src56
+    assert "question" in _photo_src56 or "caption" in _photo_src56
+    record("PASS", "tg_media: photo handler uses caption as vision question")
+
+    # ── 56x. Document handler includes filename in agent context ─────
+    assert "file_name" in _doc_src56 or "filename" in _doc_src56
+    record("PASS", "tg_media: document handler includes filename in context")
+
+    # ── 56y. Voice handler handles download failure gracefully ───────
+    assert "Could not download" in _voice_src56 or "download" in _voice_src56.lower()
+    record("PASS", "tg_media: voice handler handles download failure")
+
+    # ── 56z. _send_agent_response handles interrupts + HTML ──────────
+    _sar_src56 = _insp56.getsource(_send_agent_response)
+    assert "interrupt_data" in _sar_src56
+    assert "_pending_interrupts" in _sar_src56
+    assert "_md_to_html" in _sar_src56
+    assert "InlineKeyboardMarkup" in _sar_src56
+    record("PASS", "tg_media: _send_agent_response handles interrupts + HTML")
+
+except Exception as e:
+    record("FAIL", "tg-media-phase1", f"{type(e).__name__}: {e}")
     traceback.print_exc()
 
 

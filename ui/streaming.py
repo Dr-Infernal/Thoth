@@ -32,7 +32,7 @@ from ui.constants import (
     YT_URL_PATTERN,
     IMAGE_EXTENSIONS,
 )
-from ui.render import autolink_urls, _auto_fence_mermaid
+from ui.render import autolink_urls, _auto_fence_mermaid, render_image_with_save
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +420,41 @@ def _handle_tool_done(
                 pass
         tool_content = display_text
 
+    # Image marker detection (plugins / rich returns)
+    if tool_content and tool_content.startswith("__IMAGE__:"):
+        marker_end = tool_content.find("\n\n", 10)
+        if marker_end == -1:
+            _img_b64 = tool_content[10:]
+            display_text = "Image generated"
+        else:
+            _img_b64 = tool_content[10:marker_end]
+            display_text = tool_content[marker_end + 2:]
+        gen.captured_images.append(_img_b64)
+        if not gen.detached and gen.tool_col:
+            try:
+                with gen.tool_col:
+                    render_image_with_save(_img_b64)
+            except Exception:
+                pass
+        tool_content = display_text
+
+    # HTML marker detection (plugins / rich returns)
+    if tool_content and tool_content.startswith("__HTML__:"):
+        marker_end = tool_content.find("\n\n", 9)
+        if marker_end == -1:
+            _html_content = tool_content[9:]
+            display_text = ""
+        else:
+            _html_content = tool_content[9:marker_end]
+            display_text = tool_content[marker_end + 2:]
+        if not gen.detached and gen.tool_col:
+            try:
+                with gen.tool_col:
+                    ui.html(_html_content).classes("w-full")
+            except Exception:
+                pass
+        tool_content = display_text
+
     # Update the pending expansion or create a new one
     if not gen.detached and gen.tool_col:
         try:
@@ -497,7 +532,7 @@ def _handle_tool_done(
             if not gen.detached and gen.tool_col:
                 try:
                     with gen.tool_col:
-                        ui.image(f"data:image/jpeg;base64,{b64_img}").classes("w-80 rounded")
+                        render_image_with_save(b64_img)
                 except Exception:
                     pass
             vsvc.last_capture = None
@@ -515,11 +550,10 @@ def _handle_tool_done(
                     gen.captured_images.append(_b64_ss)
                     if gen.tool_col:
                         with gen.tool_col:
-                            ui.image(
-                                f"data:image/png;base64,{_b64_ss}"
-                            ).classes(
-                                "w-80 rounded"
-                            ).style("border: 1px solid #333; margin-top: 4px;")
+                            render_image_with_save(
+                                _b64_ss,
+                                extra_style="border: 1px solid #333; margin-top: 4px;",
+                            )
         except Exception:
             pass
 
@@ -532,9 +566,20 @@ def _handle_tool_done(
                 gen.captured_images.append(_fs_img["b64"])
                 if not gen.detached and gen.tool_col:
                     with gen.tool_col:
-                        ui.image(
-                            _img_data_uri(_fs_img["b64"])
-                        ).classes("w-80 rounded")
+                        render_image_with_save(_fs_img["b64"])
+        except Exception:
+            pass
+
+    # Image generation display (generate_image / edit_image)
+    if raw_tool_name in ("generate_image", "edit_image"):
+        try:
+            from tools.image_gen_tool import get_and_clear_last_image
+            _gen_img = get_and_clear_last_image()
+            if _gen_img:
+                gen.captured_images.append(_gen_img)
+                if not gen.detached and gen.tool_col:
+                    with gen.tool_col:
+                        render_image_with_save(_gen_img)
         except Exception:
             pass
 
@@ -668,6 +713,20 @@ async def send_message(
     from tools.chart_tool import _attachment_cache as _chart_cache
     _chart_cache.clear()
     _chart_cache.update(state.attached_data_cache)
+
+    # Sync pasted/attached images to image gen tool for edit_image
+    from tools.image_gen_tool import _image_cache as _img_cache
+    import tools.image_gen_tool as _igt_mod
+    # Preserve __last_generated__ only within the same thread
+    _same_thread = (_igt_mod._image_cache_thread_id == gen_thread_id)
+    _last_gen_backup = _img_cache.get("__last_generated__") if _same_thread else None
+    _img_cache.clear()
+    if _last_gen_backup:
+        _img_cache["__last_generated__"] = _last_gen_backup
+    _igt_mod._image_cache_thread_id = gen_thread_id
+    for f in _files_snapshot:
+        if _plib.Path(f["name"]).suffix.lower() in IMAGE_EXTENSIONS:
+            _img_cache[f["name"]] = f["data"]
 
     _thread_mo = state.thread_model_override or ""
     config = {

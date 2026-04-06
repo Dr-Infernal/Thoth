@@ -1,6 +1,6 @@
 # Building the Thoth Windows Installer
 
-This guide explains how to build a distributable Windows installer for Thoth v3.11.0.
+This guide explains how to build a distributable Windows installer for Thoth v3.12.0.
 
 ## Architecture
 
@@ -33,7 +33,7 @@ The installer (~30 MB) bundles the embedded Python runtime and app source code. 
 This will:
 1. Download Python 3.13 embeddable package (~15 MB)
 2. Download `get-pip.py` (~2.5 MB)
-3. Compile everything into `dist\ThothSetup_3.11.0.exe`
+3. Compile everything into `dist\ThothSetup_3.12.0.exe`
 
 ### Options
 
@@ -83,22 +83,38 @@ C:\Program Files\Thoth\            # Installation directory
     ├── sounds/                     # Notification sound effects
     │   ├── workflow.wav
     │   └── timer.wav
-    ├── channels/                   # Messaging channel adapters
+    ├── channels/                   # Multi-channel messaging framework
     │   ├── __init__.py
+    │   ├── base.py
     │   ├── config.py
+    │   ├── media.py
+    │   ├── registry.py
     │   ├── telegram.py
-    │   └── email.py
+    │   └── tool_factory.py
     ├── requirements.txt
     ├── thoth.ico
     ├── static/                     # Vendored JS libraries
     │   └── vis-network.min.js
-    ├── tools/                      # 24 tool modules
+    ├── tools/                      # 25 tool modules
     │   ├── __init__.py
     │   ├── base.py
     │   ├── registry.py
     │   ├── web_search_tool.py
     │   ├── ...
     │   └── youtube_tool.py
+    └── plugins/                    # Plugin system & marketplace
+        ├── __init__.py
+        ├── api.py
+        ├── installer.py
+        ├── loader.py
+        ├── manifest.py
+        ├── marketplace.py
+        ├── registry.py
+        ├── sandbox.py
+        ├── state.py
+        ├── ui_marketplace.py
+        ├── ui_plugin_dialog.py
+        └── ui_settings.py
 
 %USERPROFILE%\.thoth\               # User data directory (auto-created at runtime)
 ├── threads.db                      # Conversation history & checkpoints
@@ -116,7 +132,8 @@ C:\Program Files\Thoth\            # Installation directory
 ├── voice_settings.json             # Whisper model size preference
 ├── processed_files.json            # Tracked indexed documents
 ├── tasks.db                        # Task definitions, schedules, run history & delivery config
-├── channels_config.json            # Channel settings (Telegram, Email)
+├── channels_config.json            # Channel settings (Telegram)
+├── plugins_config.json             # Installed plugin state & settings
 ├── shell_history.json              # Shell command history per thread
 ├── skills_config.json              # Skill enable/disable state
 ├── user_config.json                # Avatar emoji & ring color preferences
@@ -149,7 +166,7 @@ The Inno Setup installer runs these steps:
 
 ## End-User Experience
 
-1. Run `ThothSetup_3.11.0.exe`
+1. Run `ThothSetup_3.12.0.exe`
 2. Follow the wizard — dependencies download and install automatically (5-15 min)
 3. Launch Thoth from Start Menu or Desktop shortcut
 4. The system tray icon appears; the app opens at `http://localhost:8080`

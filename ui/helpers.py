@@ -388,8 +388,8 @@ def load_thread_messages(thread_id: str) -> list[dict]:
                     if user_images:
                         msg_dict["images"] = user_images
                     msgs.append(msg_dict)
-                elif m.type == "ai" and m.content:
-                    ai_content = m.content
+                elif m.type == "ai":
+                    ai_content = m.content or ""
                     if isinstance(ai_content, list):
                         text_parts = []
                         for block in ai_content:
@@ -398,7 +398,25 @@ def load_thread_messages(thread_id: str) -> list[dict]:
                             elif isinstance(block, str):
                                 text_parts.append(block)
                         ai_content = "\n".join(text_parts)
-                    if not isinstance(ai_content, str) or not ai_content.strip():
+                    if not isinstance(ai_content, str):
+                        ai_content = str(ai_content) if ai_content else ""
+
+                    # Empty-content AI message: if this is a terminal
+                    # response (no tool_calls) and there are pending tool
+                    # results, flush them cleanly — the model simply
+                    # produced no text after the tool ran (e.g. image gen).
+                    if not ai_content.strip():
+                        if pending_tool_results and not getattr(m, "tool_calls", []):
+                            msg_dict = {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_results": list(pending_tool_results),
+                            }
+                            if pending_charts:
+                                msg_dict["charts"] = list(pending_charts)
+                                pending_charts = []
+                            pending_tool_results = []
+                            msgs.append(msg_dict)
                         continue
 
                     # ── Recover thinking / reasoning content ──────────
@@ -434,7 +452,7 @@ def load_thread_messages(thread_id: str) -> list[dict]:
             if pending_tool_results:
                 msgs.append({
                     "role": "assistant",
-                    "content": "⚠️ The assistant was interrupted before it could finish (tool limit reached). Here's what it was working on:",
+                    "content": "",
                     "tool_results": list(pending_tool_results),
                 })
             return _hydrate_thread_images(thread_id, msgs)
@@ -768,7 +786,7 @@ def _pick_file_native(
         if filetypes:
             exts = []
             for _, pattern in filetypes:
-                for part in pattern.split(";"):
+                for part in pattern.replace(";", " ").split():
                     ext = part.strip().lstrip("*.").lower()
                     if ext:
                         exts.append(f'"{ext}"')

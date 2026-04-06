@@ -102,21 +102,6 @@ def check_cloud_api() -> CheckResult:
         return CheckResult("Cloud API", "error", str(exc), settings_tab="Cloud")
 
 
-def check_gmail_channel() -> CheckResult:
-    """Check Gmail email channel status."""
-    try:
-        from channels.email import is_configured, is_running, get_last_error
-        if not is_configured():
-            return CheckResult("Email", "inactive", "Not configured", settings_tab="Channels")
-        if is_running():
-            return CheckResult("Email", "ok", "Polling", settings_tab="Channels")
-        err = get_last_error()
-        detail = f"Stopped — {err}" if err else "Stopped"
-        return CheckResult("Email", "warn", detail, settings_tab="Channels")
-    except Exception as exc:
-        return CheckResult("Email", "error", str(exc), settings_tab="Channels")
-
-
 def check_telegram() -> CheckResult:
     """Check Telegram bot status."""
     try:
@@ -360,7 +345,6 @@ ALL_CHECKS = [
     check_ollama,
     check_active_model,
     check_cloud_api,
-    check_gmail_channel,
     check_telegram,
     check_gmail_oauth,
     check_calendar_oauth,
@@ -379,7 +363,6 @@ ALL_CHECKS = [
 # Lightweight checks (just reading Python booleans — near zero cost)
 LIGHT_CHECKS = [
     check_active_model,
-    check_gmail_channel,
     check_telegram,
     check_task_scheduler,
     check_tts,

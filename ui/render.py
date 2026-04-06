@@ -25,6 +25,53 @@ def _img_data_uri(b64: str) -> str:
         return f"data:image/gif;base64,{b64}"
     return f"data:image/jpeg;base64,{b64}"
 
+
+def _img_ext(b64: str) -> str:
+    """Return the file extension for a base64-encoded image."""
+    if b64.startswith("iVBOR"):
+        return "png"
+    if b64.startswith("UklGR"):
+        return "webp"
+    if b64.startswith("R0lGO"):
+        return "gif"
+    return "jpg"
+
+
+def render_image_with_save(b64: str, extra_style: str = "") -> None:
+    """Render an image thumbnail with a small save-to-disk button.
+
+    The image is displayed at a reasonable thumbnail size (w-80) but the
+    download always delivers the **original full-resolution** bytes.
+    """
+    import base64 as _b64_mod
+    from ui.export import _save_export
+    from datetime import datetime as _dt
+
+    data_uri = _img_data_uri(b64)
+    ext = _img_ext(b64)
+    style = "position: relative; display: inline-block;"
+    if extra_style:
+        style += f" {extra_style}"
+    with ui.element("div").style(style):
+        ui.image(data_uri).classes("w-80 rounded")
+        # Capture b64 in closure for the click handler
+        _b64_copy = b64
+
+        def _save(b64_data=_b64_copy, extension=ext):
+            ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+            raw = _b64_mod.b64decode(b64_data)
+            _save_export(raw, f"thoth_image_{ts}.{extension}")
+
+        ui.button(
+            icon="download", on_click=_save,
+        ).props("flat dense round size=xs").classes(
+            "absolute bottom-1 right-1"
+        ).style(
+            "background: rgba(0,0,0,0.5); color: white; min-width: 28px; "
+            "min-height: 28px; padding: 2px;"
+        ).tooltip("Save image")
+
+
 # ── Bare-URL auto-linking ────────────────────────────────────────────
 # Matches (in priority order) patterns we must *skip*, then bare URLs
 # we want to convert.  Only capture-group 1 (bare URL) triggers a
@@ -261,6 +308,36 @@ def render_message_content(msg: dict) -> None:
         for tr in tool_results:
             with ui.expansion(f"✅ {tr['name']}", icon="check_circle").classes("w-full"):
                 content = tr.get("content", "")
+                # Rich marker detection — render inline widgets
+                if content.startswith("__CHART__:"):
+                    _me = content.find("\n\n", 10)
+                    _fj = content[10:] if _me == -1 else content[10:_me]
+                    _dt = "Chart created" if _me == -1 else content[_me + 2:]
+                    try:
+                        import plotly.io as _pio
+                        fig = _pio.from_json(_fj)
+                        ui.plotly(fig).classes("w-full")
+                    except Exception:
+                        pass
+                    content = _dt
+                if content.startswith("__IMAGE__:"):
+                    _me = content.find("\n\n", 10)
+                    _ib = content[10:] if _me == -1 else content[10:_me]
+                    _dt = "Image generated" if _me == -1 else content[_me + 2:]
+                    try:
+                        render_image_with_save(_ib)
+                    except Exception:
+                        pass
+                    content = _dt
+                if content.startswith("__HTML__:"):
+                    _me = content.find("\n\n", 9)
+                    _hc = content[9:] if _me == -1 else content[9:_me]
+                    _dt = "" if _me == -1 else content[_me + 2:]
+                    try:
+                        ui.html(_hc).classes("w-full")
+                    except Exception:
+                        pass
+                    content = _dt
                 if len(content) > 5_000:
                     content = content[:5_000] + "\n\n… (truncated)"
                 if content:
@@ -271,7 +348,7 @@ def render_message_content(msg: dict) -> None:
     if images:
         caption = "📎 Attached" if role == "user" else "📷 Captured"
         for b64 in images:
-            ui.image(_img_data_uri(b64)).classes("w-80 rounded")
+            render_image_with_save(b64)
             ui.label(caption).classes("text-xs text-grey-6")
     elif tool_results and any(
         tr.get("name") in ("analyze_image", "👁️ Vision") for tr in tool_results

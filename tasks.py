@@ -563,12 +563,7 @@ get_running_workflows = get_running_tasks
 def _validate_delivery(channel: str | None, target: str | None) -> None:
     """Raise ``ValueError`` if delivery settings are invalid.
 
-    Rules
-    -----
-    * If *channel* is set, *target* must also be set (and vice-versa).
-    * ``telegram`` target must be parseable as ``int`` (chat ID).
-    * ``email`` target must look like a bare email address (contains ``@``
-      and at least one ``.`` after the ``@``).
+    Delegates to the channel registry for validation when available.
     """
     if not channel and not target:
         return  # no delivery — valid
@@ -580,23 +575,22 @@ def _validate_delivery(channel: str | None, target: str | None) -> None:
         raise ValueError(
             "delivery_target is set but delivery_channel is empty."
         )
-    if channel not in ("telegram", "email"):
-        raise ValueError(
-            f"delivery_channel must be 'telegram' or 'email', got '{channel}'."
-        )
-    if channel == "telegram":
-        # Telegram always uses the configured TELEGRAM_USER_ID at delivery
-        # time — no target field needed. Just verify the bot is configured.
-        pass
-    elif channel == "email":
-        if "@" not in target or "." not in target.split("@", 1)[-1]:
+    # Validate via channel registry
+    try:
+        from channels import registry as _ch_reg
+        _ch_reg.validate_delivery(channel, target)
+    except ImportError:
+        # Fallback: accept known channel names
+        if channel not in ("telegram",):
             raise ValueError(
-                f"Email delivery_target must be a valid email address, got '{target}'."
+                f"Unknown delivery_channel '{channel}'."
             )
 
 
 def _deliver_to_channel(task: dict, text: str) -> tuple[str, str]:
     """Send task output to the configured delivery channel (if any).
+
+    Uses the channel registry for routing.
 
     Returns
     -------
@@ -610,18 +604,24 @@ def _deliver_to_channel(task: dict, text: str) -> tuple[str, str]:
     if not channel:
         return "", ""
     try:
+        from channels import registry as _ch_reg
+        prefix = f"📋 {task['name']}\n\n"
+        ch = _ch_reg.get(channel)
+        if ch is None:
+            raise RuntimeError(f"Unknown channel: {channel}")
+        if not ch.is_running():
+            raise RuntimeError(f"{ch.display_name} is not running")
+
+        # Resolve target (Telegram uses configured user ID)
         if channel == "telegram":
-            from channels.telegram import send_outbound, _get_allowed_user_id
-            user_id = _get_allowed_user_id()
-            if user_id is None:
+            from channels.telegram import _get_allowed_user_id
+            resolved_target = _get_allowed_user_id()
+            if resolved_target is None:
                 raise RuntimeError("TELEGRAM_USER_ID is not configured")
-            prefix = f"📋 {task['name']}\n\n"
-            send_outbound(user_id, prefix + text)
-        elif channel == "email":
-            if not target:
-                raise ValueError("Email delivery_target is empty")
-            from channels.email import send_outbound
-            send_outbound(target, f"FromThoth: {task['name']}", text)
+        else:
+            resolved_target = target
+
+        ch.send_message(resolved_target, prefix + text)
         logger.info(
             "Delivery to %s succeeded for task %s", channel, task["name"],
         )

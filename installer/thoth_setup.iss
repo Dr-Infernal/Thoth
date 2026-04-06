@@ -1,5 +1,5 @@
 ; =============================================================================
-; Thoth v3.11.0 – Inno Setup Script
+; Thoth v3.12.0 – Inno Setup Script
 ; Self-contained installer: bundles embedded Python with all pip packages
 ; pre-installed.  No internet downloads at install time.
 ; =============================================================================
@@ -10,7 +10,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "3.11.0"
+#define MyAppVersion   "3.12.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -72,9 +72,12 @@ Source: "..\sounds\*.wav";              DestDir: "{app}\app\sounds"; Flags: igno
 
 ; ── Channels package ─────────────────────────────────────────────────────────
 Source: "..\channels\__init__.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\base.py";          DestDir: "{app}\app\channels"; Flags: ignoreversion
 Source: "..\channels\config.py";        DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\media.py";         DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\registry.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
 Source: "..\channels\telegram.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
-Source: "..\channels\email.py";         DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\tool_factory.py";  DestDir: "{app}\app\channels"; Flags: ignoreversion
 
 ; ── Tools package ────────────────────────────────────────────────────────────
 Source: "..\tools\__init__.py";        DestDir: "{app}\app\tools"; Flags: ignoreversion
@@ -104,6 +107,21 @@ Source: "..\tools\browser_tool.py";    DestDir: "{app}\app\tools"; Flags: ignore
 Source: "..\tools\shell_tool.py";      DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\youtube_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\wiki_tool.py";      DestDir: "{app}\app\tools"; Flags: ignoreversion
+Source: "..\tools\image_gen_tool.py";  DestDir: "{app}\app\tools"; Flags: ignoreversion
+
+; ── Plugins package ──────────────────────────────────────────────────────────
+Source: "..\plugins\__init__.py";       DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\api.py";            DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\installer.py";      DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\loader.py";         DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\manifest.py";       DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\marketplace.py";    DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\registry.py";       DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\sandbox.py";        DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\state.py";          DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\ui_marketplace.py"; DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\ui_plugin_dialog.py"; DestDir: "{app}\app\plugins"; Flags: ignoreversion
+Source: "..\plugins\ui_settings.py";    DestDir: "{app}\app\plugins"; Flags: ignoreversion
 
 ; ── Bundled Skills ───────────────────────────────────────────────────────────
 Source: "..\bundled_skills\*";         DestDir: "{app}\app\bundled_skills"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -149,3 +167,4 @@ Type: filesandordirs; Name: "{app}\app\__pycache__"
 Type: filesandordirs; Name: "{app}\app\tools\__pycache__"
 Type: filesandordirs; Name: "{app}\app\channels\__pycache__"
 Type: filesandordirs; Name: "{app}\app\ui\__pycache__"
+Type: filesandordirs; Name: "{app}\app\plugins\__pycache__"

@@ -115,9 +115,8 @@ from tasks import seed_default_tasks, start_task_scheduler, get_running_tasks, s
 from notifications import drain_toasts
 
 # ── Channels ─────────────────────────────────────────────────────────────────
-from channels.telegram import start_bot as _tg_start_bot
-from channels.email import start_polling as _email_start
 from channels import config as _ch_config
+from channels import registry as _ch_registry
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -154,7 +153,7 @@ def _check_oauth_tokens(_st=None) -> list[str]:
                 label = "token healthy" if status == "valid" else "token refreshed"
                 print(f"[oauth] ✅ {display} {label}")
             elif status == "expired":
-                msg = f"⚠️ {display} token expired — re-authenticate in Settings → Tools → {display}"
+                msg = f"⚠️ {display} token expired — re-authenticate in Settings → Google"
                 warnings.append(msg)
                 print(f"[oauth] {msg}")
             elif status == "error":
@@ -221,27 +220,41 @@ async def on_startup():
     _set("⚡ Loading workflows…")
     await asyncio.to_thread(lambda: (seed_default_tasks(), start_task_scheduler()))
 
-    # Auto-start channels
-    _set("📡 Starting channels…")
-    if _ch_config.get("telegram", "auto_start", False):
-        try:
-            ok = await _tg_start_bot()
-            if ok:
-                print("[startup] ✅ Telegram bot auto-started")
-            else:
-                _st.startup_warnings.append("⚠️ Telegram bot failed to auto-start — check Settings → Channels")
-        except Exception as exc:
-            _st.startup_warnings.append(f"⚠️ Telegram bot failed to auto-start: {exc}")
+    # ── Load Plugins ────────────────────────────────────────────────────────
+    _set("🔌 Loading plugins…")
+    try:
+        from plugins import load_plugins
+        results = await asyncio.to_thread(load_plugins)
+        loaded = sum(1 for r in results if r.success)
+        failed = sum(1 for r in results if not r.success)
+        if loaded or failed:
+            print(f"[startup] 🔌 Plugins: {loaded} loaded, {failed} failed")
+        for r in results:
+            if not r.success and r.error:
+                _st.startup_warnings.append(f"⚠️ Plugin '{r.plugin_id}' failed: {r.error}")
+    except Exception as exc:
+        logger.warning("Plugin loading failed (non-fatal): %s", exc)
 
-    if _ch_config.get("email", "auto_start", False):
-        try:
-            ok = await _email_start()
-            if ok:
-                print("[startup] ✅ Email polling auto-started")
-            else:
-                _st.startup_warnings.append("⚠️ Email polling failed to auto-start — check Settings → Channels")
-        except Exception as exc:
-            _st.startup_warnings.append(f"⚠️ Email polling failed to auto-start: {exc}")
+    # Auto-start channels via registry
+    _set("📡 Starting channels…")
+    # Ensure telegram module is imported so it self-registers
+    import channels.telegram  # noqa: F401
+    for _ch in _ch_registry.all_channels():
+        if _ch_config.get(_ch.name, "auto_start", False):
+            try:
+                ok = await _ch.start()
+                if ok:
+                    print(f"[startup] ✅ {_ch.display_name} auto-started")
+                else:
+                    _st.startup_warnings.append(
+                        f"⚠️ {_ch.display_name} failed to auto-start — check Settings → Channels"
+                    )
+            except Exception as exc:
+                _st.startup_warnings.append(
+                    f"⚠️ {_ch.display_name} failed to auto-start: {exc}"
+                )
+
+
 
     # ── Proactive OAuth token health check ───────────────────────────
     await asyncio.to_thread(_check_oauth_tokens, _st)

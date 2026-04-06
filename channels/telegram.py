@@ -23,7 +23,7 @@ import re
 import threading
 from typing import Any
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ReactionTypeEmoji
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -34,6 +34,7 @@ from telegram.ext import (
 )
 
 import agent as agent_mod
+from channels.base import Channel, ChannelCapabilities, ConfigField
 from threads import _save_thread_meta, _list_threads
 from tools import registry as tool_registry
 
@@ -148,16 +149,33 @@ def _grab_vision_capture() -> bytes | None:
     return None
 
 
-def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None, bytes | None]:
+def _grab_generated_image() -> bytes | None:
+    """Return the last image-gen output as raw bytes, if any."""
+    try:
+        import base64
+        from tools.image_gen_tool import get_and_clear_last_image
+        b64 = get_and_clear_last_image()
+        if b64:
+            return base64.b64decode(b64)
+    except Exception:
+        pass
+    return None
+
+
+def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None, list[bytes]]:
     """Run the agent synchronously, collecting the full response.
 
-    Returns (answer_text, interrupt_data_or_None, captured_image_or_None).
+    Returns (answer_text, interrupt_data_or_None, captured_images).
     """
+    # Ensure recursion limit matches the web UI (default is too low)
+    config = {**config, "recursion_limit": agent_mod.RECURSION_LIMIT_CHAT}
+
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
     full_answer: list[str] = []
     tool_reports: list[str] = []
     interrupt_data: dict | None = None
     used_vision = False
+    used_image_gen = False
 
     for event_type, payload in agent_mod.stream_agent(user_text, enabled, config):
         if event_type == "token":
@@ -166,9 +184,12 @@ def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None, byt
             tool_reports.append(f"🔧 Using {payload}…")
         elif event_type == "tool_done":
             name = payload['name'] if isinstance(payload, dict) else payload
+            raw_name = payload.get('raw_name', '') if isinstance(payload, dict) else ''
             tool_reports.append(f"✅ {name} done")
             if name in ("analyze_image", "👁️ Vision"):
                 used_vision = True
+            if raw_name in ("generate_image", "edit_image"):
+                used_image_gen = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -183,18 +204,27 @@ def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None, byt
     elif tool_reports:
         answer = "\n".join(tool_reports)
 
-    captured = _grab_vision_capture() if used_vision else None
-    return answer or "_(No response)_", interrupt_data, captured
+    captured_images: list[bytes] = []
+    if used_vision:
+        img = _grab_vision_capture()
+        if img:
+            captured_images.append(img)
+    if used_image_gen:
+        img = _grab_generated_image()
+        if img:
+            captured_images.append(img)
+    return answer or "_(No response)_", interrupt_data, captured_images
 
 
 def _resume_agent_sync(config: dict, approved: bool,
-                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, bytes | None]:
+                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, list[bytes]]:
     """Resume a paused agent after interrupt approval/denial."""
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
     full_answer: list[str] = []
     tool_reports: list[str] = []
     interrupt_data: dict | None = None
     used_vision = False
+    used_image_gen = False
 
     for event_type, payload in agent_mod.resume_stream_agent(
         enabled, config, approved, interrupt_ids=interrupt_ids
@@ -205,9 +235,12 @@ def _resume_agent_sync(config: dict, approved: bool,
             tool_reports.append(f"🔧 Using {payload}…")
         elif event_type == "tool_done":
             name = payload['name'] if isinstance(payload, dict) else payload
+            raw_name = payload.get('raw_name', '') if isinstance(payload, dict) else ''
             tool_reports.append(f"✅ {name} done")
             if name in ("analyze_image", "👁️ Vision"):
                 used_vision = True
+            if raw_name in ("generate_image", "edit_image"):
+                used_image_gen = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -222,8 +255,16 @@ def _resume_agent_sync(config: dict, approved: bool,
     elif tool_reports:
         answer = "\n".join(tool_reports)
 
-    captured = _grab_vision_capture() if used_vision else None
-    return answer or "_(No response)_", interrupt_data, captured
+    captured_images: list[bytes] = []
+    if used_vision:
+        img = _grab_vision_capture()
+        if img:
+            captured_images.append(img)
+    if used_image_gen:
+        img = _grab_generated_image()
+        if img:
+            captured_images.append(img)
+    return answer or "_(No response)_", interrupt_data, captured_images
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -506,6 +547,121 @@ def _is_corrupt_thread_error(exc: Exception) -> bool:
     return any(re.search(p, msg) for p in _THREAD_CORRUPT_PATTERNS)
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Reactions & shared response helpers
+# ──────────────────────────────────────────────────────────────────────
+
+async def _react(message, emoji: str) -> None:
+    """Set an emoji reaction on *message*.  Fails silently."""
+    try:
+        await message.set_reaction(ReactionTypeEmoji(emoji))
+    except Exception:
+        log.debug("Could not set reaction %s: bot may lack permission", emoji)
+
+
+async def _send_agent_response(
+    chat, message, chat_id: int, config: dict,
+    answer: str, interrupt_data: dict | None,
+    captured_images: list[bytes],
+) -> None:
+    """Send agent output back to the user (shared by all handlers)."""
+    # Send captured images (vision captures + generated images)
+    for img_bytes in captured_images:
+        try:
+            import io
+            await chat.send_photo(
+                photo=io.BytesIO(img_bytes), caption="🖼️ Image"
+            )
+        except Exception as exc:
+            log.warning("Failed to send image to Telegram: %s", exc)
+
+    if interrupt_data:
+        _pending_interrupts[chat_id] = {
+            "data": interrupt_data,
+            "config": config,
+        }
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Approve", callback_data="interrupt_approve"),
+                InlineKeyboardButton("❌ Deny", callback_data="interrupt_deny"),
+            ]
+        ])
+        await _send_html_msg(chat, _format_interrupt(interrupt_data),
+                             reply_markup=keyboard)
+    else:
+        html = _md_to_html(answer)
+        for chunk in _split_message(html):
+            await _send_html_msg(chat, chunk)
+
+
+async def _run_agent_for_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+    user_text: str,
+) -> None:
+    """Shared flow: auth → interrupt check → agent → response.
+
+    Used by text, voice, photo and document handlers.
+    """
+    chat_id = update.effective_chat.id
+    msg = update.message
+
+    # Block while interrupt is pending
+    if chat_id in _pending_interrupts:
+        await msg.reply_text(
+            "⏸️ There's a pending approval — please tap ✅ Approve or ❌ Deny first."
+        )
+        return
+
+    # Get or create thread config
+    config = context.chat_data.get("thread_config")
+    if config is None:
+        config = _get_or_create_thread(chat_id)
+        context.chat_data["thread_config"] = config
+
+    # React + typing
+    await _react(msg, "👀")
+    await update.effective_chat.send_action("typing")
+
+    loop = asyncio.get_event_loop()
+    try:
+        answer, interrupt_data, captured_images = await loop.run_in_executor(
+            None, _run_agent_sync, user_text, config
+        )
+    except Exception as exc:
+        log.error("Agent error for chat %s: %s", chat_id, exc)
+        if _is_corrupt_thread_error(exc):
+            try:
+                from agent import repair_orphaned_tool_calls
+                await loop.run_in_executor(
+                    None, repair_orphaned_tool_calls, None, config
+                )
+                log.info("Repaired orphaned tool calls for chat %s, retrying", chat_id)
+                answer, interrupt_data, captured_images = await loop.run_in_executor(
+                    None, _run_agent_sync, user_text, config
+                )
+            except Exception as retry_exc:
+                log.error("Retry after repair failed: %s", retry_exc)
+                config = _new_thread(chat_id)
+                context.chat_data["thread_config"] = config
+                await _react(msg, "💔")
+                await msg.reply_text(
+                    "⚠️ The previous conversation had a stuck tool call "
+                    "and couldn't be repaired.\n"
+                    "🆕 I've started a fresh thread — please resend your message."
+                )
+                return
+        else:
+            await _react(msg, "💔")
+            await msg.reply_text(f"⚠️ Error: {exc}")
+            return
+
+    await _react(msg, "👍")
+    await _send_agent_response(
+        update.effective_chat, msg, chat_id, config,
+        answer, interrupt_data, captured_images,
+    )
+
+
 async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming text messages — route to agent."""
     if not _is_authorised(update):
@@ -514,92 +670,11 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    chat_id = update.effective_chat.id
-    text = update.message.text.strip()
+    text = (update.message.text or "").strip()
     if not text:
         return
 
-    # Block new messages while an interrupt is pending
-    if chat_id in _pending_interrupts:
-        await update.message.reply_text(
-            "⏸️ There's a pending approval — please tap ✅ Approve or ❌ Deny first."
-        )
-        return
-
-    # Get or create thread config (persisted in chat_data)
-    config = context.chat_data.get("thread_config")
-    if config is None:
-        config = _get_or_create_thread(chat_id)
-        context.chat_data["thread_config"] = config
-
-    # Send typing indicator
-    await update.effective_chat.send_action("typing")
-
-    # Run agent in executor (blocking call)
-    loop = asyncio.get_event_loop()
-    try:
-        answer, interrupt_data, captured_image = await loop.run_in_executor(
-            None, _run_agent_sync, text, config
-        )
-    except Exception as exc:
-        log.error("Agent error for chat %s: %s", chat_id, exc)
-        # If thread is corrupt (stuck tool call), repair and retry
-        if _is_corrupt_thread_error(exc):
-            try:
-                from agent import repair_orphaned_tool_calls
-                await loop.run_in_executor(
-                    None, repair_orphaned_tool_calls, None, config
-                )
-                log.info("Repaired orphaned tool calls for chat %s, retrying", chat_id)
-                answer, interrupt_data, captured_image = await loop.run_in_executor(
-                    None, _run_agent_sync, text, config
-                )
-            except Exception as retry_exc:
-                log.error("Retry after repair failed for chat %s: %s", chat_id, retry_exc)
-                # Repair failed — fall back to a fresh thread
-                config = _new_thread(chat_id)
-                context.chat_data["thread_config"] = config
-                await update.message.reply_text(
-                    "⚠️ The previous conversation had a stuck tool call and couldn't be repaired.\n"
-                    "🆕 I've started a fresh thread — please resend your message."
-                )
-                return
-        else:
-            await update.message.reply_text(f"⚠️ Error: {exc}")
-            return
-
-    # Send captured vision image if available
-    if captured_image:
-        try:
-            import io
-            await update.effective_chat.send_photo(
-                photo=io.BytesIO(captured_image), caption="📷 Captured image"
-            )
-        except Exception as exc:
-            log.warning("Failed to send vision capture to Telegram: %s", exc)
-
-    if interrupt_data:
-        _pending_interrupts[chat_id] = {
-            "data": interrupt_data,
-            "config": config,
-        }
-        # Send interrupt with inline keyboard
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Approve", callback_data="interrupt_approve"),
-                InlineKeyboardButton("❌ Deny", callback_data="interrupt_deny"),
-            ]
-        ])
-        await _send_html(
-            update.message,
-            _format_interrupt(interrupt_data),
-            reply_markup=keyboard,
-        )
-    else:
-        # Send response as formatted HTML (split if needed)
-        html = _md_to_html(answer)
-        for chunk in _split_message(html):
-            await _send_html(update.message, chunk)
+    await _run_agent_for_message(update, context, text)
 
 
 async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -628,7 +703,7 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     loop = asyncio.get_event_loop()
     try:
-        answer, new_interrupt, captured_image = await loop.run_in_executor(
+        answer, new_interrupt, captured_images = await loop.run_in_executor(
             None, lambda: _resume_agent_sync(config, approved, interrupt_ids=interrupt_ids),
         )
     except Exception as exc:
@@ -644,15 +719,15 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.effective_chat.send_message(f"⚠️ Error: {exc}")
         return
 
-    # Send captured vision image if available
-    if captured_image:
+    # Send captured images (vision + generated)
+    for img_bytes in captured_images:
         try:
             import io
             await update.effective_chat.send_photo(
-                photo=io.BytesIO(captured_image), caption="📷 Captured image"
+                photo=io.BytesIO(img_bytes), caption="🖼️ Image"
             )
         except Exception as exc:
-            log.warning("Failed to send vision capture to Telegram: %s", exc)
+            log.warning("Failed to send image to Telegram: %s", exc)
 
     if new_interrupt:
         _pending_interrupts[chat_id] = {
@@ -674,6 +749,148 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         html = _md_to_html(answer)
         for chunk in _split_message(html):
             await _send_html_msg(update.effective_chat, chunk)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Inbound media handlers (voice, photo, document)
+# ──────────────────────────────────────────────────────────────────────
+
+async def _handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle incoming voice notes / audio — transcribe and route to agent."""
+    if not _is_authorised(update):
+        await update.message.reply_text(
+            f"⛔ Unauthorised. Your user ID is {update.effective_user.id}."
+        )
+        return
+
+    voice = update.message.voice or update.message.audio
+    if voice is None:
+        return
+
+    await _react(update.message, "🎤")
+
+    try:
+        tg_file = await voice.get_file()
+        data = await tg_file.download_as_bytearray()
+    except Exception as exc:
+        log.error("Failed to download voice file: %s", exc)
+        await update.message.reply_text("⚠️ Could not download voice note.")
+        return
+
+    # Determine file extension
+    mime = getattr(voice, "mime_type", "") or ""
+    if "ogg" in mime:
+        ext = ".ogg"
+    elif "mp3" in mime or "mpeg" in mime:
+        ext = ".mp3"
+    elif "webm" in mime:
+        ext = ".webm"
+    elif "wav" in mime:
+        ext = ".wav"
+    else:
+        ext = ".ogg"  # Telegram default
+
+    from channels.media import transcribe_audio
+    text = transcribe_audio(bytes(data), file_ext=ext)
+    if not text:
+        await update.message.reply_text("⚠️ Could not transcribe your voice note.")
+        return
+
+    await update.message.reply_text(f"🎤 _{text}_", parse_mode="Markdown")
+    await _run_agent_for_message(update, context, text)
+
+
+async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle incoming photos — analyse via vision and route to agent."""
+    if not _is_authorised(update):
+        await update.message.reply_text(
+            f"⛔ Unauthorised. Your user ID is {update.effective_user.id}."
+        )
+        return
+
+    photos = update.message.photo
+    if not photos:
+        return
+
+    # Take highest resolution
+    photo = photos[-1]
+
+    try:
+        tg_file = await photo.get_file()
+        data = await tg_file.download_as_bytearray()
+    except Exception as exc:
+        log.error("Failed to download photo: %s", exc)
+        await update.message.reply_text("⚠️ Could not download the photo.")
+        return
+
+    caption = (update.message.caption or "").strip()
+    question = caption if caption else "Describe this image in detail."
+
+    from channels.media import analyze_image
+    description = analyze_image(bytes(data), question=question)
+
+    if not description:
+        await update.message.reply_text("⚠️ Could not analyse the photo.")
+        return
+
+    # Build context for the agent
+    if caption:
+        agent_text = (
+            f"[User sent a photo with caption: {caption}]\n\n"
+            f"Image analysis: {description}"
+        )
+    else:
+        agent_text = (
+            f"[User sent a photo]\n\n"
+            f"Image analysis: {description}"
+        )
+
+    await _run_agent_for_message(update, context, agent_text)
+
+
+async def _handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle incoming documents/files — save to inbox, extract text, and route to agent."""
+    if not _is_authorised(update):
+        await update.message.reply_text(
+            f"⛔ Unauthorised. Your user ID is {update.effective_user.id}."
+        )
+        return
+
+    doc = update.message.document
+    if doc is None:
+        return
+
+    filename = doc.file_name or "unknown_file"
+
+    try:
+        tg_file = await doc.get_file()
+        data = await tg_file.download_as_bytearray()
+    except Exception as exc:
+        log.error("Failed to download document: %s", exc)
+        await update.message.reply_text("⚠️ Could not download the document.")
+        return
+
+    raw_bytes = bytes(data)
+
+    from channels.media import save_inbound_file, extract_document_text
+    saved_path = save_inbound_file(raw_bytes, filename)
+
+    # Extract text content so the agent can work with it directly
+    extracted = extract_document_text(raw_bytes, filename)
+
+    caption = (update.message.caption or "").strip()
+
+    # Build rich context for the agent
+    parts = [f"[User sent a file: {filename}]"]
+    parts.append(f"Saved to: {saved_path}")
+    if extracted:
+        parts.append(f"\n--- File content ---\n{extracted}\n--- End of file ---")
+    else:
+        parts.append("(Could not extract text — file may be image-based or unsupported format)")
+    if caption:
+        parts.append(f"\nUser's message: {caption}")
+
+    await _run_agent_for_message(update, context, "\n".join(parts))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -706,6 +923,9 @@ async def start_bot() -> bool:
     _app.add_handler(CommandHandler("tools", _cmd_tools))
     _app.add_handler(CommandHandler("status", _cmd_status))
     _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
+    _app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, _handle_voice))
+    _app.add_handler(MessageHandler(filters.PHOTO, _handle_photo))
+    _app.add_handler(MessageHandler(filters.Document.ALL, _handle_document))
     _app.add_handler(CallbackQueryHandler(_handle_callback))
 
     # Register commands with BotFather for autocomplete
@@ -826,3 +1046,119 @@ def send_document(chat_id: int, file_path: str, *, caption: str | None = None) -
 
     future = asyncio.run_coroutine_threadsafe(_send(), _bot_loop)
     future.result(timeout=60)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Channel ABC implementation
+# ──────────────────────────────────────────────────────────────────────
+
+# Alias to avoid name collision with class methods
+_send_photo_fn = send_photo
+_send_document_fn = send_document
+
+
+class TelegramChannel(Channel):
+    """Telegram channel adapter implementing the Channel ABC.
+
+    Delegates to the module-level functions above for full backward compat.
+    """
+
+    @property
+    def name(self) -> str:
+        return "telegram"
+
+    @property
+    def display_name(self) -> str:
+        return "Telegram"
+
+    @property
+    def icon(self) -> str:
+        return "send"
+
+    @property
+    def setup_guide(self) -> str:
+        return (
+            "### Quick Setup\n"
+            "1. Message [@BotFather](https://t.me/BotFather) → `/newbot`\n"
+            "2. Copy the **Bot Token**\n"
+            "3. Message [@userinfobot](https://t.me/userinfobot) for your **User ID**\n"
+            "4. Paste both below and click **Save**\n"
+            "5. Click **▶️ Start Bot**"
+        )
+
+    @property
+    def capabilities(self) -> ChannelCapabilities:
+        return ChannelCapabilities(
+            photo_in=True,
+            voice_in=True,
+            document_in=True,
+            photo_out=True,
+            document_out=True,
+            buttons=True,
+            streaming=False,
+            typing=True,
+            reactions=True,
+            slash_commands=False,
+        )
+
+    @property
+    def config_fields(self) -> list[ConfigField]:
+        return [
+            ConfigField(
+                key="bot_token",
+                label="Bot Token",
+                field_type="password",
+                storage="env",
+                env_key="TELEGRAM_BOT_TOKEN",
+                help_text="Bot token from @BotFather",
+            ),
+            ConfigField(
+                key="user_id",
+                label="Your Telegram User ID",
+                field_type="text",
+                storage="env",
+                env_key="TELEGRAM_USER_ID",
+                help_text="Your numeric user ID (access control)",
+            ),
+        ]
+
+    async def start(self) -> bool:
+        return await start_bot()
+
+    async def stop(self) -> None:
+        await stop_bot()
+
+    def is_configured(self) -> bool:
+        return is_configured()
+
+    def is_running(self) -> bool:
+        return is_running()
+
+    def send_message(self, target: str | int, text: str) -> None:
+        send_outbound(int(target), text)
+
+    def send_photo(self, target: str | int, file_path: str,
+                   caption: str | None = None) -> None:
+        _send_photo_fn(int(target), file_path, caption=caption)
+
+    def send_document(self, target: str | int, file_path: str,
+                      caption: str | None = None) -> None:
+        _send_document_fn(int(target), file_path, caption=caption)
+
+    def send_approval_request(self, target: str | int,
+                              interrupt_data: Any,
+                              config: dict) -> None:
+        # Handled inline by _handle_message — not called externally
+        pass
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Register with channel registry
+# ──────────────────────────────────────────────────────────────────────
+_tg_channel = TelegramChannel()
+
+try:
+    from channels import registry as _ch_registry
+    _ch_registry.register(_tg_channel)
+except Exception:
+    pass  # registry not yet available (shouldn't happen)

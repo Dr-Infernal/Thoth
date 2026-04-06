@@ -2,6 +2,181 @@
 
 ---
 
+## v3.12.0 — Plugin System, Multi-Channel Architecture & Image Generation
+
+Thoth gains a full **plugin architecture** with a built-in **marketplace**, a **multi-channel messaging framework** that abstracts Telegram behind a generic Channel ABC (ready for Slack, Discord, and more), a complete **Telegram upgrade** with voice transcription, photo analysis, document extraction, and emoji reactions, an **image generation tool** powered by OpenAI/OpenRouter, a **Google Account setup wizard**, and expanded **task delivery** to any channel. Ships with **168 new tests** across 8 sections, bringing the total to **1133 PASS**, 0 FAIL, 2 WARN.
+
+### 🔌 Plugin Architecture
+
+A self-contained plugin runtime in `plugins/` handles the full lifecycle — discovery, validation, sandboxing, loading, and teardown.
+
+- **Plugin API** — `PluginAPI` bridge object and `PluginTool` base class are the only core imports a plugin needs; provides `get_config()`, `set_config()`, `get_secret()`, `set_secret()`, `register_tool()`, `register_skill()`
+- **Manifest system** — each plugin declares metadata in `plugin.json`: ID, version, author, description, tools, skills, settings schema, API keys, and Python dependencies; validated against a strict schema (ID regex, semver, required fields)
+- **Security sandbox** — static scan blocks `eval()`, `exec()`, `os.system()`, `subprocess`, and `__import__()`; import guard prevents loading from core modules (`tools`, `agent`, `models`, `ui`); `register()` call has a 5-second timeout
+- **Dependency safety** — freezes core dependency versions before installing plugin deps; blocks downgrades that could break Thoth
+- **State persistence** — enable/disable state, config values, and API key secrets stored in `plugin_state.json` and `plugin_secrets.json` (restricted file permissions) under `~/.thoth/`
+- **Hot reload** — "Reload Plugins" button in Settings clears the registry and re-runs discovery without restarting the app; agent cache is invalidated automatically
+- **Skill auto-discovery** — `SKILL.md` files in a plugin's `skills/` directory are detected and injected into the agent's system prompt alongside built-in skills
+- **Version gating** — plugins declare `min_thoth_version`; loader rejects incompatible plugins with a clear error message
+
+### 🏪 Plugin Marketplace
+
+A browse-and-install marketplace powered by a GitHub-hosted `index.json` catalog.
+
+- **Marketplace client** — fetches and caches the plugin index with TTL-based refresh; provides search, tag filtering, and update detection
+- **Browse dialog** — NiceGUI dialog with search bar, tag filter pills, and one-click install buttons
+- **Install/update/uninstall** — downloads plugin archives, validates before install, manages `~/.thoth/installed_plugins/`; duplicate installs rejected; security violations block installation
+- **Update detection** — `check_updates()` compares installed versions against the marketplace index
+
+### ⚙️ Plugin Settings UI
+
+A dedicated **Plugins** tab in Settings for managing all installed plugins.
+
+- **Card grid** — each plugin rendered as a card with icon, name, version badge, description, tool/skill count badges, and enable/disable toggle
+- **Missing API key warnings** — cards show a warning badge when required secrets are not configured
+- **Per-plugin config dialog** — opens plugin details with API key inputs, settings controls, tools/skills list, and actions (update, uninstall)
+- **Empty state** — "No plugins installed" with a marketplace call-to-action
+
+### 🔗 Plugin API v2
+
+Plugin tools gain richer return types and safety metadata.
+
+- **`_run()` method** — plugins can now override `_run()` instead of `execute()` for a cleaner interface; base class handles argument parsing and error wrapping
+- **`background_allowed` flag** — plugin tools declare whether they are safe to run in background task workflows; defaults to `False`
+- **`destructive` flag** — marks tools that perform irreversible actions; gated from background execution unless explicitly allowed
+- **Rich returns** — tool results can include structured data (dicts, lists) that the agent interprets contextually
+
+### 🖼️ Image Generation Tool
+
+Generate and edit images via OpenAI/OpenRouter, rendered inline in chat.
+
+- **`generate_image`** — creates images from text prompts; supports `gpt-image-1`, `gpt-image-1.5`, `gpt-image-1-mini` models with configurable size and quality
+- **`edit_image`** — modifies existing images; sources: `"last"` (most recent generation), filename (from attachment cache), or file path on disk
+- **Side-channel rendering** — `_last_generated_image` passed to UI streaming layer for inline display; cleared after use
+- **Attachment cache** — pasted/attached images stored in `_image_cache` (populated by `ui/streaming.py`) so the agent can reference them by filename
+- **Model selector** — configurable in Settings → Models; default `openai/gpt-image-1.5`
+
+### 📡 Channel Architecture (Multi-Channel Foundation)
+
+A generic channel abstraction that decouples messaging from any single platform.
+
+- **`Channel` ABC** — abstract base class all channel adapters inherit from; lifecycle methods `start()`, `stop()`, `is_configured()`, `is_running()`; outbound methods `send_message()`, `send_photo()`, `send_document()`, `send_approval_request()`
+- **`ChannelCapabilities`** — declarative feature flags per channel (photo in/out, voice in, document in, buttons, streaming, reactions, slash commands); UI and tool factory read capabilities to auto-generate tooling
+- **`ConfigField`** — describes user-configurable fields that render automatically in the Settings UI
+- **Channel registry** — `register()`, `all_channels()`, `running_channels()`, `configured_channels()`; central routing via `deliver(channel_name, target, text)` with validation
+- **Shared media pipeline** — `channels/media.py` provides `transcribe_audio()` (faster-whisper), `analyze_image()` (Vision service), `extract_document_text()` (PDF/CSV/JSON/plain-text), and `save_inbound_file()` — reusable by any channel
+- **Tool factory** — `channels/tool_factory.py` auto-generates LangChain tools (`send_{name}_message`, `send_{name}_photo`, `send_{name}_document`) for each registered channel based on its capabilities; Pydantic input schemas; multi-strategy file path resolution
+- **Channel config** — `channels/config.py` provides per-channel key-value store in `~/.thoth/channels_config.json`
+
+### 📱 Telegram Upgrade
+
+Telegram evolves from a basic text relay into a full-featured channel with rich media handling.
+
+- **Voice messages** — inbound voice/audio transcribed via faster-whisper through the shared media pipeline; transcript sent to agent as user text
+- **Photo messages** — inbound photos analyzed via Vision service; analysis sent to agent with optional caption
+- **Document handling** — inbound documents saved to `~/.thoth/inbox/`, text extracted (PDF, CSV, JSON, plain text), file path + extracted content + caption sent to agent as one message
+- **Image generation delivery** — `_grab_generated_image()` retrieves the last generated image from the image gen side-channel and sends it as a photo in Telegram
+- **Emoji reactions** — real-time status feedback using Telegram's native reaction API: 👀 (processing), 👍 (success), 💔 (error); graceful fallback if bot lacks permission
+- **Interrupt approval** — tool calls requiring human approval render as inline keyboard buttons in Telegram (Approve / Deny)
+- **Auto-recovery** — handles orphaned tool calls gracefully; offers fresh thread on persistent failures
+- **Bot commands** — registered with BotFather for discoverability
+
+### 🔑 Google Account Setup Wizard
+
+A unified setup flow for Google OAuth (Gmail + Calendar) in the Settings UI.
+
+- **Step-by-step wizard** — guides users through creating OAuth credentials, downloading `credentials.json`, and completing the authorization flow
+- **Token health checks** — periodic validation (every 6 hours) with silent refresh; desktop notifications on token expiry
+- **Unified section** — Gmail and Calendar OAuth managed together under a single "Google Account" settings section
+
+### 📋 Task System Enhancements
+
+- **Delivery channels** — tasks can route results to Telegram (or future channels) via `delivery_channel` / `delivery_target` fields with validation
+- **Model override** — per-task LLM selection via `model_override` field
+- **Persistent threads** — `persistent_thread_id` reuses the same conversation thread across task runs
+- **Notify-only mode** — `notify_only` flag fires a notification without agent invocation
+- **Skills override** — `skills_override` for per-task skill selection
+- **Schema migration** — new columns added to tasks table with automatic migration from old `workflows.db`
+
+### 🔗 Core Integration
+
+The plugin system and channel framework touch a minimal set of core files.
+
+- **`app.py`** — calls `load_plugins()` at startup; auto-starts configured channels; periodic OAuth token health check (every 6 hours)
+- **`agent.py`** — injects plugin tools + channel tools into the LangChain tools list; plugin skills into the system prompt; `clear_agent_cache()` exported for plugin/channel reload
+- **`ui/settings.py`** — Plugins tab, marketplace dialog, Google Account wizard, channel configuration sections
+
+### 🐛 Bug Fixes
+
+- **Telegram reactions not appearing** — 🔄/✅/❌ are not in Telegram's supported reaction set; swapped to 👀/👍/💔 which are supported natively
+- **Image generation not shown in Telegram** — `_grab_generated_image()` now retrieves the side-channel image and sends it as a photo
+- **"Tool limit reached" false message** — misleading error when tool calls completed normally; message removed
+- **Document text extraction for Telegram** — inbound documents now have text extracted and included in the agent message
+- **Plugin dependency install crash** — `install_dependencies()` returns `tuple[bool, str]` but installer called `.ok`/`.conflicts` on it; fixed with proper tuple unpacking
+- **No auto-reload after marketplace install** — installed plugins now trigger full plugin reload + agent cache clear so tools are available immediately
+- **Plugin tools not reaching agent after reload** — agent cache key only includes core tool names; `clear_agent_cache()` now called in both manual reload and marketplace install flows
+
+### 🧪 Tests
+
+- **168 new tests** across 8 sections (49–56), bringing the total to **1133 PASS**, 0 FAIL, 2 WARN
+- **Section 49: Plugin System** (25 tests) — imports, manifest validation, PluginAPI, PluginTool, state, secrets, registry, security scan, full lifecycle, broken plugin handling, disabled plugins, skills prompt, unregister, state cleanup, agent/app source verification
+- **Section 50: Plugin Settings UI** (7 tests) — UI module imports, `_get_missing_keys` logic, callability checks, settings wiring, AST parse validation
+- **Section 51: Marketplace & Installer** (19 tests) — marketplace parse/search/tags/entries, installer install/update/uninstall, duplicate rejection, security violation blocking, update detection
+- **Section 52: Image Generation Tool** (31 tests) — model registry, provider detection, input schemas, generate/edit tool creation, side-channel image retrieval, attachment cache, base64 data-URI rendering, config parsing
+- **Section 53: Plugin API v2** (17 tests) — `_run()` override, `background_allowed`/`destructive` flags, rich return types, backward compatibility with `execute()`
+- **Section 54: Google Account Setup** (17 tests) — OAuth wizard flow, token validation, credential file handling, unified settings section, periodic health check
+- **Section 55: Channel Infrastructure** (26 tests) — Channel ABC, ChannelCapabilities, ConfigField, registry lifecycle, media pipeline (transcribe/analyze/extract), tool factory generation, delivery routing and validation
+- **Section 56: Telegram Phase 1** (26 tests) — voice/photo/document inbound handling, reaction emoji (👀/👍/💔), image gen delivery, interrupt buttons, auto-recovery, bot command registration
+
+### 🔄 Other Changes
+
+- **License** — switched from MIT to Apache 2.0 across the entire project
+- **`channels/email.py` removed** — replaced by the generic channel architecture
+- **`ui/render.py`** — `render_image_with_save()` for inline image thumbnails with download; `autolink_urls()` for bare URL wrapping
+- **`ui/streaming.py`** — image generation side-channel capture; tool result image extraction pipeline
+- **`ui/helpers.py`** — thread reload now filters empty-content AI messages that caused rendering errors
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`plugins/__init__.py`** | **New** — Package init; re-exports `load_plugins` and `get_load_summary` |
+| **`plugins/api.py`** | **New** — Plugin author API: `PluginAPI` bridge and `PluginTool` base class |
+| **`plugins/loader.py`** | **New** — Plugin discovery, validation, security scan, loading with timeout |
+| **`plugins/manifest.py`** | **New** — Manifest parser and schema validator for `plugin.json` |
+| **`plugins/registry.py`** | **New** — Plugin tool/skill registry with collision detection |
+| **`plugins/state.py`** | **New** — State persistence for enable/disable, config, and secrets |
+| **`plugins/sandbox.py`** | **New** — Dependency safety: freeze core deps, block downgrades |
+| **`plugins/installer.py`** | **New** — Install, update, uninstall; fixed tuple unpacking in `_install_plugin_deps()` |
+| **`plugins/marketplace.py`** | **New** — Marketplace client: fetch index, search, check updates |
+| **`plugins/ui_settings.py`** | **New** — Plugins tab: card grid, reload button, missing key warnings; `clear_agent_cache()` on reload |
+| **`plugins/ui_plugin_dialog.py`** | **New** — Per-plugin config dialog: details, API keys, settings, actions |
+| **`plugins/ui_marketplace.py`** | **New** — Marketplace browse dialog; `_reload_plugins_and_agent()` auto-reload after install |
+| **`channels/base.py`** | **New** — Channel ABC, `ChannelCapabilities`, `ConfigField` |
+| **`channels/registry.py`** | **New** — Channel registry: register, discover, route, validate delivery |
+| **`channels/media.py`** | **New** — Shared media pipeline: transcribe, analyze, extract, save |
+| **`channels/tool_factory.py`** | **New** — Auto-generate LangChain tools per channel from capabilities |
+| **`channels/config.py`** | Per-channel key-value config store |
+| **`channels/telegram.py`** | Full upgrade: voice/photo/document inbound, reactions, image gen delivery, interrupt buttons |
+| **`channels/email.py`** | **Removed** — replaced by generic channel architecture |
+| **`tools/image_gen_tool.py`** | **New** — Image generation + editing via OpenAI/OpenRouter with side-channel rendering |
+| **`tools/__init__.py`** | Added `image_gen_tool` import for registry auto-registration |
+| **`app.py`** | Plugin loading, channel auto-start loop, periodic OAuth health check |
+| **`agent.py`** | Plugin + channel tool injection; `clear_agent_cache()` export; background workflow gating |
+| **`tasks.py`** | Delivery channels, model override, persistent threads, notify-only, skills override, schema migration |
+| **`ui/settings.py`** | Plugins tab, marketplace dialog, Google Account wizard, channel config sections |
+| **`ui/render.py`** | `render_image_with_save()`, `autolink_urls()` for inline images and URL linking |
+| **`ui/streaming.py`** | Image gen side-channel capture, tool result image extraction |
+| **`ui/helpers.py`** | Thread reload filters empty-content AI messages |
+| **`ui/chat.py`** | Minor fix for drag-drop handler |
+| **`ui/home.py`** | Removed legacy email status references |
+| **`ui/status_checks.py`** | Removed legacy email health-check pill |
+| **`LICENSE`** | MIT → Apache 2.0 |
+| **`NOTICE`** | **New** — Apache 2.0 attribution file |
+| **`test_suite.py`** | 168 new tests in sections 49–56 |
+
+---
+
 ## v3.11.0 — Wiki Vault, Dream Cycle, Document Extraction & Knowledge Consolidation
 
 Three major knowledge systems land in this release. **Wiki Vault** exports the entire knowledge graph as an Obsidian-compatible markdown vault with YAML frontmatter, wiki-links, and per-type indexes. **Dream Cycle** runs nightly background refinement — merging duplicate entities, enriching thin descriptions from conversation context, and inferring missing relationships — with a three-layer anti-contamination system that prevents cross-entity fact-bleed. **Document Knowledge Extraction** processes uploaded documents through a map-reduce LLM pipeline, extracting entities and relations into the knowledge graph with full source provenance. The Settings UI consolidates all knowledge features under a unified **Knowledge tab**, the graph panel gains source filtering and recency glow, and the status bar grows to 17 health-check pills.
