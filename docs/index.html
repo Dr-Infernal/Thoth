@@ -1,34 +1,86 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>𓁟 Thoth — Personal AI Sovereignty</title>
-    <meta name="description" content="A local-first AI assistant built for personal AI sovereignty. 25 integrated tools, personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, habit tracking, messaging channels, image generation, and community plugins. Run everything locally via Ollama, or add opt-in cloud models (GPT, Claude, Gemini) when you need frontier reasoning. Your data stays on your machine either way.">
+    <title>&#x1305F; Thoth - Personal AI Sovereignty</title>
+    <meta name="description" content="A local-first AI assistant built for personal AI sovereignty. 25 integrated tools, personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, habit tracking, messaging channels, image generation, and community plugins. Run everything locally via Ollama, or add opt-in cloud models when you need frontier reasoning. Your data stays on your machine either way.">
+
+    <!-- Canonical -->
+    <link rel="canonical" href="https://siddsachar.github.io/Thoth/">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://siddsachar.github.io/Thoth/">
+    <meta property="og:title" content="Thoth - Personal AI Sovereignty">
+    <meta property="og:description" content="A local-first AI assistant with 25 integrated tools, a personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, and a plugin marketplace. Your data stays on your machine.">
+    <meta property="og:image" content="https://img.youtube.com/vi/xYJC2IVKH7Y/maxresdefault.jpg">
+    <meta property="og:image:width" content="1280">
+    <meta property="og:image:height" content="720">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Thoth - Personal AI Sovereignty">
+    <meta name="twitter:description" content="A local-first AI assistant with 25 tools, knowledge graph, voice, vision, shell, browser automation, and plugins. Your data stays on your machine.">
+    <meta name="twitter:image" content="https://img.youtube.com/vi/xYJC2IVKH7Y/maxresdefault.jpg">
+
+    <!-- Favicon (inline SVG) -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1305F;</text></svg>">
+
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Thoth",
+        "description": "A local-first AI assistant built for personal AI sovereignty with 25 integrated tools, a personal knowledge graph, voice, vision, and a plugin marketplace.",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Windows 10/11, macOS",
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+        },
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "url": "https://siddsachar.github.io/Thoth/",
+        "downloadUrl": "https://github.com/siddsachar/Thoth/releases",
+        "softwareVersion": "3.12.0",
+        "author": {
+            "@type": "Person",
+            "name": "siddsachar",
+            "url": "https://github.com/siddsachar"
+        }
+    }
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #0a0e14;
-            --surface: #131920;
-            --surface-raised: #1a2230;
-            --border: #2a3344;
-            --border-hover: #3d4f66;
-            --text: #e8edf4;
-            --text-muted: #8494a7;
+            --bg: #0b0d10;
+            --bg-alt: #101318;
+            --surface: #151920;
+            --surface-raised: #1c2129;
+            --border: #232a35;
+            --border-hover: #3a4556;
+            --text: #e2e6ed;
+            --text-dim: #9aa3b4;
+            --text-faint: #636d7e;
             --accent: #c9a227;
             --accent-hover: #dbb634;
-            --accent-dim: #a68620;
-            --accent-glow: rgba(201, 162, 39, 0.12);
-            --accent-glow-strong: rgba(201, 162, 39, 0.25);
+            --accent-dim: rgba(201, 162, 39, 0.15);
             --green: #3fb950;
-            --red: #f85149;
+            --serif: 'Instrument Serif', Georgia, 'Times New Roman', serif;
+            --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            --mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        html { scroll-behavior: smooth; }
+        html { scroll-behavior: smooth; scroll-padding-top: 72px; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            font-family: var(--sans);
             background: var(--bg);
             color: var(--text);
             line-height: 1.65;
@@ -36,264 +88,620 @@
             -webkit-font-smoothing: antialiased;
         }
 
-        /* ── Navigation ──────────────────────────────────── */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 9999;
+            opacity: 0.025;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            background-repeat: repeat;
+            background-size: 256px 256px;
+        }
+
+        .container { max-width: 1080px; margin: 0 auto; padding: 0 2rem; }
+        .container--narrow { max-width: 760px; margin: 0 auto; padding: 0 2rem; }
+        section { position: relative; }
+
+        .section-divider {
+            height: 1px;
+            background: linear-gradient(90deg, transparent 0%, var(--border) 20%, var(--border) 80%, transparent 100%);
+        }
+
         nav {
             position: fixed;
             top: 0;
             width: 100%;
-            padding: 0.9rem 2rem;
+            padding: 0 2rem;
+            height: 56px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: rgba(10, 14, 20, 0.88);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
+            background: rgba(11, 13, 16, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             border-bottom: 1px solid var(--border);
             z-index: 100;
         }
 
-        nav .logo {
-            font-size: 1.35rem;
-            font-weight: 700;
+        .nav-wordmark {
+            font-family: var(--serif);
+            font-size: 1.4rem;
             color: var(--accent);
             text-decoration: none;
-            letter-spacing: 0.02em;
+            letter-spacing: 0.01em;
         }
 
-        nav .nav-links { display: flex; align-items: center; gap: 0.25rem; }
+        .nav-wordmark span { opacity: 0.5; margin-right: 0.35rem; }
+        .nav-links { display: flex; align-items: center; gap: 0.15rem; }
 
-        nav .nav-links a {
-            color: var(--text-muted);
+        .nav-links a {
+            color: var(--text-dim);
             text-decoration: none;
-            font-size: 0.9rem;
-            padding: 0.4rem 0.85rem;
+            font-size: 0.85rem;
+            padding: 0.35rem 0.7rem;
             border-radius: 6px;
-            transition: color 0.2s, background 0.2s;
+            transition: color 0.2s, background 0.15s;
         }
 
-        nav .nav-links a:hover {
-            color: var(--text);
-            background: rgba(255,255,255,0.05);
+        .nav-links a:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+
+        .nav-dl {
+            color: var(--bg) !important;
+            background: var(--accent) !important;
+            font-weight: 600 !important;
+            margin-left: 0.4rem !important;
         }
 
-        nav .nav-links .btn-nav {
-            color: #000;
-            background: var(--accent);
-            font-weight: 600;
-            margin-left: 0.5rem;
-        }
+        .nav-dl:hover { background: var(--accent-hover) !important; }
+        .nav-links a.active { color: var(--accent); }
 
-        nav .nav-links .btn-nav:hover {
-            background: var(--accent-hover);
-            color: #000;
-        }
-
-        /* ── Hero ────────────────────────────────────────── */
-        .hero {
-            min-height: auto;
-            display: flex;
+        /* ── Hamburger menu (mobile) ──────────────────── */
+        .nav-toggle { display: none; }
+        .nav-hamburger {
+            display: none;
+            cursor: pointer;
+            width: 28px;
+            height: 20px;
             flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            text-align: center;
-            padding: 7.5rem 2rem 4rem;
-            position: relative;
+            justify-content: space-between;
         }
 
-        .hero::before {
+        .nav-hamburger span {
+            display: block;
+            height: 2px;
+            width: 100%;
+            background: var(--text-dim);
+            border-radius: 1px;
+            transition: all 0.25s;
+        }
+
+        /* ── YouTube lite facade ──────────────────────── */
+        .yt-facade {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            cursor: pointer;
+            background: var(--surface-raised) center / cover no-repeat;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .yt-facade::after {
             content: '';
             position: absolute;
-            top: -5%;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 800px;
-            height: 800px;
-            background: radial-gradient(circle, var(--accent-glow-strong) 0%, var(--accent-glow) 30%, transparent 65%);
-            pointer-events: none;
+            inset: 0;
+            background: rgba(0,0,0,0.25);
+            transition: background 0.2s;
         }
 
-        .hero-icon {
-            font-size: 4rem;
-            margin-bottom: 1rem;
+        .yt-facade:hover::after { background: rgba(0,0,0,0.1); }
+
+        .yt-facade-play {
+            position: relative;
+            z-index: 1;
+            width: 68px;
+            height: 48px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .yt-facade:hover .yt-facade-play { background: #c9a227; }
+
+        .yt-facade-play::after {
+            content: '';
+            display: block;
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 10px 0 10px 18px;
+            border-color: transparent transparent transparent #fff;
+            margin-left: 3px;
+        }
+
+        /* ── Back to top button ───────────────────────── */
+        .back-to-top {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
             color: var(--accent);
-            filter: drop-shadow(0 0 40px rgba(201, 162, 39, 0.35));
-            animation: glow-pulse 4s ease-in-out infinite;
+            font-size: 1.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s, transform 0.2s, border-color 0.2s;
+            z-index: 90;
         }
 
-        @keyframes glow-pulse {
-            0%, 100% { filter: drop-shadow(0 0 30px rgba(201, 162, 39, 0.3)); }
-            50% { filter: drop-shadow(0 0 50px rgba(201, 162, 39, 0.5)); }
+        .back-to-top.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .back-to-top:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        /* ── Scroll progress bar ──────────────────────── */
+        .scroll-progress {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 2px;
+            width: 0%;
+            background: var(--accent);
+            z-index: 200;
+            transition: width 0.05s linear;
+        }
+
+        /* ── Hero entrance animation ─────────────────── */
+        @keyframes hero-fade-up {
+            from { opacity: 0; transform: translateY(24px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .hero-eyebrow { animation: hero-fade-up 0.6s ease-out both; }
+        .hero h1 { animation: hero-fade-up 0.6s ease-out 0.1s both; }
+        .hero-body { animation: hero-fade-up 0.6s ease-out 0.2s both; }
+        .hero-actions { animation: hero-fade-up 0.6s ease-out 0.3s both; }
+        .hero-meta { animation: hero-fade-up 0.6s ease-out 0.4s both; }
+        .hero .video-block { animation: hero-fade-up 0.6s ease-out 0.5s both; }
+
+        /* ── Scroll fade-in ───────────────────────────── */
+        .reveal {
+            opacity: 0;
+            transform: translateY(28px);
+            transition: opacity 0.65s ease-out, transform 0.65s ease-out;
+        }
+
+        .reveal.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .hero {
+            padding: 9rem 2rem 5rem;
+            max-width: 860px;
+            margin: 0 auto;
+        }
+
+        .hero-eyebrow {
+            font-family: var(--mono);
+            font-size: 0.78rem;
+            color: var(--accent);
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            margin-bottom: 1.25rem;
         }
 
         .hero h1 {
-            font-size: 3.2rem;
-            font-weight: 800;
-            letter-spacing: -0.03em;
-            line-height: 1.1;
-            margin-bottom: 0.3rem;
-        }
-
-        .hero h1 span { color: var(--accent); }
-
-        .hero .subtitle {
-            font-size: 1.25rem;
-            color: var(--accent-dim);
-            font-weight: 600;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
+            font-family: var(--serif);
+            font-size: 4rem;
+            font-weight: 400;
+            line-height: 1.08;
+            letter-spacing: -0.02em;
             margin-bottom: 1.5rem;
+            color: var(--text);
         }
 
-        .hero .tagline {
-            font-size: 1.15rem;
-            color: var(--text-muted);
-            max-width: 680px;
-            margin-bottom: 1.5rem;
-            line-height: 1.6;
+        .hero h1 em { font-style: italic; color: var(--accent); }
+
+        .hero-body {
+            font-size: 1.12rem;
+            color: var(--text-dim);
+            max-width: 620px;
+            line-height: 1.7;
+            margin-bottom: 2.25rem;
         }
 
-        .hero-buttons {
+        .hero-actions {
             display: flex;
-            gap: 1rem;
+            gap: 0.75rem;
             flex-wrap: wrap;
-            justify-content: center;
+            align-items: center;
+            margin-bottom: 1.5rem;
         }
 
         .btn {
             display: inline-flex;
             align-items: center;
-            gap: 0.5rem;
-            padding: 0.9rem 2.2rem;
+            gap: 0.45rem;
+            padding: 0.75rem 1.75rem;
             border-radius: 8px;
-            font-size: 1.05rem;
+            font-size: 0.95rem;
             font-weight: 600;
             text-decoration: none;
-            transition: all 0.25s;
+            transition: all 0.2s;
             cursor: pointer;
             border: none;
+            font-family: var(--sans);
         }
 
-        .btn-primary {
-            background: var(--accent);
-            color: #000;
+        .btn--primary { background: var(--accent); color: var(--bg); }
+        .btn--primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+
+        .btn-hint {
+            font-size: 0.68rem;
+            font-family: var(--mono);
+            opacity: 0.6;
+            font-weight: 400;
+            margin-left: 0.15rem;
         }
 
-        .btn-primary:hover {
-            background: var(--accent-hover);
-            box-shadow: 0 4px 24px rgba(201, 162, 39, 0.35);
-            transform: translateY(-2px);
-        }
-
-        .btn-secondary {
+        .btn--ghost {
             background: transparent;
-            color: var(--text);
+            color: var(--text-dim);
             border: 1px solid var(--border);
         }
 
-        .btn-secondary:hover {
-            background: var(--surface);
-            border-color: var(--border-hover);
-            transform: translateY(-1px);
-        }
+        .btn--ghost:hover { border-color: var(--border-hover); color: var(--text); }
 
-        .hero-meta {
-            margin-top: 1.25rem;
-            display: flex;
-            gap: 2rem;
-            flex-wrap: wrap;
-            justify-content: center;
-        }
+        .hero-meta { display: flex; gap: 1.75rem; flex-wrap: wrap; }
 
         .hero-meta span {
-            font-size: 0.88rem;
-            color: var(--text-muted);
-            display: flex;
-            align-items: center;
-            gap: 0.35rem;
+            font-size: 0.82rem;
+            color: var(--text-faint);
+            font-family: var(--mono);
         }
 
-        /* ── Sovereignty Banner ──────────────────────────── */
-        .sovereignty {
-            padding: 4.5rem 2rem;
-            text-align: center;
-            position: relative;
-        }
-
-        .sovereignty::before {
-            content: '';
+        .hero-glyph {
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
+            top: 6.5rem;
+            right: -1rem;
+            font-size: 18rem;
+            color: var(--accent);
+            opacity: 0.04;
+            pointer-events: none;
+            user-select: none;
+            line-height: 1;
+            z-index: 0;
         }
 
-        .sovereignty .container {
-            max-width: 780px;
-            margin: 0 auto;
-        }
+        .hero > *:not(.hero-glyph) { position: relative; z-index: 1; }
 
-        .sovereignty blockquote {
-            font-size: 1.2rem;
-            color: var(--text-muted);
-            line-height: 1.8;
-            font-style: italic;
-            border-left: 3px solid var(--accent);
-            padding-left: 1.5rem;
-            margin: 0;
-        }
-
-        .sovereignty blockquote strong {
-            color: var(--text);
-            font-style: normal;
-        }
-
-        /* ── Comparison Table ────────────────────────────── */
-        .comparison {
-            padding: 6rem 2rem;
+        .video-block {
+            margin: 3rem 0;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border);
             background: var(--surface);
+        }
+
+        .video-block iframe {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            display: block;
+            border: none;
+            background: var(--surface-raised);
+        }
+
+        .highlight-visual iframe {
+            background: var(--surface-raised);
+        }
+
+        .video-caption {
+            padding: 0.85rem 1.25rem;
+            font-size: 0.82rem;
+            color: var(--text-faint);
             border-top: 1px solid var(--border);
-            border-bottom: 1px solid var(--border);
+            font-family: var(--mono);
         }
 
-        .comparison .container {
-            max-width: 900px;
+        .manifesto { padding: 6rem 2rem; }
+
+        .manifesto blockquote {
+            font-family: var(--serif);
+            font-size: 1.65rem;
+            line-height: 1.5;
+            color: var(--text-dim);
+            border: none;
+            padding: 0;
+            max-width: 700px;
             margin: 0 auto;
+            text-align: center;
         }
 
-        .comparison h2 {
-            text-align: center;
-            font-size: 2.2rem;
-            font-weight: 700;
+        .manifesto blockquote strong { color: var(--text); font-weight: 400; }
+        .manifesto blockquote em { color: var(--accent); font-style: normal; }
+
+        .two-paths { padding: 6rem 0; }
+        .two-paths-header { text-align: center; margin-bottom: 3rem; }
+
+        .section-heading {
+            font-family: var(--serif);
+            font-size: 2.6rem;
+            font-weight: 400;
+            letter-spacing: -0.015em;
+            line-height: 1.15;
             margin-bottom: 0.6rem;
         }
 
-        .comparison .subtitle {
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 1.05rem;
-            margin-bottom: 2.5rem;
+        .section-sub { font-size: 1rem; color: var(--text-dim); }
+
+        .paths-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.25rem;
         }
+
+        .path-block {
+            padding: 2.25rem;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--surface);
+        }
+
+        .path-block:hover {
+            border-color: var(--border-hover);
+            box-shadow: 0 0 24px rgba(201, 162, 39, 0.06);
+        }
+
+        .path-label {
+            font-family: var(--mono);
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--accent);
+            margin-bottom: 0.85rem;
+        }
+
+        .path-block h3 {
+            font-family: var(--serif);
+            font-size: 1.5rem;
+            font-weight: 400;
+            margin-bottom: 0.6rem;
+        }
+
+        .path-block p {
+            font-size: 0.92rem;
+            color: var(--text-dim);
+            line-height: 1.65;
+            margin-bottom: 0.85rem;
+        }
+
+        .path-list { list-style: none; padding: 0; }
+
+        .path-list li {
+            font-size: 0.88rem;
+            color: var(--text-dim);
+            padding: 0.3rem 0;
+            padding-left: 1rem;
+            position: relative;
+        }
+
+        .path-list li::before {
+            content: '\2014';
+            position: absolute;
+            left: 0;
+            color: var(--text-faint);
+        }
+
+        .paths-footnote {
+            margin-top: 2.5rem;
+            font-size: 0.95rem;
+            color: var(--text-dim);
+            line-height: 1.7;
+            text-align: center;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .paths-footnote strong { color: var(--text); }
+
+        .feature-section { padding: 5rem 0; }
+        .feature-section .section-heading { margin-bottom: 2.5rem; }
+
+        .feature-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature-item {
+            padding: 1.75rem;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface);
+            transition: border-color 0.2s;
+        }
+
+        .feature-item:hover {
+            border-color: var(--border-hover);
+            box-shadow: 0 0 24px rgba(201, 162, 39, 0.06);
+        }
+
+        .feature-icon {
+            font-size: 1.15rem;
+            margin-bottom: 0.6rem;
+            display: block;
+            opacity: 0.5;
+        }
+
+        .feature-item h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-bottom: 0.45rem;
+        }
+
+        .feature-item p {
+            font-size: 0.88rem;
+            color: var(--text-dim);
+            line-height: 1.65;
+        }
+
+        .feature-item--wide { grid-column: 1 / -1; }
+
+        .feature-tag {
+            display: inline-block;
+            margin-top: 0.6rem;
+            padding: 0.15rem 0.5rem;
+            font-size: 0.68rem;
+            font-weight: 600;
+            font-family: var(--mono);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            border-radius: 4px;
+            background: var(--accent-dim);
+            color: var(--accent);
+        }
+
+        .highlight { padding: 5rem 0; }
+
+        .highlight-inner {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4rem;
+            align-items: center;
+        }
+
+        .highlight-text h2 {
+            font-family: var(--serif);
+            font-size: 2.2rem;
+            font-weight: 400;
+            line-height: 1.2;
+            margin-bottom: 1rem;
+        }
+
+        .highlight-text p {
+            font-size: 0.95rem;
+            color: var(--text-dim);
+            line-height: 1.7;
+            margin-bottom: 0.75rem;
+        }
+
+        .highlight-text p:last-of-type { margin-bottom: 0; }
+
+        .highlight-visual {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            background: var(--surface);
+        }
+
+        .highlight-visual iframe {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            display: block;
+            border: none;
+        }
+
+        .highlight--reverse .highlight-inner { direction: rtl; }
+        .highlight--reverse .highlight-inner > * { direction: ltr; }
+
+        .tools { padding: 5rem 0; }
+        .tools-header { margin-bottom: 2.5rem; }
+        .tool-group { margin-bottom: 2rem; }
+
+        .tool-group-label {
+            font-family: var(--mono);
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--accent);
+            margin-bottom: 0.75rem;
+        }
+
+        .tool-count {
+            color: var(--text-faint);
+            font-weight: 400;
+            margin-left: 0.35rem;
+        }
+
+        .tool-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+        .tool-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.45rem 0.85rem;
+            font-size: 0.82rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--surface);
+            color: var(--text-dim);
+            transition: border-color 0.2s, color 0.2s;
+        }
+
+        .tool-chip:hover {
+            border-color: var(--border-hover);
+            color: var(--text);
+            box-shadow: 0 0 16px rgba(201, 162, 39, 0.05);
+        }
+
+        .chip-badge {
+            font-size: 0.62rem;
+            font-weight: 600;
+            font-family: var(--mono);
+            text-transform: uppercase;
+            padding: 0.1rem 0.35rem;
+            border-radius: 3px;
+            background: rgba(63, 185, 80, 0.1);
+            color: var(--green);
+        }
+
+        .chip-badge--key {
+            background: var(--accent-dim);
+            color: var(--accent);
+        }
+
+        .comparison { padding: 5rem 0; }
 
         .comparison table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.92rem;
+            font-size: 0.88rem;
         }
 
         .comparison th, .comparison td {
-            padding: 0.85rem 1.1rem;
+            padding: 0.85rem 1rem;
             text-align: left;
             border-bottom: 1px solid var(--border);
         }
 
         .comparison th {
-            color: var(--text-muted);
-            font-weight: 600;
-            font-size: 0.82rem;
+            font-family: var(--mono);
+            font-size: 0.72rem;
             text-transform: uppercase;
-            letter-spacing: 0.06em;
+            letter-spacing: 0.08em;
+            color: var(--text-faint);
+            font-weight: 500;
         }
 
         .comparison th:last-child { color: var(--accent); }
@@ -302,991 +710,776 @@
             font-weight: 600;
             color: var(--text);
             white-space: nowrap;
+            width: 130px;
         }
 
-        .comparison td:nth-child(2) { color: var(--text-muted); }
+        .comparison td:nth-child(2) { color: var(--text-faint); }
+        .comparison td:nth-child(2) s { text-decoration: line-through; text-decoration-color: rgba(99, 109, 126, 0.4); }
+        .comparison td:last-child { color: var(--text-dim); }
 
-        .comparison td:last-child { color: var(--text); }
+        .install { padding: 5rem 0; }
 
-        /* ── Features ────────────────────────────────────── */
-        .features {
-            padding: 6rem 2rem;
-        }
-
-        .features .container {
-            max-width: 1140px;
-            margin: 0 auto;
-        }
-
-        .features h2 {
-            text-align: center;
-            font-size: 2.2rem;
-            font-weight: 700;
-            margin-bottom: 0.6rem;
-        }
-
-        .features .subtitle {
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 1.05rem;
-            margin-bottom: 3rem;
-        }
-
-        .features-grid {
+        .install-steps {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 1.25rem;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            margin-top: 2.5rem;
         }
 
-        .feature-card {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 2rem;
-            transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s;
-        }
-
-        .feature-card:hover {
-            border-color: var(--accent);
-            transform: translateY(-3px);
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-        }
-
-        .feature-card .icon {
-            font-size: 2rem;
-            margin-bottom: 0.85rem;
-            display: inline-block;
-        }
-
-        .feature-card h3 {
-            font-size: 1.12rem;
-            font-weight: 700;
-            margin-bottom: 0.5rem;
-        }
-
-        .feature-card p {
-            font-size: 0.92rem;
-            color: var(--text-muted);
-            line-height: 1.65;
-        }
-
-        .feature-card .feature-tag {
-            display: inline-block;
-            margin-top: 0.75rem;
-            padding: 0.2rem 0.6rem;
-            font-size: 0.72rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-radius: 4px;
-            background: rgba(201, 162, 39, 0.12);
-            color: var(--accent);
-        }
-
-        /* ── Tools section ───────────────────────────────── */
-        .tools-section {
-            padding: 6rem 2rem;
-            background: var(--surface);
-            border-top: 1px solid var(--border);
-            border-bottom: 1px solid var(--border);
-        }
-
-        .tools-section .container {
-            max-width: 1140px;
-            margin: 0 auto;
-        }
-
-        .tools-section h2 {
-            text-align: center;
-            font-size: 2.2rem;
-            font-weight: 700;
-            margin-bottom: 0.6rem;
-        }
-
-        .tools-section .subtitle {
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 1.05rem;
-            margin-bottom: 3rem;
-        }
-
-        .tools-category {
-            margin-bottom: 2.5rem;
-        }
-
-        .tools-category h3 {
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--accent);
-            font-weight: 600;
-            margin-bottom: 1rem;
-            padding-left: 0.25rem;
-        }
-
-        .tools-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 0.85rem;
-        }
-
-        .tool-card {
-            background: var(--bg);
+        .install-step {
+            padding: 1.75rem;
             border: 1px solid var(--border);
             border-radius: 10px;
-            padding: 1.15rem;
-            text-align: center;
-            transition: border-color 0.2s, transform 0.2s;
-        }
-
-        .tool-card:hover {
-            border-color: var(--accent);
-            transform: translateY(-2px);
-        }
-
-        .tool-card .tool-icon { font-size: 1.6rem; margin-bottom: 0.4rem; }
-
-        .tool-card .tool-name {
-            font-weight: 600;
-            font-size: 0.9rem;
-            margin-bottom: 0.2rem;
-        }
-
-        .tool-card .tool-desc {
-            font-size: 0.78rem;
-            color: var(--text-muted);
-        }
-
-        .tool-card .tool-badge {
-            display: inline-block;
-            margin-top: 0.4rem;
-            padding: 0.12rem 0.45rem;
-            font-size: 0.65rem;
-            font-weight: 600;
-            border-radius: 3px;
-            background: rgba(63, 185, 80, 0.12);
-            color: var(--green);
-        }
-
-        .tool-card .tool-badge.key {
-            background: rgba(201, 162, 39, 0.12);
-            color: var(--accent);
-        }
-
-        /* ── How It Works ────────────────────────────────── */
-        .how-it-works {
-            padding: 6rem 2rem;
-        }
-
-        .how-it-works .container {
-            max-width: 800px;
-            margin: 0 auto;
-        }
-
-        .how-it-works h2 {
-            text-align: center;
-            font-size: 2.2rem;
-            font-weight: 700;
-            margin-bottom: 3rem;
-        }
-
-        .steps {
-            display: flex;
-            flex-direction: column;
-            gap: 2rem;
-            position: relative;
-        }
-
-        .steps::before {
-            content: '';
-            position: absolute;
-            left: 21px;
-            top: 44px;
-            bottom: 22px;
-            width: 2px;
-            background: var(--border);
-        }
-
-        .step {
-            display: flex;
-            gap: 1.5rem;
-            align-items: flex-start;
-            position: relative;
-        }
-
-        .step-number {
-            flex-shrink: 0;
-            width: 44px;
-            height: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            background: var(--accent);
-            color: #000;
-            font-weight: 700;
-            font-size: 1.05rem;
-            z-index: 1;
-        }
-
-        .step-content h3 {
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-bottom: 0.3rem;
-        }
-
-        .step-content p {
-            color: var(--text-muted);
-            font-size: 0.95rem;
-        }
-
-        .step-content code {
-            background: var(--surface-raised);
-            padding: 0.15rem 0.4rem;
-            border-radius: 4px;
-            font-size: 0.88rem;
-            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-        }
-
-        /* ── Privacy ─────────────────────────────────────── */
-        .privacy {
-            padding: 5rem 2rem;
-            text-align: center;
             background: var(--surface);
-            border-top: 1px solid var(--border);
-            border-bottom: 1px solid var(--border);
         }
 
-        .privacy .container {
-            max-width: 720px;
-            margin: 0 auto;
+        .install-step-num {
+            font-family: var(--mono);
+            font-size: 0.72rem;
+            color: var(--accent);
+            letter-spacing: 0.08em;
+            margin-bottom: 0.65rem;
         }
+
+        .install-step h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.4rem;
+        }
+
+        .install-step p {
+            font-size: 0.88rem;
+            color: var(--text-dim);
+            line-height: 1.6;
+        }
+
+        .install-step code {
+            font-family: var(--mono);
+            font-size: 0.82rem;
+            background: var(--surface-raised);
+            padding: 0.12rem 0.4rem;
+            border-radius: 4px;
+        }
+
+        .privacy { padding: 5rem 0; text-align: center; }
 
         .privacy h2 {
-            font-size: 2rem;
-            font-weight: 700;
+            font-family: var(--serif);
+            font-size: 2.2rem;
+            font-weight: 400;
             margin-bottom: 1rem;
         }
 
         .privacy p {
-            color: var(--text-muted);
-            font-size: 1.05rem;
+            font-size: 0.95rem;
+            color: var(--text-dim);
             line-height: 1.7;
+            max-width: 620px;
+            margin: 0 auto 2rem;
         }
 
-        .privacy-badges {
+        .privacy-facts {
             display: flex;
             justify-content: center;
-            gap: 1.5rem;
-            margin-top: 2.5rem;
+            gap: 2rem;
             flex-wrap: wrap;
         }
 
-        .privacy-badge {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.65rem 1.2rem;
-            border-radius: 8px;
-            border: 1px solid var(--border);
-            background: var(--bg);
-            font-size: 0.88rem;
-            color: var(--text-muted);
-            transition: border-color 0.2s;
+        .privacy-fact {
+            font-family: var(--mono);
+            font-size: 0.78rem;
+            color: var(--text-faint);
+            letter-spacing: 0.02em;
         }
 
-        .privacy-badge:hover { border-color: var(--accent); }
-
-        .privacy-badge .icon { font-size: 1.15rem; }
-
-        /* ── CTA ─────────────────────────────────────────── */
-        .cta {
-            padding: 6rem 2rem;
-            text-align: center;
-        }
+        .cta { padding: 6rem 0; text-align: center; }
 
         .cta h2 {
-            font-size: 2.4rem;
-            font-weight: 700;
+            font-family: var(--serif);
+            font-size: 2.8rem;
+            font-weight: 400;
             margin-bottom: 0.65rem;
         }
 
-        .cta h2 span { color: var(--accent); }
+        .cta h2 em { color: var(--accent); font-style: italic; }
+        .cta p { color: var(--text-dim); font-size: 1rem; margin-bottom: 2rem; }
+        .cta-buttons { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
 
-        .cta p {
-            color: var(--text-muted);
-            font-size: 1.1rem;
-            margin-bottom: 2rem;
-        }
-
-        /* ── Footer ──────────────────────────────────────── */
-        footer {
-            padding: 2rem;
+        /* ── Tech stack strip ────────────────────────── */
+        .tech-strip {
+            padding: 2rem 2rem;
             text-align: center;
-            font-size: 0.82rem;
-            color: var(--text-muted);
             border-top: 1px solid var(--border);
         }
 
-        footer a {
-            color: var(--text-muted);
-            text-decoration: none;
-            transition: color 0.2s;
-        }
-
-        footer a:hover { color: var(--text); }
-
-        /* ── Responsive ──────────────────────────────────── */
-        @media (max-width: 768px) {
-            .hero h1 { font-size: 2.6rem; }
-            .hero .subtitle { font-size: 1rem; }
-            .hero .tagline { font-size: 1.1rem; }
-            .hero-icon { font-size: 4rem; }
-            .features-grid { grid-template-columns: 1fr; }
-            .tools-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
-            .hero-meta { gap: 1rem; }
-            nav .nav-links a { padding: 0.3rem 0.6rem; font-size: 0.82rem; }
-            .comparison table { font-size: 0.82rem; }
-            .comparison td:first-child { white-space: normal; }
-            .features h2, .how-it-works h2, .cta h2,
-            .tools-section h2, .comparison h2 { font-size: 1.8rem; }
-            .dual-path-grid { grid-template-columns: 1fr; }
-        }
-
-        @media (max-width: 480px) {
-            .hero h1 { font-size: 2rem; }
-            nav .nav-links .btn-nav { display: none; }
-            .hero-meta { flex-direction: column; gap: 0.5rem; }
-            .comparison th, .comparison td { padding: 0.6rem 0.5rem; }
-        }
-
-        /* ── Dual-path section ───────────────────────────── */
-        .dual-path {
-            padding: 6rem 2rem;
-            background: var(--surface);
-            border-top: 1px solid var(--border);
-            border-bottom: 1px solid var(--border);
-        }
-
-        .dual-path .container {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-
-        .dual-path h2 {
-            text-align: center;
-            font-size: 2.2rem;
-            font-weight: 700;
-            margin-bottom: 0.6rem;
-        }
-
-        .dual-path .subtitle {
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 1.05rem;
-            margin-bottom: 3rem;
-        }
-
-        .dual-path-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1.5rem;
-        }
-
-        .path-card {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 2rem;
-            transition: border-color 0.25s;
-        }
-
-        .path-card:hover { border-color: var(--accent); }
-
-        .path-card .path-icon { font-size: 2.2rem; margin-bottom: 0.8rem; }
-
-        .path-card h3 {
-            font-size: 1.15rem;
-            font-weight: 700;
-            margin-bottom: 0.5rem;
-        }
-
-        .path-card p {
-            font-size: 0.92rem;
-            color: var(--text-muted);
-            line-height: 1.65;
+        .tech-strip-label {
+            font-family: var(--mono);
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-faint);
             margin-bottom: 0.75rem;
         }
 
-        .path-card ul {
-            list-style: none;
-            padding: 0;
+        .tech-strip-items {
+            display: flex;
+            justify-content: center;
+            gap: 1.75rem;
+            flex-wrap: wrap;
         }
 
-        .path-card ul li {
-            font-size: 0.88rem;
-            color: var(--text-muted);
-            padding: 0.25rem 0;
+        .tech-strip-items span {
+            font-family: var(--mono);
+            font-size: 0.78rem;
+            color: var(--text-dim);
+            letter-spacing: 0.02em;
         }
 
-        .path-card ul li::before {
-            content: '✓ ';
-            color: var(--accent);
-            font-weight: 600;
-        }
-
-        .bottom-line {
-            margin-top: 2.5rem;
+        footer {
+            padding: 2rem 2rem;
             text-align: center;
-            font-size: 0.95rem;
-            color: var(--text-muted);
-            line-height: 1.7;
-            max-width: 700px;
-            margin-left: auto;
-            margin-right: auto;
+            font-family: var(--mono);
+            font-size: 0.75rem;
+            color: var(--text-faint);
+            border-top: 1px solid var(--border);
         }
 
-        .bottom-line strong { color: var(--text); }
+        footer a { color: var(--text-faint); text-decoration: none; transition: color 0.2s; }
+        footer a:hover { color: var(--text-dim); }
+
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2.8rem; }
+            .section-heading { font-size: 2rem; }
+            .paths-grid { grid-template-columns: 1fr; }
+            .feature-row { grid-template-columns: 1fr; }
+            .highlight-inner { grid-template-columns: 1fr; gap: 2rem; }
+            .highlight--reverse .highlight-inner { direction: ltr; }
+            .install-steps { grid-template-columns: 1fr; }
+            .manifesto blockquote { font-size: 1.3rem; }
+            .comparison td:first-child { white-space: normal; }
+
+            .nav-hamburger { display: flex; }
+            .nav-links {
+                position: fixed;
+                top: 56px;
+                left: 0;
+                right: 0;
+                flex-direction: column;
+                background: rgba(11, 13, 16, 0.97);
+                backdrop-filter: blur(12px);
+                -webkit-backdrop-filter: blur(12px);
+                padding: 1rem;
+                gap: 0.25rem;
+                border-bottom: 1px solid var(--border);
+                transform: translateY(-120%);
+                transition: transform 0.3s ease;
+            }
+
+            .nav-toggle:checked ~ .nav-links {
+                transform: translateY(0);
+            }
+
+            .nav-toggle:checked ~ .nav-hamburger span:nth-child(1) {
+                transform: rotate(45deg) translate(5px, 6px);
+            }
+
+            .nav-toggle:checked ~ .nav-hamburger span:nth-child(2) { opacity: 0; }
+
+            .nav-toggle:checked ~ .nav-hamburger span:nth-child(3) {
+                transform: rotate(-45deg) translate(5px, -6px);
+            }
+
+            .nav-links a { padding: 0.6rem 0.85rem; font-size: 0.9rem; }
+            .nav-dl { margin-left: 0 !important; text-align: center; }
+        }
+
+        @media (max-width: 480px) {
+            .hero h1 { font-size: 2.2rem; }
+            .hero-meta { flex-direction: column; gap: 0.4rem; }
+            .comparison th, .comparison td { padding: 0.6rem 0.5rem; }
+            .privacy-facts { flex-direction: column; align-items: center; gap: 0.5rem; }
+        }
     </style>
 </head>
 <body>
 
-    <!-- Navigation -->
+    <div class="scroll-progress"></div>
+
     <nav>
-        <a href="#" class="logo">𓁟 Thoth</a>
+        <a href="#" class="nav-wordmark"><span>&#x1305F;</span> Thoth</a>
+        <input type="checkbox" class="nav-toggle" id="nav-toggle">
+        <label class="nav-hamburger" for="nav-toggle"><span></span><span></span><span></span></label>
         <div class="nav-links">
             <a href="#features">Features</a>
             <a href="#tools">Tools</a>
-            <a href="#comparison">vs Cloud AI</a>
+            <a href="#comparison">Compare</a>
             <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="btn-nav">⬇ Windows</a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="btn-nav">⬇ macOS</a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="nav-dl">Windows</a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="nav-dl">macOS</a>
         </div>
     </nav>
 
-    <!-- Hero Section -->
     <section class="hero">
-        <div class="hero-icon">𓁟</div>
-        <h1>Meet <span>Thoth</span></h1>
-        <p class="subtitle">Personal AI Sovereignty</p>
-        <p class="tagline">
-            A local-first AI assistant with 25 integrated tools, a personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, health tracking, messaging channels, image generation, and a community plugin marketplace. Run everything locally via Ollama, or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data stays on your machine.
+        <div class="hero-glyph">&#x1305F;</div>
+        <p class="hero-eyebrow">Personal AI Sovereignty</p>
+        <h1>Your AI runs here.<br>Your data stays <em>here.</em></h1>
+        <p class="hero-body">
+            Thoth is a local-first AI assistant with 25 integrated tools, a personal knowledge graph,
+            voice, vision, shell access, browser automation, scheduled tasks, and a plugin marketplace.
+            Run everything locally via Ollama, or add cloud models when you need frontier reasoning.
+            Either way, nothing leaves your machine.
         </p>
-        <div class="hero-buttons">
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="btn btn-primary">
-                ⬇ Download for Windows
-            </a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="btn btn-primary">
-                ⬇ Download for macOS
-            </a>
-            <a href="https://github.com/siddsachar/Thoth" class="btn btn-secondary" target="_blank">
-                ☆ View on GitHub
-            </a>
+        <div class="hero-actions">
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="btn btn--primary">Download for Windows <span class="btn-hint">.exe</span></a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="btn btn--primary">Download for macOS <span class="btn-hint">.dmg</span></a>
+            <a href="https://github.com/siddsachar/Thoth" class="btn btn--ghost" target="_blank">View on GitHub</a>
         </div>
         <div class="hero-meta">
-            <span>🖥️ Windows 10/11</span>
-            <span>🍎 macOS (Apple Silicon &amp; Intel)</span>
-            <span>🆓 Free &amp; open source</span>
-            <span>📜 Apache 2.0 License</span>
+            <span data-count="25" data-prefix="" data-suffix=" tools">0 tools</span>
+            <span data-count="70" data-prefix="" data-suffix=" operations">0 operations</span>
+            <span data-count="39" data-prefix="" data-suffix=" local models">0 local models</span>
+            <span>Apache 2.0 &middot; Free</span>
+        </div>
+
+        <div class="video-block">
+            <div class="yt-facade" data-yt="xYJC2IVKH7Y" style="background-image:url(https://img.youtube.com/vi/xYJC2IVKH7Y/hqdefault.jpg)">
+                <div class="yt-facade-play"></div>
+            </div>
+            <div class="video-caption">See it in action - a quick walkthrough of the core experience</div>
         </div>
     </section>
 
-    <!-- Sovereignty Banner -->
-    <section class="sovereignty">
-        <div class="container">
+    <div class="section-divider"></div>
+
+    <section class="manifesto reveal">
+        <div class="container--narrow">
             <blockquote>
-                Governments are investing billions to keep AI infrastructure within their borders.
-                Thoth applies the same principle to the individual — <strong>your compute, your data,
+                Governments invest billions to keep AI infrastructure within their borders.
+                Thoth applies the same idea to <em>you</em> - <strong>your compute, your data,
                 your choice of model, accountable to no one but you.</strong>
             </blockquote>
         </div>
     </section>
 
-    <!-- Dual Path: Local + Cloud -->
-    <section class="dual-path" id="dual-path">
+    <div class="section-divider"></div>
+
+    <section class="two-paths reveal" id="dual-path">
         <div class="container">
-            <h2>Two paths, one assistant</h2>
-            <p class="subtitle">Run local for full privacy, add cloud when you need it — or both at once</p>
-            <div class="dual-path-grid">
-                <div class="path-card">
-                    <div class="path-icon">🏠</div>
-                    <h3>Local Models (Ollama)</h3>
-                    <p>Full privacy — every LLM call runs on your hardware. No data leaves your machine, ever.</p>
-                    <ul>
-                        <li>39 curated models (Qwen, Llama, Gemma, Mistral, DeepSeek, Phi…)</li>
+            <div class="two-paths-header">
+                <h2 class="section-heading">Two paths, one assistant</h2>
+                <p class="section-sub">Run local for full privacy, add cloud when you need it, or both at once</p>
+            </div>
+
+            <div class="paths-grid">
+                <div class="path-block">
+                    <div class="path-label">Local models &middot; Ollama</div>
+                    <h3>Full privacy by default</h3>
+                    <p>Every LLM call runs on your hardware. No data leaves your machine, ever.</p>
+                    <ul class="path-list">
+                        <li>39 curated models - Qwen, Llama, Gemma, Mistral, DeepSeek, Phi</li>
                         <li>Works fully offline after initial download</li>
-                        <li>Free forever — your hardware, your compute</li>
+                        <li>Free forever - your hardware, your compute</li>
                         <li>Default: <code>qwen3:14b</code> (~9 GB, runs well on 16 GB RAM)</li>
                     </ul>
                 </div>
-                <div class="path-card">
-                    <div class="path-icon">☁️</div>
-                    <h3>Cloud Models (Opt-in)</h3>
-                    <p>Frontier reasoning when you need it — no GPU required. Only the current conversation is sent; memories, files, and history never leave.</p>
-                    <ul>
+                <div class="path-block">
+                    <div class="path-label">Cloud models &middot; Opt-in</div>
+                    <h3>Frontier reasoning on demand</h3>
+                    <p>No GPU required. Only the current conversation is sent - memories, files, and history never leave.</p>
+                    <ul class="path-list">
                         <li>OpenAI (GPT) + OpenRouter (100+ models)</li>
-                        <li>Per-thread &amp; per-task model switching — mix freely</li>
-                        <li>Pay-per-token — pennies per conversation with smart trimming</li>
+                        <li>Per-thread &amp; per-task model switching - mix freely</li>
+                        <li>Pay-per-token - pennies per conversation</li>
                         <li>Star favourite models for quick access</li>
                     </ul>
                 </div>
             </div>
-            <p class="bottom-line">
-                <strong>Bottom line:</strong> Cloud AI assistants rent you access to someone else's system. Thoth gives you <strong>personal AI sovereignty</strong> — run local models for full privacy, add cloud when you need it, and keep your data on your machine either way.
-            </p>
-            <p class="bottom-line" style="margin-top: 1rem;">
-                Start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
+
+            <p class="paths-footnote">
+                <strong>Bottom line:</strong> Cloud AI assistants rent you access to someone else's system.
+                Thoth gives you ownership - run local, add cloud, or both, and keep your data on your machine either way.
+                Start with cloud today, and as local models get smarter and hardware gets cheaper,
+                transition to fully local, fully private, fully free AI - seamlessly.
             </p>
         </div>
     </section>
 
-    <!-- Features -->
-    <section class="features" id="features">
+    <div class="section-divider"></div>
+
+    <section class="highlight reveal" id="knowledge-graph">
         <div class="container">
-            <h2>Everything you need, built in</h2>
-            <p class="subtitle">Local-first by design. Cloud-ready when you want it. Your data stays on your machine.</p>
-            <div class="features-grid">
-                <div class="feature-card">
-                    <div class="icon">🔒</div>
-                    <h3>Local-First, Cloud-Ready</h3>
-                    <p>Every voice transcription, memory lookup, and conversation is stored on your machine — always. Run LLMs locally via Ollama for full privacy, or add opt-in cloud models when you need frontier reasoning. With cloud models, only the current conversation is sent; memories, files, and history never leave.</p>
-                    <span class="feature-tag">Core Principle</span>
+            <div class="highlight-inner">
+                <div class="highlight-text">
+                    <h2>A knowledge graph that knows <em>you</em></h2>
+                    <p>
+                        Thoth builds a connected web of people, places, preferences, events, and their relationships -
+                        not just isolated facts. 10 entity types linked through typed relations, so the agent can reason
+                        about how things in your life connect.
+                    </p>
+                    <p>
+                        Graph-enhanced auto-recall surfaces relevant memories plus their connections before every response.
+                        An interactive network diagram renders everything visually - search, filter by type, click nodes
+                        for details, toggle between full-graph and ego-graph views.
+                    </p>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">🤖</div>
+                <div class="highlight-visual">
+                    <div class="yt-facade" data-yt="zEma6vXKWH4" style="background-image:url(https://img.youtube.com/vi/zEma6vXKWH4/hqdefault.jpg)">
+                        <div class="yt-facade-play"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div class="section-divider"></div>
+
+    <section class="feature-section reveal" id="features">
+        <div class="container">
+            <h2 class="section-heading">Everything built in, nothing bolted on</h2>
+
+            <div class="feature-row">
+                <div class="feature-item">
+                    <span class="feature-icon">&#x25C8;</span>
                     <h3>Autonomous ReAct Agent</h3>
-                    <p>The agent reasons about your question, decides which of 25 tools to use, chains multiple lookups, and assembles a complete answer — all autonomously. Smart context trimming keeps multi-tool chains within window limits and reduces API costs. Live token counter tracks usage in real time.</p>
+                    <p>Reasons about your question, decides which of 25 tools to use, chains multiple lookups, and assembles a complete answer - all autonomously. Smart context trimming keeps multi-tool chains within window limits. Live token counter tracks usage in real time.</p>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">🧠</div>
-                    <h3>Personal Knowledge Graph</h3>
-                    <p>Thoth builds a connected web of people, places, preferences, events, and their relationships — not just isolated facts. 10 entity types (person, preference, fact, event, place, project, organisation, concept, skill, media) are linked through typed relations (e.g. Dad &rarr; father_of &rarr; You), so the agent can reason about how things in your life connect. Graph-enhanced auto-recall surfaces relevant memories plus their connections before every response.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="icon">🕸️</div>
-                    <h3>Memory Visualization</h3>
-                    <p>An interactive network diagram renders your entire knowledge graph on the home screen — search, filter by entity type, click nodes for details, toggle between full-graph and ego-graph views. Color-coded categories, relation labels on edges, and a fit-to-view button make it easy to explore everything the agent knows about you.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="icon">🖥️</div>
+                <div class="feature-item">
+                    <span class="feature-icon">&#x276F;</span>
                     <h3>Shell Access</h3>
-                    <p>Run shell commands through natural conversation — install packages, manage git repos, run scripts, automate system tasks. 3-tier safety: safe commands run instantly, moderate commands require approval, dangerous commands are blocked outright. Persistent sessions per thread with inline terminal output.</p>
+                    <p>Run shell commands through natural conversation - install packages, manage git repos, run scripts. 3-tier safety: safe commands run instantly, moderate commands require approval, dangerous commands are blocked. Persistent sessions per thread.</p>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">🌐</div>
+            </div>
+
+            <div class="feature-row">
+                <div class="feature-item">
+                    <span class="feature-icon">&#x29BE;</span>
                     <h3>Browser Automation</h3>
-                    <p>Autonomous web browsing in a real, visible Chromium window — navigate, click, fill forms, scroll, and manage tabs through natural conversation. Accessibility-tree snapshots let the agent see and interact with page elements by number. Persistent profile keeps you logged in across sessions.</p>
+                    <p>Autonomous web browsing in a real Chromium window - navigate, click, fill forms, scroll, manage tabs through conversation. Accessibility-tree snapshots let the agent see and interact with elements by number. Persistent profile keeps you logged in.</p>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">⚡</div>
+                <div class="feature-item">
+                    <span class="feature-icon">&#x25EF;</span>
+                    <h3>Voice &amp; Text-to-Speech</h3>
+                    <p>Local speech-to-text via faster-whisper (CPU, int8 quantized) and neural TTS via Kokoro with 10 voice options. Mic auto-mutes during playback. Fully hands-free, fully offline - no cloud APIs touch your voice data.</p>
+                </div>
+            </div>
+
+            <div class="feature-row">
+                <div class="feature-item">
+                    <span class="feature-icon">&#x29D6;</span>
                     <h3>Tasks &amp; Scheduling</h3>
-                    <p>Build named, multi-step tasks that run on 7 schedule types — daily, weekly, weekdays, weekends, interval, cron, or one-shot delay. Per-task model override (local or cloud), channel delivery to Telegram, template variables, persistent run history, stop/cancel from anywhere, and 5 built-in templates.</p>
+                    <p>Named, multi-step tasks on 7 schedule types - daily, weekly, weekdays, weekends, interval, cron, or one-shot delay. Per-task model override, channel delivery to Telegram, template variables, persistent run history, and 5 built-in templates.</p>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">📋</div>
+                <div class="feature-item">
+                    <span class="feature-icon">&#x2261;</span>
                     <h3>Habit &amp; Health Tracker</h3>
-                    <p>Track medications, symptoms, exercise, periods, mood, sleep — through natural conversation. <em>"I took my Lexapro"</em> → logged. 7 built-in analyses: adherence, streaks, trends, co-occurrence. Results auto-export to CSV and chain to interactive Plotly charts.</p>
+                    <p>Track medications, symptoms, exercise, periods, mood, sleep - through natural conversation. &#8220;I took my Lexapro&#8221; &#8594; logged. 7 built-in analyses: adherence, streaks, trends, co-occurrence. Auto-export to CSV and interactive Plotly charts.</p>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">📬</div>
+            </div>
+
+            <div class="feature-row">
+                <div class="feature-item">
+                    <span class="feature-icon">&#x2B21;</span>
                     <h3>Multi-Channel Messaging</h3>
-                    <p>A pluggable channel framework with capability detection, shared media pipeline, and auto-generated tools per channel. Telegram is fully live — voice transcription, photo analysis, document extraction, emoji reactions, and inline approval buttons. Every message runs through the full ReAct agent with all tools. Each chat gets its own persistent thread.</p>
+                    <p>Pluggable channel framework with capability detection and shared media pipeline. Telegram is fully live - voice transcription, photo analysis, document extraction, emoji reactions, inline approval buttons. Every message runs through the full agent.</p>
                     <span class="feature-tag">Upgraded in 3.12</span>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">🎤</div>
-                    <h3>Voice &amp; Text-to-Speech</h3>
-                    <p>Local speech-to-text via faster-whisper (CPU, int8 quantized) and neural TTS via Kokoro with 10 voice options. Mic auto-mutes during playback. Fully hands-free, fully offline — no cloud APIs touch your voice data.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="icon">👁️</div>
+                <div class="feature-item">
+                    <span class="feature-icon">&#x25CE;</span>
                     <h3>Vision &amp; Screen Capture</h3>
-                    <p>Capture images from your webcam or take screenshots and ask questions about them. Works with local vision models or cloud models with vision capability (GPT, Claude). Multi-camera support, inline image display in chat.</p>
+                    <p>Capture from webcam or take screenshots and ask questions about them. Works with local vision models or cloud models. Multi-camera support, inline image display in chat.</p>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">🖥️</div>
-                    <h3>Native Desktop App</h3>
-                    <p>One-click installer, native OS window via pywebview, system tray with status indicator, branded splash screen, and a first-launch setup wizard with Local and Cloud paths. No Docker, no YAML, no terminal needed.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="icon">📊</div>
-                    <h3>Status Monitor</h3>
-                    <p>Animated avatar with 17 health-check pills on the home screen — see Ollama, model, cloud API, email, Telegram, OAuth, scheduler, memory, disk, and network status at a glance. Click any pill to jump to settings. One-click diagnosis with copy-to-clipboard report.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="icon">🔄</div>
-                    <h3>Flexible Model Selection</h3>
-                    <p>39 curated local models (Qwen, Llama, Gemma, Mistral, DeepSeek, Phi, Nemotron) plus cloud models from OpenAI and OpenRouter. Full support for reasoning models — thinking tokens displayed in a collapsible bubble with persistence across reloads. Per-thread and per-task model switching; star your favourites for quick access. Configurable context windows up to 256K tokens.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="icon">📧</div>
+            </div>
+
+            <div class="feature-row">
+                <div class="feature-item">
+                    <span class="feature-icon">&#x2709;</span>
                     <h3>Gmail &amp; Calendar</h3>
-                    <p>Search emails, read threads, draft and send messages with file attachments. View, create, update, and manage calendar events — all through natural language. Tiered permissions let you control read, write, and destructive access independently.</p>
+                    <p>Search emails, read threads, draft and send messages with attachments. View, create, update, and manage calendar events - all through natural language. Tiered permissions let you control read, write, and destructive access independently.</p>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">📁</div>
+                <div class="feature-item">
+                    <span class="feature-icon">&#x2592;</span>
                     <h3>Files, Charts &amp; Data</h3>
-                    <p>Sandboxed file operations with PDF, CSV, Excel, JSON support. Structured files return schema + stats + preview via pandas. Interactive Plotly charts rendered inline — bar, line, scatter, pie, heatmap, and more. Destructive actions require confirmation.</p>
+                    <p>Sandboxed file operations with PDF, CSV, Excel, JSON support. Structured files return schema + stats + preview via pandas. Interactive Plotly charts rendered inline - bar, line, scatter, pie, heatmap, and more.</p>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">🧩</div>
-                    <h3>Bundled Skills</h3>
-                    <p>11 reusable instruction packs that shape how the agent thinks — Data Analyst, Deep Research, Humanizer, Meeting Notes, Daily Briefing, Knowledge Base, and more. Enable from Settings, or create your own. Skills inject domain-specific instructions into the system prompt for specialized behavior.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="icon">📚</div>
-                    <h3>Wiki Vault</h3>
-                    <p>A personal wiki that the agent reads and writes — Markdown articles organized by topic, automatically cross-linked with the knowledge graph. Create, search, list, and update articles through natural conversation. FAISS-indexed for semantic retrieval alongside your documents.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="icon">🌙</div>
-                    <h3>Dream Cycle</h3>
-                    <p>A nightly background process that autonomously enriches your knowledge graph — re-examines recent conversations to discover missed entities, infers new relationships between existing nodes, and writes a structured dream journal. 3-layer anti-contamination prevents fact cross-bleed between entities.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="icon">📤</div>
-                    <h3>Document Knowledge Extraction</h3>
-                    <p>Automatically extracts entities and relationships from uploaded documents into the knowledge graph. PDF, DOCX, TXT, and CSV files are analyzed on upload, enriching your personal knowledge base without manual entry. Provenance tracking links every extracted fact back to its source.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="icon">🎨</div>
+            </div>
+
+            <div class="feature-row">
+                <div class="feature-item">
+                    <span class="feature-icon">&#x25A1;</span>
                     <h3>Image Generation</h3>
-                    <p>Generate and edit images through natural conversation via OpenAI models (gpt-image-1.5, gpt-image-1, gpt-image-1-mini). Describe what you want, and the agent renders the result inline in chat. Paste or attach an existing image to edit it — the agent caches attachments so you can reference them by name.</p>
+                    <p>Generate and edit images through conversation via OpenAI models. Describe what you want, the agent renders it inline. Paste or attach an existing image to edit - the agent caches attachments so you can reference them by name.</p>
                     <span class="feature-tag">New in 3.12</span>
                 </div>
-                <div class="feature-card">
-                    <div class="icon">🔌</div>
+                <div class="feature-item">
+                    <span class="feature-icon">&#x2B22;</span>
                     <h3>Plugin System &amp; Marketplace</h3>
-                    <p>Extend Thoth with community plugins — browse a GitHub-hosted marketplace, install with one click, and manage from Settings. Plugins run in a security sandbox with pattern blocking, dependency safety, and 5-second load timeouts. Hot-reload on enable/disable. Build your own with the PluginAPI bridge for tools and skills.</p>
+                    <p>Browse a GitHub-hosted marketplace, install with one click, manage from Settings. Plugins run in a security sandbox with pattern blocking, dependency safety, and 5-second load timeouts. Hot-reload on enable/disable. Build your own with the PluginAPI.</p>
                     <span class="feature-tag">New in 3.12</span>
                 </div>
             </div>
+
+            <div class="feature-row">
+                <div class="feature-item">
+                    <span class="feature-icon">&#x25B7;</span>
+                    <h3>Bundled Skills</h3>
+                    <p>11 reusable instruction packs - Data Analyst, Deep Research, Humanizer, Meeting Notes, Daily Briefing, and more. Enable from Settings or create your own. Skills inject domain-specific instructions into the system prompt.</p>
+                </div>
+                <div class="feature-item">
+                    <span class="feature-icon">&#x2263;</span>
+                    <h3>Wiki Vault</h3>
+                    <p>A personal wiki the agent reads and writes - Markdown articles organized by topic, cross-linked with the knowledge graph. FAISS-indexed for semantic retrieval alongside your documents.</p>
+                </div>
+            </div>
+
+            <div class="feature-row">
+                <div class="feature-item">
+                    <span class="feature-icon">&#x263D;</span>
+                    <h3>Dream Cycle</h3>
+                    <p>A nightly background process that autonomously enriches your knowledge graph - re-examines recent conversations to discover missed entities, infers new relationships, writes a structured dream journal. 3-layer anti-contamination prevents fact cross-bleed.</p>
+                </div>
+                <div class="feature-item">
+                    <span class="feature-icon">&#x21A5;</span>
+                    <h3>Document Knowledge Extraction</h3>
+                    <p>Automatically extracts entities and relationships from uploaded documents into the knowledge graph. PDF, DOCX, TXT, and CSV analyzed on upload. Provenance tracking links every extracted fact back to its source.</p>
+                </div>
+            </div>
+
+            <div class="feature-row">
+                <div class="feature-item">
+                    <span class="feature-icon">&#x2B1A;</span>
+                    <h3>Native Desktop App</h3>
+                    <p>One-click installer, native OS window via pywebview, system tray with status indicator, branded splash screen, and a first-launch setup wizard. No Docker, no YAML, no terminal needed.</p>
+                </div>
+                <div class="feature-item">
+                    <span class="feature-icon">&#x25C9;</span>
+                    <h3>Status Monitor</h3>
+                    <p>Animated avatar with 17 health-check pills on the home screen - Ollama, model, cloud API, email, Telegram, OAuth, scheduler, memory, disk, and network status at a glance. One-click diagnosis with copy-to-clipboard report.</p>
+                </div>
+            </div>
+
+            <div class="feature-row">
+                <div class="feature-item feature-item--wide">
+                    <span class="feature-icon">&#x2B29;</span>
+                    <h3>Flexible Model Selection</h3>
+                    <p>39 curated local models plus cloud models from OpenAI and OpenRouter. Full reasoning model support - thinking tokens in a collapsible bubble with persistence across reloads. Per-thread and per-task model switching, star your favourites. Configurable context windows up to 256K tokens.</p>
+                </div>
+            </div>
         </div>
     </section>
 
-    <!-- Tools -->
-    <section class="tools-section" id="tools">
+    <div class="section-divider"></div>
+
+    <section class="highlight highlight--reverse reveal">
         <div class="container">
-            <h2>25 Tools · 70 Operations</h2>
-            <p class="subtitle">The agent autonomously decides which tools to use based on your question</p>
-
-            <div class="tools-category">
-                <h3>Search &amp; Knowledge</h3>
-                <div class="tools-grid">
-                    <div class="tool-card">
-                        <div class="tool-icon">🔍</div>
-                        <div class="tool-name">Web Search</div>
-                        <div class="tool-desc">Tavily live search</div>
-                        <div class="tool-badge key">API Key</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🦆</div>
-                        <div class="tool-name">DuckDuckGo</div>
-                        <div class="tool-desc">Free search, no key</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🌐</div>
-                        <div class="tool-name">Wikipedia</div>
-                        <div class="tool-desc">Encyclopedic knowledge</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">📚</div>
-                        <div class="tool-name">Arxiv</div>
-                        <div class="tool-desc">Academic papers</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">▶️</div>
-                        <div class="tool-name">YouTube</div>
-                        <div class="tool-desc">Search + transcripts</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🔗</div>
-                        <div class="tool-name">URL Reader</div>
-                        <div class="tool-desc">Extract web content</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">📄</div>
-                        <div class="tool-name">Documents</div>
-                        <div class="tool-desc">FAISS vector search</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">📚</div>
-                        <div class="tool-name">Wiki</div>
-                        <div class="tool-desc">Personal wiki vault</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
+            <div class="highlight-inner">
+                <div class="highlight-text">
+                    <h2>25 tools the agent wields for you</h2>
+                    <p>
+                        Ask a question in natural language and the agent autonomously decides which tools to chain together.
+                        Search the web, check your email, run a shell command, analyze your screen, and chart the results
+                        - all in a single conversation turn.
+                    </p>
+                    <p>
+                        Every tool works locally by default. The ones that need external APIs are opt-in and individually disableable.
+                    </p>
                 </div>
-            </div>
-
-            <div class="tools-category">
-                <h3>Productivity</h3>
-                <div class="tools-grid">
-                    <div class="tool-card">
-                        <div class="tool-icon">📧</div>
-                        <div class="tool-name">Gmail</div>
-                        <div class="tool-desc">Search, read, draft, send</div>
-                        <div class="tool-badge key">OAuth</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">📅</div>
-                        <div class="tool-name">Calendar</div>
-                        <div class="tool-desc">Events &amp; scheduling</div>
-                        <div class="tool-badge key">OAuth</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">📁</div>
-                        <div class="tool-name">Filesystem</div>
-                        <div class="tool-desc">Sandboxed file ops</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🖥️</div>
-                        <div class="tool-name">Shell</div>
-                        <div class="tool-desc">Commands with safety tiers</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🌐</div>
-                        <div class="tool-name">Browser</div>
-                        <div class="tool-desc">Autonomous web browsing</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">⚡</div>
-                        <div class="tool-name">Tasks</div>
-                        <div class="tool-desc">Scheduled automation</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">📋</div>
-                        <div class="tool-name">Tracker</div>
-                        <div class="tool-desc">Habits &amp; health</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">📬</div>
-                        <div class="tool-name">Telegram</div>
-                        <div class="tool-desc">Send messages &amp; files</div>
-                        <div class="tool-badge key">Bot Token</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="tools-category">
-                <h3>Computation &amp; Analysis</h3>
-                <div class="tools-grid">
-                    <div class="tool-card">
-                        <div class="tool-icon">🧮</div>
-                        <div class="tool-name">Calculator</div>
-                        <div class="tool-desc">Safe math evaluation</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🔢</div>
-                        <div class="tool-name">Wolfram Alpha</div>
-                        <div class="tool-desc">Advanced computation</div>
-                        <div class="tool-badge key">API Key</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🌤️</div>
-                        <div class="tool-name">Weather</div>
-                        <div class="tool-desc">Forecasts via Open-Meteo</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">👁️</div>
-                        <div class="tool-name">Vision</div>
-                        <div class="tool-desc">Camera &amp; screen analysis</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🧠</div>
-                        <div class="tool-name">Memory</div>
-                        <div class="tool-desc">Knowledge graph &amp; recall</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🔍</div>
-                        <div class="tool-name">Conversation Search</div>
-                        <div class="tool-desc">Search past threads</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🖥️</div>
-                        <div class="tool-name">System Info</div>
-                        <div class="tool-desc">OS, CPU, RAM, disk</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">📊</div>
-                        <div class="tool-name">Chart</div>
-                        <div class="tool-desc">Interactive Plotly charts</div>
-                        <div class="tool-badge">Free</div>
-                    </div>
-                    <div class="tool-card">
-                        <div class="tool-icon">🎨</div>
-                        <div class="tool-name">Image Gen</div>
-                        <div class="tool-desc">Generate &amp; edit images</div>
-                        <div class="tool-badge key">API Key</div>
+                <div class="highlight-visual">
+                    <div class="yt-facade" data-yt="3vg1po9IQVg" style="background-image:url(https://img.youtube.com/vi/3vg1po9IQVg/hqdefault.jpg)">
+                        <div class="yt-facade-play"></div>
                     </div>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- Comparison -->
-    <section class="comparison" id="comparison">
+    <div class="section-divider"></div>
+
+    <section class="tools reveal" id="tools">
         <div class="container">
-            <h2>Why not just use ChatGPT?</h2>
-            <p class="subtitle">Cloud AI rents you access to someone else's system. Thoth gives you ownership.</p>
+            <div class="tools-header">
+                <h2 class="section-heading">25 Tools &middot; 70 Operations</h2>
+                <p class="section-sub">The agent picks the right tool based on your question</p>
+            </div>
+
+            <div class="tool-group">
+                <div class="tool-group-label">Search &amp; Knowledge <span class="tool-count">&times; 8</span></div>
+                <div class="tool-chips">
+                    <div class="tool-chip">Web Search <span class="chip-badge chip-badge--key">API</span></div>
+                    <div class="tool-chip">DuckDuckGo <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Wikipedia <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">arXiv <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">YouTube <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">URL Reader <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Documents <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Wiki Vault <span class="chip-badge">Free</span></div>
+                </div>
+            </div>
+
+            <div class="tool-group">
+                <div class="tool-group-label">Productivity <span class="tool-count">&times; 8</span></div>
+                <div class="tool-chips">
+                    <div class="tool-chip">Gmail <span class="chip-badge chip-badge--key">OAuth</span></div>
+                    <div class="tool-chip">Calendar <span class="chip-badge chip-badge--key">OAuth</span></div>
+                    <div class="tool-chip">Filesystem <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Shell <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Browser <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Tasks <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Tracker <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Telegram <span class="chip-badge chip-badge--key">Bot Token</span></div>
+                </div>
+            </div>
+
+            <div class="tool-group">
+                <div class="tool-group-label">Computation &amp; Analysis <span class="tool-count">&times; 9</span></div>
+                <div class="tool-chips">
+                    <div class="tool-chip">Calculator <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Wolfram Alpha <span class="chip-badge chip-badge--key">API</span></div>
+                    <div class="tool-chip">Weather <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Vision <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Memory <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Conversation Search <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">System Info <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Charts <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Image Gen <span class="chip-badge chip-badge--key">API</span></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div class="section-divider"></div>
+
+    <section class="highlight reveal">
+        <div class="container">
+            <div class="highlight-inner">
+                <div class="highlight-text">
+                    <h2>Plugins, tasks, and channels</h2>
+                    <p>
+                        Build scheduled multi-step tasks with cron, daily, weekly, or interval triggers.
+                        Deliver results to Telegram. Extend the agent with community plugins from the
+                        built-in marketplace - or write your own.
+                    </p>
+                    <p>
+                        Plugins run sandboxed with pattern blocking, dependency safety, and 5-second load timeouts.
+                        The channel framework auto-generates tools for each connected platform.
+                    </p>
+                </div>
+                <div class="highlight-visual">
+                    <div class="yt-facade" data-yt="dMoSay7uyoc" style="background-image:url(https://img.youtube.com/vi/dMoSay7uyoc/hqdefault.jpg)">
+                        <div class="yt-facade-play"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div class="section-divider"></div>
+
+    <section class="comparison reveal" id="comparison">
+        <div class="container">
+            <h2 class="section-heading">Why not just use ChatGPT?</h2>
+            <p class="section-sub" style="margin-bottom: 2.5rem;">Cloud AI rents you access. Thoth gives you ownership.</p>
+
             <table>
                 <thead>
                     <tr>
                         <th></th>
-                        <th>Cloud AI (ChatGPT, Claude, Gemini)</th>
-                        <th>𓁟 Thoth</th>
+                        <th>Cloud AI</th>
+                        <th>&#x1305F; Thoth</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
                         <td>Your data</td>
-                        <td>Stored on provider servers, subject to their privacy policies</td>
-                        <td>Stays on your machine — always. With opt-in cloud models, only the current conversation is sent; memories, files, and history never leave</td>
+                        <td><s>Stored on provider servers, subject to their policies</s></td>
+                        <td>Stays on your machine - always. Cloud models send only the current conversation</td>
                     </tr>
                     <tr>
                         <td>Conversations</td>
-                        <td>Owned by the provider — can be deleted, leaked, or used for training</td>
-                        <td>Stored locally in SQLite, fully yours, exportable anytime</td>
+                        <td><s>Provider-owned - can be deleted, leaked, or used for training</s></td>
+                        <td>Local SQLite, fully yours, exportable anytime</td>
                     </tr>
                     <tr>
                         <td>Cost</td>
-                        <td>$20+/month per subscription</td>
-                        <td>Free with local models. Cloud models use pay-per-token APIs — typically pennies per conversation</td>
+                        <td><s>$20+/month subscription</s></td>
+                        <td>Free with local models. Cloud: pennies per conversation</td>
                     </tr>
                     <tr>
                         <td>Memory</td>
-                        <td>Limited, opaque, provider-controlled</td>
-                        <td>Personal knowledge graph — entities, relationships, visual explorer, fully yours</td>
+                        <td><s>Limited, opaque, provider-controlled</s></td>
+                        <td>Knowledge graph - entities, relationships, visual explorer</td>
                     </tr>
                     <tr>
                         <td>Tools</td>
-                        <td>Sandboxed plugins, limited integrations</td>
-                        <td>Direct access to Gmail, Calendar, filesystem, shell, browser, webcam — 25 tools, 70 sub-operations</td>
+                        <td><s>Sandboxed plugins, limited integrations</s></td>
+                        <td>25 tools, 70 ops - Gmail, Calendar, shell, browser, webcam</td>
                     </tr>
                     <tr>
                         <td>Customisation</td>
-                        <td>Pick a model, write a system prompt</td>
-                        <td>Swap models per conversation or per task, mix local and cloud freely, build scheduled tasks with cron/daily/weekly triggers</td>
+                        <td><s>Pick a model, write a system prompt</s></td>
+                        <td>Swap models per thread, mix local + cloud, cron tasks, plugins</td>
                     </tr>
                     <tr>
                         <td>Voice</td>
-                        <td>Cloud-processed speech</td>
-                        <td>Local Whisper STT + Kokoro TTS — never leaves your mic</td>
+                        <td><s>Cloud-processed speech</s></td>
+                        <td>Local Whisper STT + Kokoro TTS - never leaves your mic</td>
                     </tr>
                     <tr>
                         <td>Availability</td>
-                        <td>Requires internet, subject to outages &amp; rate limits</td>
-                        <td>Local models work offline; cloud models available when connected</td>
+                        <td><s>Requires internet, subject to outages</s></td>
+                        <td>Local models work fully offline</td>
                     </tr>
                 </tbody>
             </table>
         </div>
     </section>
 
-    <!-- How It Works -->
-    <section class="how-it-works" id="how-it-works">
+    <div class="section-divider"></div>
+
+    <section class="install reveal" id="install">
         <div class="container">
-            <h2>Up and running in minutes</h2>
-            <div class="steps">
-                <div class="step">
-                    <div class="step-number">1</div>
-                    <div class="step-content">
-                        <h3>Download &amp; install</h3>
-                        <p>Run the one-click <strong>Windows installer</strong> or unzip the <strong>macOS zip</strong> and double-click <code>Start Thoth.command</code> — both set up Python and all dependencies automatically. Or clone the repo and run from source in 5 commands.</p>
-                    </div>
+            <h2 class="section-heading">Up and running in minutes</h2>
+
+            <div class="install-steps">
+                <div class="install-step">
+                    <div class="install-step-num">&#x2193; 01</div>
+                    <h3>Download &amp; install</h3>
+                    <p>One-click <strong>Windows installer</strong> or <strong>macOS DMG</strong> - both set up Python and all dependencies automatically. Or clone the repo and run from source in 5 commands.</p>
                 </div>
-                <div class="step">
-                    <div class="step-number">2</div>
-                    <div class="step-content">
-                        <h3>Choose your path</h3>
-                        <p>On first launch, a setup wizard offers two paths: <strong>Local</strong> — select and download an Ollama model (default: <code>qwen3:14b</code>), or <strong>Cloud</strong> — enter your OpenAI or OpenRouter API key and pick a model. No GPU required for cloud.</p>
-                    </div>
+                <div class="install-step">
+                    <div class="install-step-num">&#x2194; 02</div>
+                    <h3>Choose your path</h3>
+                    <p>First-launch wizard: <strong>Local</strong> - download an Ollama model (default: <code>qwen3:14b</code>), or <strong>Cloud</strong> - enter your API key. No GPU required for cloud.</p>
                 </div>
-                <div class="step">
-                    <div class="step-number">3</div>
-                    <div class="step-content">
-                        <h3>Start talking</h3>
-                        <p>Ask anything in natural language — the agent figures out which tools to use. Search the web, check your email, analyze your screen, track a medication, schedule a task. Switch models per-thread anytime.</p>
-                    </div>
+                <div class="install-step">
+                    <div class="install-step-num">&#x25B6; 03</div>
+                    <h3>Start talking</h3>
+                    <p>Ask anything in natural language - the agent handles the rest. Search the web, check email, analyze your screen, track a medication, schedule a task.</p>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- Privacy -->
-    <section class="privacy">
-        <div class="container">
-            <h2>🔒 Privacy by architecture</h2>
+    <div class="section-divider"></div>
+
+    <section class="privacy reveal">
+        <div class="container--narrow">
+            <h2>Privacy by architecture</h2>
             <p>
-                Thoth doesn't just promise privacy — it enforces it structurally. Voice processing, memory storage, conversation history, and knowledge graphs run entirely on your machine. LLM inference runs locally by default; opt-in cloud models send only the current conversation — memories, files, and history never leave. External network calls only happen when you explicitly use an online tool — and each one can be individually disabled.
+                Thoth doesn't promise privacy - it enforces it structurally. Voice, memory, conversations, and
+                knowledge graphs run entirely on your machine. LLM inference is local by default; opt-in cloud
+                models send only the current conversation. External network calls happen only when you explicitly
+                use an online tool - and each one can be individually disabled.
             </p>
-            <div class="privacy-badges">
-                <div class="privacy-badge">
-                    <span class="icon">🖥️</span> Local inference (default)
-                </div>
-                <div class="privacy-badge">
-                    <span class="icon">☁️</span> Cloud opt-in only
-                </div>
-                <div class="privacy-badge">
-                    <span class="icon">💾</span> Local storage
-                </div>
-                <div class="privacy-badge">
-                    <span class="icon">🎤</span> Local voice
-                </div>
-                <div class="privacy-badge">
-                    <span class="icon">🚫</span> No telemetry
-                </div>
-                <div class="privacy-badge">
-                    <span class="icon">🔧</span> Opt-in APIs
-                </div>
-                <div class="privacy-badge">
-                    <span class="icon">📜</span> Apache 2.0 License
-                </div>
+            <div class="privacy-facts">
+                <span class="privacy-fact">&#x25C8; Local inference (default)</span>
+                <span class="privacy-fact">&#x2601; Cloud opt-in only</span>
+                <span class="privacy-fact">&#x25A0; Local storage</span>
+                <span class="privacy-fact">&#x25EF; Local voice</span>
+                <span class="privacy-fact">&#x2715; No telemetry</span>
+                <span class="privacy-fact">&#x2192; Opt-in APIs</span>
+                <span class="privacy-fact">&#x2696; Apache 2.0</span>
             </div>
         </div>
     </section>
 
-    <!-- CTA -->
-    <section class="cta">
-        <h2>Take back your <span>AI sovereignty</span></h2>
-        <p>Free, open source, and yours to keep. Run local, add cloud, or both. No accounts. No subscriptions. No data harvesting.</p>
-        <div class="hero-buttons">
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="btn btn-primary">
-                ⬇ Download for Windows
-            </a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="btn btn-primary">
-                ⬇ Download for macOS
-            </a>
-            <a href="https://github.com/siddsachar/Thoth" class="btn btn-secondary" target="_blank">
-                ☆ Star on GitHub
-            </a>
+    <div class="section-divider"></div>
+
+    <section class="cta reveal">
+        <div class="container--narrow">
+            <h2>Take back your <em>AI sovereignty</em></h2>
+            <p>Free, open source, and yours to keep. No accounts. No subscriptions. No data harvesting.</p>
+            <div class="cta-buttons">
+                <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="btn btn--primary">Download for Windows <span class="btn-hint">.exe</span></a>
+                <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="btn btn--primary">Download for macOS <span class="btn-hint">.dmg</span></a>
+                <a href="https://github.com/siddsachar/Thoth" class="btn btn--ghost" target="_blank">Star on GitHub</a>
+            </div>
         </div>
     </section>
 
-    <!-- Footer -->
+    <div class="tech-strip">
+        <div class="tech-strip-label">Built with</div>
+        <div class="tech-strip-items">
+            <span>NiceGUI</span><span>LangGraph</span><span>LangChain</span>
+            <span>Ollama</span><span>FAISS</span><span>Kokoro TTS</span>
+            <span>pywebview</span><span>faster-whisper</span>
+        </div>
+    </div>
+
     <footer>
         <p>
-            𓁟 Thoth · v3.12.0 · Apache 2.0 License ·
-            <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a> ·
-            Built with NiceGUI, LangGraph, LangChain, Ollama, FAISS &amp; Kokoro TTS
+            &#x1305F; Thoth &middot; v3.12.0 &middot; Apache 2.0 &middot;
+            <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a>
         </p>
     </footer>
+
+    <a href="#" class="back-to-top" aria-label="Back to top">↑</a>
+
+    <script>
+        /* Scroll progress bar */
+        const progressBar = document.querySelector('.scroll-progress');
+        const btt = document.querySelector('.back-to-top');
+        window.addEventListener('scroll', () => {
+            const h = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+            const pct = document.documentElement.scrollTop / h;
+            progressBar.style.width = (pct * 100) + '%';
+            btt.classList.toggle('visible', document.documentElement.scrollTop > 600);
+        });
+
+        /* Scroll reveal (one-shot) */
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(e => {
+                if (e.isIntersecting) {
+                    e.target.classList.add('visible');
+                    observer.unobserve(e.target);
+                }
+            });
+        }, { threshold: 0.12 });
+        document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+        /* YouTube lite facade */
+        document.querySelectorAll('.yt-facade').forEach(f => {
+            f.addEventListener('click', () => {
+                const id = f.dataset.yt;
+                const iframe = document.createElement('iframe');
+                iframe.src = 'https://www.youtube-nocookie.com/embed/' + id + '?autoplay=1';
+                iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+                iframe.allowFullscreen = true;
+                iframe.style.cssText = 'width:100%;aspect-ratio:16/9;display:block;border:none';
+                f.replaceWith(iframe);
+            });
+        });
+
+        /* Active nav highlighting */
+        const navLinks = document.querySelectorAll('.nav-links a[href^="#"]');
+        const sections = Array.from(navLinks).map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+        const navObserver = new IntersectionObserver((entries) => {
+            entries.forEach(e => {
+                const link = document.querySelector('.nav-links a[href="#' + e.target.id + '"]');
+                if (link) link.classList.toggle('active', e.isIntersecting);
+            });
+        }, { rootMargin: '-56px 0px -60% 0px' });
+        sections.forEach(s => navObserver.observe(s));
+
+        /* Animated stat counters */
+        function animateCount(el, target) {
+            let current = 0;
+            const step = Math.max(1, Math.floor(target / 30));
+            const timer = setInterval(() => {
+                current = Math.min(current + step, target);
+                el.textContent = el.dataset.prefix + current + el.dataset.suffix;
+                if (current >= target) clearInterval(timer);
+            }, 25);
+        }
+        document.querySelectorAll('[data-count]').forEach(el => {
+            const countObserver = new IntersectionObserver((entries) => {
+                if (entries[0].isIntersecting) {
+                    animateCount(el, parseInt(el.dataset.count));
+                    countObserver.disconnect();
+                }
+            }, { threshold: 0.5 });
+            countObserver.observe(el);
+        });
+    </script>
 
 </body>
 </html>

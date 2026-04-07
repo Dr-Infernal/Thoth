@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>&#x1305F; Thoth - Page not found</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1305F;</text></svg>">
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0b0d10;
+            --surface: #151920;
+            --border: #232a35;
+            --text: #e2e6ed;
+            --text-dim: #9aa3b4;
+            --text-faint: #636d7e;
+            --accent: #c9a227;
+            --accent-hover: #dbb634;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .glyph {
+            font-size: 8rem;
+            opacity: 0.08;
+            color: var(--accent);
+            line-height: 1;
+            margin-bottom: 1rem;
+            user-select: none;
+        }
+
+        .code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            color: var(--accent);
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            margin-bottom: 0.75rem;
+        }
+
+        h1 {
+            font-family: 'Instrument Serif', Georgia, serif;
+            font-size: 2.4rem;
+            font-weight: 400;
+            margin-bottom: 0.65rem;
+        }
+
+        p {
+            color: var(--text-dim);
+            font-size: 0.95rem;
+            margin-bottom: 2rem;
+        }
+
+        a {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            padding: 0.7rem 1.5rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            text-decoration: none;
+            background: var(--accent);
+            color: var(--bg);
+            transition: background 0.2s, transform 0.2s;
+        }
+
+        a:hover { background: var(--accent-hover); transform: translateY(-1px); }
+    </style>
+</head>
+<body>
+    <div class="glyph">&#x1305F;</div>
+    <div class="code">404 - Not Found</div>
+    <h1>Nothing here</h1>
+    <p>This page doesn't exist. The ibis has no record of it.</p>
+    <a href="./">Back to Thoth</a>
+</body>
+</html>
