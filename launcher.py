@@ -354,10 +354,31 @@ if sys.platform == "darwin":
         pass
 
 import webview
+
+def _on_loaded(window):
+    try:
+        window.evaluate_js("""
+            (function() {
+                var retries = 0;
+                function check() {
+                    if (retries >= 20) return;
+                    var body = document.body;
+                    if (!body || body.innerHTML.trim() === ""
+                        || body.innerText.indexOf("trying to connect") !== -1) {
+                        retries++;
+                        setTimeout(function() { location.reload(); }, 1500);
+                    }
+                }
+                setTimeout(check, 2000);
+            })();
+        """)
+    except Exception:
+        pass
+
 url, title = sys.argv[1], sys.argv[2]
 w, h = int(sys.argv[3]), int(sys.argv[4])
 webview.create_window(title, url, width=w, height=h)
-webview.start()
+webview.start(func=_on_loaded)
 '''
 
 
