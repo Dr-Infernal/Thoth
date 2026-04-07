@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>𓁟 Thoth — Personal AI Sovereignty</title>
-    <meta name="description" content="A local-first AI assistant built for personal AI sovereignty. 24 integrated tools, personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, habit tracking, messaging channels. Run everything locally via Ollama, or add opt-in cloud models (GPT, Claude, Gemini) when you need frontier reasoning. Your data stays on your machine either way.">
+    <meta name="description" content="A local-first AI assistant built for personal AI sovereignty. 25 integrated tools, personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, habit tracking, messaging channels, image generation, and community plugins. Run everything locally via Ollama, or add opt-in cloud models (GPT, Claude, Gemini) when you need frontier reasoning. Your data stays on your machine either way.">
     <style>
         :root {
             --bg: #0a0e14;
@@ -759,8 +759,8 @@
             <a href="#tools">Tools</a>
             <a href="#comparison">vs Cloud AI</a>
             <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.11.0/ThothSetup_3.11.0.exe" class="btn-nav">⬇ Windows</a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.11.0/Thoth-3.11.0-macOS-arm64.dmg" class="btn-nav">⬇ macOS</a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="btn-nav">⬇ Windows</a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="btn-nav">⬇ macOS</a>
         </div>
     </nav>
 
@@ -770,13 +770,13 @@
         <h1>Meet <span>Thoth</span></h1>
         <p class="subtitle">Personal AI Sovereignty</p>
         <p class="tagline">
-            A local-first AI assistant with 24 integrated tools, a personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, health tracking, and messaging channels. Run everything locally via Ollama, or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data stays on your machine.
+            A local-first AI assistant with 25 integrated tools, a personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, health tracking, messaging channels, image generation, and a community plugin marketplace. Run everything locally via Ollama, or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data stays on your machine.
         </p>
         <div class="hero-buttons">
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.11.0/ThothSetup_3.11.0.exe" class="btn btn-primary">
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="btn btn-primary">
                 ⬇ Download for Windows
             </a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.11.0/Thoth-3.11.0-macOS-arm64.dmg" class="btn btn-primary">
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="btn btn-primary">
                 ⬇ Download for macOS
             </a>
             <a href="https://github.com/siddsachar/Thoth" class="btn btn-secondary" target="_blank">
@@ -787,7 +787,7 @@
             <span>🖥️ Windows 10/11</span>
             <span>🍎 macOS (Apple Silicon &amp; Intel)</span>
             <span>🆓 Free &amp; open source</span>
-            <span>📜 MIT License</span>
+            <span>📜 Apache 2.0 License</span>
         </div>
     </section>
 
@@ -855,7 +855,7 @@
                 <div class="feature-card">
                     <div class="icon">🤖</div>
                     <h3>Autonomous ReAct Agent</h3>
-                    <p>The agent reasons about your question, decides which of 24 tools to use, chains multiple lookups, and assembles a complete answer — all autonomously. Smart context trimming keeps multi-tool chains within window limits and reduces API costs. Live token counter tracks usage in real time.</p>
+                    <p>The agent reasons about your question, decides which of 25 tools to use, chains multiple lookups, and assembles a complete answer — all autonomously. Smart context trimming keeps multi-tool chains within window limits and reduces API costs. Live token counter tracks usage in real time.</p>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🧠</div>
@@ -880,7 +880,7 @@
                 <div class="feature-card">
                     <div class="icon">⚡</div>
                     <h3>Tasks &amp; Scheduling</h3>
-                    <p>Build named, multi-step tasks that run on 7 schedule types — daily, weekly, weekdays, weekends, interval, cron, or one-shot delay. Per-task model override (local or cloud), channel delivery to Telegram or Email, template variables, persistent run history, stop/cancel from anywhere, and 5 built-in templates.</p>
+                    <p>Build named, multi-step tasks that run on 7 schedule types — daily, weekly, weekdays, weekends, interval, cron, or one-shot delay. Per-task model override (local or cloud), channel delivery to Telegram, template variables, persistent run history, stop/cancel from anywhere, and 5 built-in templates.</p>
                 </div>
                 <div class="feature-card">
                     <div class="icon">📋</div>
@@ -889,8 +889,9 @@
                 </div>
                 <div class="feature-card">
                     <div class="icon">📬</div>
-                    <h3>Messaging Channels</h3>
-                    <p>Connect a Telegram bot or email channel so the agent meets you where you are. Every message is processed by the full ReAct agent with all tools available. Each chat gets its own conversation thread. The agent can also proactively send Telegram messages, photos, and documents.</p>
+                    <h3>Multi-Channel Messaging</h3>
+                    <p>A pluggable channel framework with capability detection, shared media pipeline, and auto-generated tools per channel. Telegram is fully live — voice transcription, photo analysis, document extraction, emoji reactions, and inline approval buttons. Every message runs through the full ReAct agent with all tools. Each chat gets its own persistent thread.</p>
+                    <span class="feature-tag">Upgraded in 3.12</span>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🎤</div>
@@ -936,19 +937,28 @@
                     <div class="icon">📚</div>
                     <h3>Wiki Vault</h3>
                     <p>A personal wiki that the agent reads and writes — Markdown articles organized by topic, automatically cross-linked with the knowledge graph. Create, search, list, and update articles through natural conversation. FAISS-indexed for semantic retrieval alongside your documents.</p>
-                    <span class="feature-tag">New in 3.11</span>
                 </div>
                 <div class="feature-card">
                     <div class="icon">🌙</div>
                     <h3>Dream Cycle</h3>
                     <p>A nightly background process that autonomously enriches your knowledge graph — re-examines recent conversations to discover missed entities, infers new relationships between existing nodes, and writes a structured dream journal. 3-layer anti-contamination prevents fact cross-bleed between entities.</p>
-                    <span class="feature-tag">New in 3.11</span>
                 </div>
                 <div class="feature-card">
                     <div class="icon">📤</div>
                     <h3>Document Knowledge Extraction</h3>
                     <p>Automatically extracts entities and relationships from uploaded documents into the knowledge graph. PDF, DOCX, TXT, and CSV files are analyzed on upload, enriching your personal knowledge base without manual entry. Provenance tracking links every extracted fact back to its source.</p>
-                    <span class="feature-tag">New in 3.11</span>
+                </div>
+                <div class="feature-card">
+                    <div class="icon">🎨</div>
+                    <h3>Image Generation</h3>
+                    <p>Generate and edit images through natural conversation via OpenAI models (gpt-image-1.5, gpt-image-1, gpt-image-1-mini). Describe what you want, and the agent renders the result inline in chat. Paste or attach an existing image to edit it — the agent caches attachments so you can reference them by name.</p>
+                    <span class="feature-tag">New in 3.12</span>
+                </div>
+                <div class="feature-card">
+                    <div class="icon">🔌</div>
+                    <h3>Plugin System &amp; Marketplace</h3>
+                    <p>Extend Thoth with community plugins — browse a GitHub-hosted marketplace, install with one click, and manage from Settings. Plugins run in a security sandbox with pattern blocking, dependency safety, and 5-second load timeouts. Hot-reload on enable/disable. Build your own with the PluginAPI bridge for tools and skills.</p>
+                    <span class="feature-tag">New in 3.12</span>
                 </div>
             </div>
         </div>
@@ -957,7 +967,7 @@
     <!-- Tools -->
     <section class="tools-section" id="tools">
         <div class="container">
-            <h2>24 Tools · 67 Operations</h2>
+            <h2>25 Tools · 70 Operations</h2>
             <p class="subtitle">The agent autonomously decides which tools to use based on your question</p>
 
             <div class="tools-category">
@@ -1119,6 +1129,12 @@
                         <div class="tool-desc">Interactive Plotly charts</div>
                         <div class="tool-badge">Free</div>
                     </div>
+                    <div class="tool-card">
+                        <div class="tool-icon">🎨</div>
+                        <div class="tool-name">Image Gen</div>
+                        <div class="tool-desc">Generate &amp; edit images</div>
+                        <div class="tool-badge key">API Key</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1161,7 +1177,7 @@
                     <tr>
                         <td>Tools</td>
                         <td>Sandboxed plugins, limited integrations</td>
-                        <td>Direct access to Gmail, Calendar, filesystem, shell, browser, webcam — 24 tools, 67 sub-operations</td>
+                        <td>Direct access to Gmail, Calendar, filesystem, shell, browser, webcam — 25 tools, 70 sub-operations</td>
                     </tr>
                     <tr>
                         <td>Customisation</td>
@@ -1240,7 +1256,7 @@
                     <span class="icon">🔧</span> Opt-in APIs
                 </div>
                 <div class="privacy-badge">
-                    <span class="icon">📜</span> MIT License
+                    <span class="icon">📜</span> Apache 2.0 License
                 </div>
             </div>
         </div>
@@ -1251,10 +1267,10 @@
         <h2>Take back your <span>AI sovereignty</span></h2>
         <p>Free, open source, and yours to keep. Run local, add cloud, or both. No accounts. No subscriptions. No data harvesting.</p>
         <div class="hero-buttons">
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.11.0/ThothSetup_3.11.0.exe" class="btn btn-primary">
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="btn btn-primary">
                 ⬇ Download for Windows
             </a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.11.0/Thoth-3.11.0-macOS-arm64.dmg" class="btn btn-primary">
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="btn btn-primary">
                 ⬇ Download for macOS
             </a>
             <a href="https://github.com/siddsachar/Thoth" class="btn btn-secondary" target="_blank">
@@ -1266,7 +1282,7 @@
     <!-- Footer -->
     <footer>
         <p>
-            𓁟 Thoth · v3.11.0 · MIT License ·
+            𓁟 Thoth · v3.12.0 · Apache 2.0 License ·
             <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a> ·
             Built with NiceGUI, LangGraph, LangChain, Ollama, FAISS &amp; Kokoro TTS
         </p>
