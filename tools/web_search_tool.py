@@ -33,10 +33,28 @@ class WebSearchTool(BaseTool):
     def required_api_keys(self) -> dict[str, str]:
         return {"Tavily API Key": "TAVILY_API_KEY"}
 
-    def get_retriever(self, **kwargs):
-        from langchain_community.retrievers.tavily_search_api import TavilySearchAPIRetriever
-        from agent import _compressed
-        return _compressed(TavilySearchAPIRetriever())
+    def execute(self, query: str) -> str:
+        from tavily import TavilyClient
+        import os
+
+        client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY", ""))
+        response = client.search(query, max_results=8)
+        results = response.get("results", [])
+
+        if not results:
+            return f"No results found for: {query}"
+
+        parts = []
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "")
+            snippet = r.get("content", "")
+            link = r.get("url", "Unknown")
+            parts.append(
+                f"[Result {i}] {title}\n"
+                f"{snippet}\n"
+                f"SOURCE_URL: {link}"
+            )
+        return "\n\n---\n\n".join(parts)
 
 
 registry.register(WebSearchTool())

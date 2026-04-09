@@ -895,13 +895,14 @@ def open_settings(
     def _build_tools_tab() -> None:
         ui.label("⚡ Retrieval Compression").classes("text-h6")
         ui.label(
-            "Controls how search results are filtered before reaching the model."
+            "Controls how search results are filtered before reaching the model. "
+            "Off uses the built-in context trimmer. Deep uses extra LLM calls for precise extraction."
         ).classes("text-grey-6 text-sm")
-        _comp_options = {"smart": "Smart (fast)", "deep": "Deep (LLM)", "off": "Off"}
+        _comp_options = {"off": "Off (default)", "deep": "Deep (LLM)"}
         ui.select(
             label="Compression mode",
             options=_comp_options,
-            value=tool_registry.get_global_config("compression_mode", "smart"),
+            value=tool_registry.get_global_config("compression_mode", "off"),
             on_change=lambda e: tool_registry.set_global_config("compression_mode", e.value),
         ).classes("w-60")
         ui.separator().classes("q-my-md")
@@ -1609,10 +1610,47 @@ def open_settings(
         )
 
         with ui.row().classes("gap-4 items-center"):
-            ui.label(
-                f"Window: {dream_cfg.get('window_start', 1)}:00 – "
-                f"{dream_cfg.get('window_end', 5)}:00"
-            ).classes("text-sm")
+            ui.label("Window").classes("text-sm")
+
+            _start_val = f"{dream_cfg.get('window_start', 1):02d}:00"
+            with ui.input("Start", value=_start_val).props(
+                "dense outlined"
+            ).classes("w-28") as _dream_start_input:
+                with ui.menu().props("no-parent-event") as _start_menu:
+                    ui.time(value=_start_val, mask="HH:00").props(
+                        'format24h'
+                    ).bind_value(_dream_start_input)
+                with _dream_start_input.add_slot("append"):
+                    ui.icon("schedule").on("click", _start_menu.open).classes(
+                        "cursor-pointer"
+                    )
+
+            ui.label("–").classes("text-sm")
+
+            _end_val = f"{dream_cfg.get('window_end', 5):02d}:00"
+            with ui.input("End", value=_end_val).props(
+                "dense outlined"
+            ).classes("w-28") as _dream_end_input:
+                with ui.menu().props("no-parent-event") as _end_menu:
+                    ui.time(value=_end_val, mask="HH:00").props(
+                        'format24h'
+                    ).bind_value(_dream_end_input)
+                with _dream_end_input.add_slot("append"):
+                    ui.icon("schedule").on("click", _end_menu.open).classes(
+                        "cursor-pointer"
+                    )
+
+            def _on_dream_window_change(_=None):
+                try:
+                    s = int(_dream_start_input.value.split(":")[0])
+                    e = int(_dream_end_input.value.split(":")[0])
+                except (ValueError, AttributeError):
+                    return
+                dream_cycle.set_window(s, e)
+                ui.notify(f"Dream window updated: {s:02d}:00 – {e:02d}:00", type="info")
+
+            _dream_start_input.on("update:model-value", _on_dream_window_change)
+            _dream_end_input.on("update:model-value", _on_dream_window_change)
 
         dream_status = dream_cycle.get_dream_status()
         if dream_status.get("last_run"):

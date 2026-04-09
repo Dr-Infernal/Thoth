@@ -152,3 +152,14 @@ class BaseTool(ABC):
         LangGraph ``interrupt()`` so the user can approve or cancel.
         """
         return set()
+
+    @property
+    def inference_keywords(self) -> list[str]:
+        """Extra keywords to help the auto-detect engine match prompts to
+        this tool.  These are merged with keywords extracted automatically
+        from the tool's name, display_name, description, and sub-tool names.
+
+        Override in subclasses to add domain-specific synonyms or terms
+        that don't appear in the tool's metadata.
+        """
+        return []

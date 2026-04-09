@@ -77,13 +77,16 @@ AGENT_SYSTEM_PROMPT = (
     "  delete a task (requires confirmation). Use task_update to modify an\n"
     "  existing task — you can change its name, schedule, prompts, or\n"
     "  enabled status. Use task_run_now to run a task immediately.\n"
-    "- BACKGROUND TASK PERMISSIONS: Tasks run in the background with limited\n"
-    "  permissions. File moves and calendar moves work automatically.\n"
-    "  Sending emails and running shell commands are allowed only when the\n"
-    "  user configures permitted recipients / commands in the task editor.\n"
-    "  If a task tries these actions without permission, a clear message\n"
-    "  tells the user what to configure. You do NOT need to handle this —\n"
-    "  just write prompts naturally and the system handles permissions.\n"
+    "- SAFETY MODES: Tasks have a safety_mode controlling destructive\n"
+    "  tool access: 'block' (default, safest), 'approve' (pause for\n"
+    "  human approval), 'allow_all' (no restrictions). Set it via\n"
+    "  task_create or task_update when the user requests it.\n"
+    "- PIPELINE MODE: For complex workflows with branching, approvals,\n"
+    "  or notifications, use the 'steps' parameter instead of 'prompts'.\n"
+    "  Step IDs are auto-generated as {type}_{counter} (e.g. prompt_1,\n"
+    "  condition_1). Use 'next' field on any step to override linear\n"
+    "  flow (e.g. 'end' to stop after a branch). Reference outputs\n"
+    "  with {{step.prompt_1.output}}.\n"
     "- BATCH ACTIONS: When the user asks to delete multiple tasks (or perform\n"
     "  any destructive action on multiple items), call the tool once per item\n"
     "  ALL IN THE SAME TURN. Do NOT go one-by-one across separate turns.\n"
@@ -292,6 +295,28 @@ AGENT_SYSTEM_PROMPT = (
     "- When running on a cloud model, be mindful that conversation content\n"
     "  is sent to the cloud provider. Do not change your behaviour — the\n"
     "  user has explicitly opted in."
+)
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Background override — injected as an additional SystemMessage when the
+# agent is running inside a background task (no interactive user present).
+# ═════════════════════════════════════════════════════════════════════════════
+
+AGENT_BG_OVERRIDE = (
+    "AUTONOMOUS BACKGROUND MODE:\n"
+    "You are running as an autonomous background task — there is NO user present.\n"
+    "The task was scheduled by the user and is executing unattended.\n\n"
+    "CRITICAL OVERRIDES:\n"
+    "- NEVER ask questions, request confirmation, or wait for user input.\n"
+    "- If you need information you'd normally ask the user for, use your\n"
+    "  tools and memory to find it, or proceed with reasonable defaults.\n"
+    "- Tracker logging: log entries directly without asking for confirmation.\n"
+    "- Memory saving: save without confirming to the user.\n"
+    "- Browser automation: if you hit a login page or CAPTCHA you cannot\n"
+    "  bypass, report the blocker in your output and move on.\n"
+    "- Keep output concise and results-focused — no conversational filler.\n"
+    "- If a tool fails or you hit a blocker that would normally require\n"
+    "  human intervention, report the issue clearly and move on.\n"
 )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -506,9 +531,8 @@ ENTITY TYPES (use exactly one per entity):
   skill, media
 
 RELATIONS — connect entities using typed relationships:
-  authored, published_by, member_of, affiliated_with, part_of, related_to, \
-  builds_on, contradicts, extends, implements, cites, references, \
-  associated_with, used_by
+  authored, member_of, part_of, uses, builds_on, cites, extends, \
+  contradicts, employed_by, works_on, located_in, founded, created_by
 
 Return a JSON array of objects. TWO types:
   1. Entity: {{"category": "...", "subject": "...", "content": "...", \
@@ -518,6 +542,7 @@ Return a JSON array of objects. TWO types:
 
 - category must be one of the 10 types listed above.
 - Confidence: 1.0 for explicit statements, 0.7-0.9 for inferences.
+- Below 0.6 — do NOT extract.
 - If there is NOTHING notable to extract, return an empty array: []
 
 Respond with ONLY a valid JSON array. No other text."""
@@ -580,9 +605,9 @@ Return ONLY the enriched description text. No preamble, no explanation."""
 
 
 DREAM_INFER_PROMPT = """\
-You are a knowledge-graph curator. Two entities co-occur in the same \
-conversation but have no relationship in the graph. Determine if a \
-meaningful relationship exists.
+You are a knowledge-graph curator with high standards. Two entities \
+co-occur in {co_occurrence_count} conversation(s) but have no edge in the \
+graph. Determine whether a SPECIFIC, FACTUAL relationship exists.
 
 Entity A — type: {type_a}, subject: "{subject_a}"
 Description: {description_a}
@@ -593,14 +618,37 @@ Description: {description_b}
 Conversation excerpt where both appear:
 {conversation_excerpt}
 
-If these entities have a meaningful, factual relationship, return:
-{{"has_relation": true, "relation_type": "<type>"}}
+RULES — read carefully:
+1. Provide brief evidence from the excerpt or entity descriptions that \
+supports the relationship. If there is no supporting evidence at all, \
+return has_relation: false.
+2. The relationship must be SPECIFIC. Generic labels like "related_to", \
+"associated_with", or "connected_to" are NEVER acceptable.
+3. Choose the correct DIRECTION. "source" is the subject that performs \
+the action or holds the role. Example: "Alice lives in London" → \
+source="Alice", target="London", relation_type="lives_in".
+4. Return a confidence score: 1.0 = explicitly stated, 0.8-0.9 = clearly \
+implied, 0.5-0.7 = reasonable inference. Below 0.5 = do not return.
+5. Co-occurrence alone is weak evidence. Look for contextual clues — \
+if two things are discussed together repeatedly, there is likely a reason.
+6. "uses" means actively employs as a tool, dependency, or platform — \
+NOT merely mentions, searches for, or discusses. "Competitive intelligence \
+searches for news about OpenAI" is NOT a "uses" relation.
 
-Common relation types: knows, related_to, works_on, part_of, member_of, \
-located_in, associated_with, uses, created_by, manages, employed_by, \
-studies, interested_in, prefers, friend_of, colleague_of
+Allowed relation types: knows, friend_of, colleague_of, boss_of, \
+mentor_of, mother_of, father_of, sibling_of, married_to, child_of, \
+partner_of, cousin_of, lives_in, works_at, located_in, born_in, visits, \
+based_in, works_on, manages, manager_of, member_of, part_of, employed_by, \
+founded, leads, reports_to, prefers, enjoys, dislikes, interested_in, \
+has_hobby, deadline_for, scheduled_for, started_on, studies, \
+proficient_in, certified_in, learning, teaches, has_skill, reading, \
+watching, listening_to, recommends, authored, uses, created_by, owns, \
+has_pet, pet_of, treats, attends, participates_in
 
-If there is NO clear relationship, or you are unsure, return:
+If you are confident a relationship exists, return:
+{{"has_relation": true, "relation_type": "<type>", "source": "<subject_of_source_entity>", "target": "<subject_of_target_entity>", "confidence": <0.5-1.0>, "evidence": "<brief evidence from excerpt or descriptions>"}}
+
+If there is NO clear, specific relationship, or you are unsure, return:
 {{"has_relation": false}}
 
 Return ONLY the JSON object. No other text."""

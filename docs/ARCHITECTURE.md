@@ -17,7 +17,7 @@
 - [Shell Access](#shell-access)
 - [Browser Automation](#browser-automation)
 - [Vision](#vision)
-- [Tasks & Scheduling](#tasks--scheduling)
+- [Workflows & Scheduling](#workflows--scheduling)
 - [Messaging Channels](#messaging-channels)
 - [Image Generation](#image-generation)
 - [Plugin System & Marketplace](#plugin-system--marketplace)
@@ -68,6 +68,9 @@ Thoth doesn't just store isolated facts — it builds a **personal knowledge gra
 - **Triple-based extraction** — the background extraction pipeline produces structured triples (entity + relation + entity) instead of flat facts; a "User" entity convention ensures the user is always a single canonical node with aliases for their names
 - **Automatic memory extraction** — a background process scans past conversations on startup and every 6 hours, extracting entities and relations the agent missed during live conversation; active threads are excluded to avoid race conditions
 - **Deterministic deduplication** — both live saves and background extraction check for existing entities by normalised subject before creating new entries; cross-category matching prevents fragmentation (e.g. a birthday stored as `person` won't be duplicated as `event`); alias resolution ensures "Mom" and "Mother" map to the same entity; richer content is always kept
+- **Vague-type banning** — `related_to`, `associated_with`, `connected_to`, `linked_to`, `has_relation`, `involves`, and `correlates_with` are rejected before saving, preventing noisy low-value edges
+- **Relation pre-normalisation** — `normalize_relation_type()` canonicalises aliases (e.g. `is_father_of` → `father_of`) before any checks (ban, confidence gate, dedup)
+- **67 valid relation types** — curated vocabulary with 60+ alias mappings; 6 document-specific types: `extracted_from`, `uploaded`, `builds_on`, `cites`, `extends`, `contradicts`; self-loop rejection blocks relations where source and target are the same entity
 - **Source tracking** — each entity is tagged with its origin (`live` from conversation or `extraction` from background scan) for diagnostics
 - **Semantic recall** — FAISS vector index with Qwen3-Embedding-0.6B for similarity-based memory retrieval; relevant memories are automatically retrieved and injected into context before every LLM call based on semantic similarity to the current message
 - **Memory IDs in context** — auto-recalled memories include their IDs so the agent can update or delete specific entries when the user corrects previously saved information
@@ -95,15 +98,18 @@ The knowledge graph can be exported as a structured **Obsidian-compatible markdo
 
 ## Dream Cycle
 
-A background daemon that refines the knowledge graph during idle hours, running three non-destructive operations with a three-layer anti-contamination system.
+A 4-phase background daemon that refines the knowledge graph during idle hours, running non-destructive operations with a three-layer anti-contamination system.
 
-- **Duplicate merge** — entities with ≥0.93 semantic similarity and same type are merged; LLM synthesizes the best description, aliases are unioned, relations re-pointed to the survivor
+- **Phase 1: Duplicate merge** — entities with ≥0.93 semantic similarity and same type are merged; LLM synthesizes the best description, aliases are unioned, relations re-pointed to the survivor
 - **Subject-name guard** — entities with different normalized subjects require ≥0.98 similarity to merge, preventing false merges of distinct people/concepts
-- **Description enrichment** — thin entities (<80 chars) appearing in 2+ conversations get richer descriptions from conversation context and relationship graph
-- **Relationship inference** — co-occurring entity pairs with no existing edge are evaluated for a meaningful connection (tagged `source="dream_infer"`)
+- **Phase 1: Description enrichment** — thin entities (<80 chars) appearing in 2+ conversations get richer descriptions from conversation context and relationship graph
+- **Phase 2: Relationship inference** — co-occurring entity pairs with no existing edge are evaluated for a meaningful connection (tagged `source="dream_infer"`); hub diversity cap limits any single entity to at most 3 appearances across inferred pairs per cycle; batch rotation with stored offset and half-overlap ensures fresh entity pairs each cycle; 7-day rejection cache (`dream_rejections.json`) avoids wasting LLM calls on previously rejected combinations; pre-flight merge check skips pairs where one entity's description already mentions the other's subject; multi-excerpt evidence provides richer context per pair; `uses` prompt rule: "`uses` means actively employs as a tool, dependency, or platform — NOT merely mentions, searches for, or discusses"; skip vague edges — existing vague relations (`related_to`, `associated_with`, etc.) are ignored when checking for existing connections
+- **Phase 3: Confidence decay** — relations older than 90 days lose 10% confidence per cycle; relations below 0.3 are pruned automatically
 - **Three-layer anti-contamination** — (1) sentence-level excerpt filtering extracts only sentences mentioning the target entity, (2) deterministic post-enrichment cross-entity validation scans LLM output for unrelated entity subjects and rejects contaminated results before DB write, (3) strengthened prompt with concrete negative examples and subject-name substitution
-- **Configurable window** — default 1–5 AM local time; checks every 30 minutes if conditions met (enabled, in window, idle, not yet run today)
-- **Dream journal** — all operations logged to `~/.thoth/dream_journal.json` with cycle ID, summary, and duration; viewable in the Activity tab
+- **Ollama busy check** — queries `/api/ps` before starting a dream cycle; defers if Ollama is actively serving a user request to avoid GPU competition
+- **Configurable window** — default 1–5 AM local time; checks every 30 minutes if conditions met (enabled, in window, idle, not yet run today); interactive HH:00 time pickers in Settings
+- **Dream journal** — all operations logged to `~/.thoth/dream_journal.json` with cycle ID, summary, and duration; expandable entries in the Activity tab showing merges, enrichments, inferred relations, and errors per cycle
+- **🌙 Dream button** — manual dream cycle trigger in the Knowledge graph panel; async execution with status notifications
 - **Settings UI** — enable/disable toggle, window display, and last run summary in the Knowledge tab
 - **Status pill** — dedicated health-check pill shows enabled state and last run time
 
@@ -115,9 +121,12 @@ Uploaded documents are processed through a three-phase **map-reduce LLM pipeline
 
 - **Map phase** — document split into ~6K-char windows; each window summarized to 3–5 sentences
 - **Reduce phase** — window summaries combined into a coherent 300–600 word article
-- **Extract phase** — core entities and relations pulled from the final article; 3–8 entities per document
-- **Hub entity** — the document itself is saved as a `media` entity; extracted entities linked via `extracted_from` relation for provenance tracking
+- **Extract phase** — core entities and relations pulled from the final article; capped at 12 entities per document to prevent over-extraction
+- **Curated relation vocabulary** — 67 valid relation types with 60+ alias mappings (e.g. `published_by → authored`, `implements → uses`, `used_by → uses`, `references → cites`); 6 document-specific types: `extracted_from`, `uploaded`, `builds_on`, `cites`, `extends`, `contradicts`
+- **Hub entity** — the document itself is saved as a `media` entity; extracted entities linked via `extracted_from` relation for provenance tracking; `find_by_subject` dedup ensures re-uploading a document updates the existing hub rather than creating a duplicate
+- **Quality gates** — minimum description length (30 chars) rejects thin stub entities; self-loop rejection blocks relations where source and target are the same entity; vague relation types (`related_to`, `associated_with`, etc.) are rejected before saving
 - **Cross-window dedup** — entities with the same subject across windows are merged before saving
+- **Cross-source merge protection** — when a document entity matches a personal entity via FAISS semantic search, the similarity threshold is raised from 0.80 to 0.90 to prevent impersonal document content from overwriting personal memories
 - **New file formats** — supports PDF, DOCX, TXT, Markdown (`.md`), HTML, and EPUB
 - **Live progress** — status bar shows pulsing progress pill with phase indicator, progress bar, queue count, and stop button (updates every 2 seconds)
 - **Background queue** — documents queued for processing; worker thread handles one at a time
@@ -163,7 +172,7 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 
 - **Full shell access** — the agent can run shell commands on your machine — install packages, manage git repos, run scripts, inspect processes, and automate system tasks through natural conversation
 - **Persistent sessions** — `cd`, environment variables, and other state persists across commands within a conversation; each thread gets its own isolated shell session
-- **3-tier safety classification** — every command is classified as *safe* (runs automatically), *moderate* (requires user confirmation), or *blocked* (rejected outright); safety rules are applied before execution
+- **3-tier safety classification** — every command is classified as *safe* (runs automatically), *moderate* (requires user confirmation), or *blocked* (rejected outright); safety rules are applied before execution; enhanced destructive-command detection for workflow safety-mode integration
 - **Safe commands run instantly** — `ls`, `pwd`, `cat`, `git status`, `pip list`, `echo`, and similar read-only commands execute without interruption
 - **Dangerous commands require approval** — destructive or system-modifying commands (`rm`, `chmod`, `kill`, `pip install`, `brew`, `apt`) trigger the interrupt mechanism so you can accept or reject before execution
 - **Blocked by default** — high-risk commands (`shutdown`, `reboot`, `mkfs`, `:(){ :|:& };:`) are rejected outright and never reach the shell
@@ -200,24 +209,58 @@ Some users don't have a dedicated GPU. Others need frontier-level reasoning (GPT
 
 ---
 
-## Tasks & Scheduling
+## Workflows & Scheduling
 
-- **Unified task engine** — create named, multi-step tasks that run sequentially in a fresh thread, powered by APScheduler
+Tasks have been renamed to **Workflows** throughout the application. The workflow engine adds a full step-based pipeline system on top of the existing scheduling infrastructure.
+
+### Core Engine
+
+- **Unified workflow engine** — create named, multi-step workflows that run sequentially in a fresh thread, powered by APScheduler
 - **7 schedule types** — `daily`, `weekly`, `weekdays`, `weekends`, `interval` (minutes), `cron` (full cron expression), `delay_minutes` (one-shot quick timer with notification)
-- **Template variables** — use `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}`, `{{task_id}}` in prompts — replaced at runtime; `{{task_id}}` lets prompts reference their own task for self-management (e.g. self-disable after a condition is met)
-- **Channel delivery** — tasks can deliver their output to any registered channel (Telegram, etc.) after execution; per-task `delivery_channel` and `delivery_target` configuration
-- **Per-task model override** — each task can specify a different LLM; the engine loads the override, runs the task, then restores the default
-- **Persistent threads** — `persistent_thread_id` reuses the same conversation thread across task runs
+- **Template variables** — use `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}`, `{{task_id}}`, `{{step.X.output}}` in prompts — replaced at runtime; `{{task_id}}` lets prompts reference their own workflow for self-management; `{{step.X.output}}` references the output of a previous step for data flow between steps
+- **Channel delivery** — workflows can deliver their output to any registered channel (Telegram, etc.) after execution; per-task `delivery_channel` and `delivery_target` configuration
+- **Per-task model override** — each workflow can specify a different LLM; the engine loads the override, runs the task, then restores the default
+- **Persistent threads** — `persistent_thread_id` reuses the same conversation thread across workflow runs
 - **Notify-only mode** — `notify_only` flag fires a notification without agent invocation
-- **Skills override** — per-task skill selection via `skills_override`
+- **Skills override** — per-workflow skill selection via `skills_override`
+
+### Step-Based Pipelines
+
+- **5 step types** — Prompt (runs an LLM prompt), Condition (evaluates an expression and branches), Approval (pauses for human decision), Subtask (runs a sub-prompt), Notify (sends a notification)
+- **Conditional branching** — condition steps evaluate expressions with operators: `contains`, `not_contains`, `regex`, `json_path`, `llm_evaluate`; each condition has `if_true` and `if_false` targets pointing to the next step
+- **Approval gates** — approval steps pause workflow execution and wait for a human to approve or deny; configurable timeout; routing via `if_approved` and `if_denied` step targets; approval requests sent to configured channels (Telegram, desktop notifications) with inline approval/deny buttons
+- **Webhook triggers** — workflows can be triggered via `POST /api/webhook/<task_id>` with auto-generated secrets (`X-Webhook-Secret` header) for authentication
+- **Task-completion triggers** — one workflow can trigger another on completion, enabling chained automation
+- **Concurrency groups** — prevent parallel execution of related workflows; only one workflow per group runs at a time
+- **Safety mode** — per-workflow setting with three levels: `block_destructive` (block all destructive tools), `require_approval` (pause at destructive actions for approval), `allow_all` (no restrictions); enforced across shell, task, and channel tools via tool filtering in the agent
+- **Tools override** — per-step tool selection with auto-detection from prompt content
+- **Agent-callable** — the task tool now accepts step definitions, triggers, safety mode, and concurrency group for programmatic workflow creation
+
+### Workflow Builder UI
+
+- **Simple/Advanced toggle** — simple mode preserves the existing single-prompt interface; advanced mode exposes the full pipeline builder
+- **Step builder** — drag-to-reorder, delete, type-change for each step; visual condition builder with operator picker, JSON path input, and LLM question textarea
+- **Variable insertion menu** — `{{step.X.output}}`, `{{date}}`, `{{time}}`, and context variables insertable via dropdown
+- **Flow preview** — Mermaid diagram generated from step graph with refresh button
+- **Validation** — required field checks, reference validation, and operator-specific rules before save
+
+### Approval System
+
+- **Pending approvals panel** — Activity tab shows pending approval cards with task name, message, and Approve / Deny buttons; auto-refreshes every 5 seconds
+- **Sidebar badge** — orange count badge on the Home button when approvals are pending; compact approval strip above the thread list with quick-approve buttons
+- **Multi-channel routing** — approval requests sent to configured channels (Telegram, desktop notifications) with inline keyboard buttons
+- **Agent integration** — agent checks pending approvals before resuming; routes to `if_approved` or `if_denied` step based on user response
+
+### Existing Features
+
 - **Prompt chaining** — each step sees the output of the previous step, enabling research → summarise → action pipelines
-- **Always-background execution** — tasks always run in the background so you can keep chatting; the sidebar shows a ⏳ indicator while running
-- **Background permissions** — background tasks use a tiered permission system: safe operations always run, low-risk operations (move file, send email) are allowed with optional per-task allowlists, and irreversible operations (file delete, memory delete) are always blocked; configure allowed shell command prefixes and email recipients per-task in the "🔒 Background permissions" section of the task editor
-- **Pre-built templates** — ships with 5 starter tasks (Daily Briefing, Research Summary, Email Digest, Weekly Review, Quick Reminder)
-- **Home screen dashboard** — manage tasks from the home screen with a tabbed layout: ⚡ Tasks (tiles with edit/run/delete) and 📋 Activity (monitoring panel with upcoming runs, recent history, channel status); the home screen’s status monitor panel shows 17 health-check pills at a glance with a diagnosis button
-- **Persistent run history** — task execution history survives task deletion; displayed in the Activity tab with ✅/❌/⏳ status icons
-- **Monitoring / polling** — use interval schedules with conditional prompts to monitor conditions (stock availability, price drops, new releases); the agent checks periodically, reports when the condition is met, and self-disables the task via `{{task_id}}` — no manual intervention needed
-- **Task stop / cancel** — stop a running task from the chat header, activity panel, or task card; stopped tasks skip delivery and auto-delete, and are recorded in run history
+- **Always-background execution** — workflows always run in the background so you can keep chatting; the sidebar shows a ⏳ indicator while running
+- **Background permissions** — background workflows use a tiered permission system: safe operations always run, low-risk operations (move file, send email) are allowed with optional per-task allowlists, and irreversible operations (file delete, memory delete) are always blocked; configure allowed shell command prefixes and email recipients per-task in the "🔒 Background permissions" section of the workflow editor
+- **Pre-built templates** — ships with 5 starter workflows (Daily Briefing, Research Summary, Email Digest, Weekly Review, Quick Reminder)
+- **Home screen dashboard** — manage workflows from the home screen with a tabbed layout: ⚡ Workflows (tiles with edit/run/delete) and 📋 Activity (monitoring panel with upcoming runs, recent history, channel status, pending approvals, extraction journal, dream journal); the home screen's status monitor panel shows 17 health-check pills at a glance with a diagnosis button
+- **Persistent run history** — workflow execution history survives deletion; displayed in the Activity tab with ✅/❌/⏳ status icons
+- **Monitoring / polling** — use interval schedules with conditional prompts to monitor conditions (stock availability, price drops, new releases); the agent checks periodically, reports when the condition is met, and self-disables the workflow via `{{task_id}}` — no manual intervention needed
+- **Task stop / cancel** — stop a running workflow from the chat header, activity panel, or workflow card; stopped workflows skip delivery and auto-delete, and are recorded in run history
 
 ---
 
@@ -246,6 +289,8 @@ Thoth uses a generic **Channel ABC** — any messaging platform can plug in by s
 - **Image generation delivery** — retrieves the last generated image from the image gen tool’s side-channel and sends it as a photo
 - **Emoji reactions** — real-time status feedback using Telegram's native reaction API: 👀 (processing), 👍 (success), 💔 (error); graceful fallback if bot lacks permission
 - **Interrupt approval** — tool calls requiring human approval render as inline keyboard buttons (Approve / Deny)
+- **Multi-channel approval routing** — workflow approval gates send approval requests to Telegram with inline Approve / Deny buttons; responses routed back to the workflow engine
+- **Safety mode enforcement** — respects per-workflow safety mode settings; destructive tool calls in `require_approval` mode trigger approval requests via Telegram
 - **Proactive messaging** — the agent can send messages, photos, and documents to any Telegram chat via `send_telegram_message`, `send_telegram_photo`, `send_telegram_document`
 - **`/model` command** — list and switch models (local or cloud) from within Telegram
 - **Auto-recovery** — handles orphaned tool calls gracefully; offers fresh thread on persistent failures; corrupt thread recovery with user-friendly messages
@@ -347,7 +392,7 @@ A sandboxed, hot-reloadable extension system that lets anyone add new tools and 
 - **Image persistence** — pasted, captured, and attached images survive thread reload; stored as per-thread sidecar files alongside conversation checkpoints
 - **Inline image display** — reading an image file via the filesystem tool displays it inline in chat; the agent can then analyze the image contents via the vision tool
 - **Inline charts** — interactive Plotly charts rendered inline when the agent visualises data (zoom, hover, pan)
-- **Mermaid diagram rendering** — flowcharts, sequence diagrams, state diagrams, and other Mermaid diagrams render as interactive visual diagrams inline in chat; auto-fence detection wraps unfenced Mermaid syntax; mermaid.js bundled with strict security and dark theme
+- **Mermaid diagram rendering** — flowcharts, sequence diagrams, state diagrams, and other Mermaid diagrams render as interactive visual diagrams inline in chat; auto-fence detection wraps unfenced Mermaid syntax; mermaid.js bundled with strict security, dark theme, and `suppressErrors: true` for robustness
 - **Inline YouTube embeds** — YouTube links in responses are rendered as playable embedded videos
 - **Syntax-highlighted code blocks** — fenced code blocks render with language-aware highlighting and a built-in copy button
 - **Onboarding guide** — first-run welcome message with tool overview and clickable example prompts; `👋` button in sidebar to re-show anytime
@@ -380,7 +425,7 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 | **📋 Meeting Notes** | Structure raw meeting notes into actionable minutes with follow-ups |
 | **🎯 Proactive Agent** | Anticipate user needs, ask clarifying questions, and self-check work at milestones |
 | **🪞 Self-Reflection** | Periodically review memory for contradictions, gaps, and stale information |
-| **⚙️ Task Automation** | Design effective automated workflows using scheduled tasks, prompt chaining, and delivery channels |
+| **⚙️ Task Automation** | Design effective advanced workflows with step pipelines, conditions, approval gates, and delivery channels |
 | **🌐 Web Navigator** | Strategic patterns for effective browser automation — research, forms, and data extraction |
 
 - **10 bundled skills** cover data analysis, research, automation, meeting notes, daily briefings, and more
@@ -396,14 +441,14 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 
 | File | Purpose |
 |------|---------|
-| **`app.py`** + **`ui/`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter, Settings dialog (13 tabs including Cloud, Plugins, and Channels), tabbed home screen (Tasks + Activity + Knowledge graph), status monitor panel with animated avatar, 17 health-check pills, and diagnosis button (`status_bar.py` + `status_checks.py`), Task Edit dialog, file attachment handling with clipboard paste and drag-and-drop, streaming event loop with error recovery, Playwright PDF export, voice bar, first-launch setup wizard (Local/Cloud paths), Google Account setup wizard, per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network), Mermaid diagram rendering (mermaid.js), image generation inline rendering, OAuth token health checks (startup + periodic 6 h re-check), right-click context menu (pywebview), plugin marketplace dialog, centralized logging configuration |
-| **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator with thinking/reasoning token extraction, interrupt handling for destructive actions, live token usage reporting, graph-enhanced auto-recall with memory IDs and relation context, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off), task cancellation via stop_event, displaced tool-call auto-repair, plugin tool + channel tool injection, `clear_agent_cache()` for reload |
+| **`app.py`** + **`ui/`** | NiceGUI UI — chat interface, sidebar thread manager with live token counter and approval badge, Settings dialog (13 tabs including Cloud, Plugins, and Channels), tabbed home screen (Workflows + Activity + Knowledge graph), pending approvals panel, extraction journal viewer, dream journal viewer, status monitor panel with animated avatar, 17 health-check pills, and diagnosis button (`status_bar.py` + `status_checks.py`), Workflow Edit dialog with Simple/Advanced mode toggle and step-builder UI with Mermaid flow preview, file attachment handling with clipboard paste and drag-and-drop, streaming event loop with error recovery, Playwright PDF export, voice bar, first-launch setup wizard (Local/Cloud paths), Google Account setup wizard, per-thread model picker, task stop buttons, inline terminal panel, interactive knowledge graph visualization (vis-network) with Dream button, Mermaid diagram rendering (mermaid.js), image generation inline rendering, OAuth token health checks (startup + periodic 6 h re-check), right-click context menu (pywebview), plugin marketplace dialog, centralized logging configuration |
+| **`agent.py`** | LangGraph ReAct agent — system prompt, automatic conversation summarization, pre-model context trimming with proportional tool-output shrinking, streaming event generator with thinking/reasoning token extraction, interrupt handling for destructive actions, approval-gate integration (pause/resume workflows at approval steps), step branching execution, safety-mode tool filtering, live token usage reporting, graph-enhanced auto-recall with memory IDs and relation context, model override propagation via ContextVar, configurable retrieval compression (Smart/Deep/Off), task cancellation via stop_event, displaced tool-call auto-repair, plugin tool + channel tool injection, `clear_agent_cache()` for reload |
 | **`threads.py`** | SQLite-backed thread metadata, `SqliteSaver` checkpointer for persisting LangGraph conversation state, and per-thread image sidecar persistence (`thread_ui/`) |
 | **`memory.py`** | Backward-compatible memory wrapper — delegates all operations to `knowledge_graph.py`, mapping legacy column names (`category`/`content` to `entity_type`/`description`); provides `save_memory`, `find_by_subject`, `update_memory`, `delete_memory`, `semantic_search`, and `count_memories` with unchanged signatures |
-| **`knowledge_graph.py`** | Personal knowledge graph engine — SQLite entity + relation tables (WAL mode), NetworkX DiGraph for traversal, FAISS vector index for semantic search; entity CRUD with alias resolution, relation CRUD with cascade delete, `graph_enhanced_recall()` for semantic + graph expansion, `graph_to_vis_json()` for visualization; deterministic dedup via normalized subject matching |
+| **`knowledge_graph.py`** | Personal knowledge graph engine — SQLite entity + relation tables (WAL mode), NetworkX DiGraph for traversal, FAISS vector index for semantic search; entity CRUD with alias resolution, relation CRUD with cascade delete, 67 valid relation types with 60+ aliases and self-loop rejection, `graph_enhanced_recall()` for semantic + graph expansion, `graph_to_vis_json()` for visualization; deterministic dedup via normalized subject matching |
 | **`wiki_vault.py`** | Obsidian-compatible markdown vault export — per-entity articles with YAML frontmatter, wiki-links, type-based directory grouping, per-type and master indexes, full-text search, conversation export, live export on save/delete |
-| **`dream_cycle.py`** | Nightly knowledge refinement daemon — duplicate merge (≥0.93 similarity), description enrichment from conversation context, relationship inference between co-occurring entities; three-layer anti-contamination, configurable 1–5 AM window, dream journal logging |
-| **`document_extraction.py`** | Background map-reduce LLM pipeline for document knowledge extraction — split → summarize → extract entities with source provenance; queue-based with live progress in status bar |
+| **`dream_cycle.py`** | 4-phase nightly knowledge refinement daemon — duplicate merge (≥0.93 similarity), description enrichment from conversation context, relationship inference with hub diversity cap, batch rotation, 7-day rejection cache, pre-flight merge check, Ollama busy check, and confidence decay on stale relations; three-layer anti-contamination, configurable dream window, dream journal logging |
+| **`document_extraction.py`** | Background map-reduce LLM pipeline for document knowledge extraction — split → summarize → extract entities with source provenance; curated 67-type relation vocabulary, entity cap (12), min description length (30 chars), hub entity dedup, quality gates; queue-based with live progress in status bar |
 | **`models.py`** | Ollama + cloud model management — local model listing/downloading/switching, cloud provider support (OpenAI direct, OpenRouter via ChatOpenRouter), starred models, context-size catalog with heuristics, model override routing, cloud vision detection, reasoning model support (`reasoning=True` for thinking models) |
 | **`documents.py`** | Document ingestion — PDF/DOCX/TXT/Markdown/HTML/EPUB loading, chunking, FAISS embedding and storage; per-document removal with source cleanup |
 | **`voice.py`** | Local STT pipeline — toggle-based 4-state machine (stopped/listening/transcribing/muted) with faster-whisper CPU-only int8 transcription |
@@ -412,13 +457,13 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 | **`data_reader.py`** | Shared pandas-based reader for CSV, TSV, Excel, JSON, JSONL — returns schema + stats + preview rows |
 | **`launcher.py`** | Desktop launcher — system tray (pystray), native window management (pywebview), two-tier splash screen (tkinter with console fallback), manages NiceGUI server lifecycle; structured logging to `~/.thoth/thoth_app.log` |
 | **`api_keys.py`** | API key management — tool keys from `~/.thoth/api_keys.json`, cloud LLM provider keys and starred models from `~/.thoth/cloud_config.json` |
-| **`prompts.py`** | Centralized LLM prompts — system prompt (with BUILDING CONNECTIONS, EXPLORING CONNECTIONS, and BACKGROUND TASK PERMISSIONS sections), extraction prompt (triple-based with User entity convention, 10 entity types, and relation taxonomy), summarization prompt, dream cycle prompts (merge/enrich/infer), document extraction prompts (map/reduce/extract); memory guidelines with dedup, update, and cross-entity overwrite guard |
-| **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts entities and relations as structured triples, two-pass dedup (entities with alias merging, then relations with subject-to-ID resolution), User entity pre-population, excludes active threads, runs on startup + every 6 hours |
+| **`prompts.py`** | Centralized LLM prompts — system prompt (with BUILDING CONNECTIONS, EXPLORING CONNECTIONS, and BACKGROUND TASK PERMISSIONS sections), extraction prompt (triple-based with User entity convention, 10 entity types, vague-type banning, and relation taxonomy), summarization prompt, dream cycle prompts (merge/enrich/infer with `uses` rule tightening and multi-excerpt evidence), document extraction prompts (map/reduce/extract with curated relation vocabulary and confidence floor alignment); memory guidelines with dedup, update, and cross-entity overwrite guard |
+| **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts entities and relations as structured triples, two-pass dedup (entities with alias merging, then relations with subject-to-ID resolution), vague-type banning, relation pre-normalisation, cross-source merge protection (0.90 threshold), User entity pre-population, excludes active threads, runs on startup + every 6 hours |
 | **`skills.py`** | Skills engine — discovers, loads, and caches bundled and user skill definitions from `SKILL.md` files with YAML frontmatter; builds prompt text for enabled skills injected into the system prompt; config persistence in `~/.thoth/skills_config.json` |
 | **`bundled_skills/`** | 10 built-in skill packages (Brain Dump, Daily Briefing, Data Analyst, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) — each a directory containing a `SKILL.md` instruction file |
-| **`tasks.py`** | Task engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, sequential prompt execution, background runner with threading, channel delivery (any registered channel), per-task model override, persistent threads, notify-only mode, skills override, run history persistence, task stop/cancel, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
-| **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue with `toast_type` support (positive/negative); error toasts render as persistent red banners; coordinates task completion chimes and timer alerts |
-| **`channels/`** | Messaging channel framework — `Channel` ABC with capability declarations, channel registry with auto-start and delivery routing, shared media pipeline (transcribe/analyze/extract/save), tool factory for auto-generated LangChain tools per channel, per-channel config store; Telegram adapter with voice/photo/document inbound, emoji reactions, interrupt buttons, image gen delivery, `/model` command, and HTML formatting |
+| **`tasks.py`** | Workflow engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, step-based pipelines (5 step types: Prompt, Condition, Approval, Subtask, Notify), conditional branching, approval gates, webhook triggers, task-completion triggers, concurrency groups, safety mode, sequential prompt execution, background runner with threading, channel delivery (any registered channel), per-task model override, persistent threads, notify-only mode, skills override, run history persistence, task stop/cancel, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
+| **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue with `toast_type` support (positive/negative); error toasts render as persistent red banners; coordinates task completion chimes, timer alerts, and approval gate notifications |
+| **`channels/`** | Messaging channel framework — `Channel` ABC with capability declarations, channel registry with auto-start and delivery routing, shared media pipeline (transcribe/analyze/extract/save), tool factory for auto-generated LangChain tools per channel, per-channel config store; Telegram adapter with voice/photo/document inbound, emoji reactions, interrupt buttons, multi-channel approval routing, safety mode enforcement, image gen delivery, `/model` command, and HTML formatting |
 | **`tools/`** | 25 self-registering tool modules + base class + registry |
 | **`plugins/`** | Plugin runtime — `PluginAPI` bridge, `PluginTool` base class, manifest validation, security scanner, dependency sandbox, state/secrets persistence, loader, installer, marketplace client, and settings/marketplace UI |
 | **`static/`** | Bundled JS libraries — `vis-network.min.js` for knowledge graph visualization, `mermaid.min.js` for diagram rendering |
@@ -437,6 +482,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── memory_vectors/         # FAISS vector index for semantic memory search
 ├── memory_extraction_state.json  # Tracks last extraction run timestamp
 ├── dream_journal.json      # Dream Cycle operation log (cycle ID, summary, duration)
+├── dream_rejections.json   # Dream Cycle 7-day rejection cache for inference pairs
 ├── api_keys.json           # API keys (Tavily, Wolfram, etc.)
 ├── cloud_config.json       # Cloud LLM provider keys and starred models
 ├── app_config.json         # Onboarding / first-run state
@@ -490,7 +536,7 @@ Most open-source AI assistants are **developer tools disguised as products** —
 | **Cost** | $20+/month per subscription | Free with local models. Cloud models use pay-per-token APIs — typically pennies per conversation with smart context trimming |
 | **Memory** | Limited, opaque, provider-controlled | Personal knowledge graph — entities, relationships, visual explorer, fully yours |
 | **Tools** | Sandboxed plugins, limited integrations | Direct access to your Gmail, Calendar, filesystem, shell, browser, webcam — 25 tools, 70 sub-operations, plus a plugin marketplace for third-party extensions |
-| **Customisation** | Pick a model, write a system prompt | Swap models per conversation or per task, build scheduled tasks with cron/daily/weekly/interval triggers, mix local and cloud models freely |
+| **Customisation** | Pick a model, write a system prompt | Swap models per conversation or per workflow, build advanced workflows with step pipelines, conditions, approval gates, and cron/daily/weekly/interval triggers, mix local and cloud models freely |
 | **Voice** | Cloud-processed speech | Local Whisper STT + Kokoro TTS — never leaves your mic |
 | **Availability** | Requires internet, subject to outages & rate limits | Local models work offline; cloud models available when connected |
 
@@ -505,14 +551,14 @@ Most open-source AI assistants are **developer tools disguised as products** —
 | **Getting started** | **One-click installer** (`.exe` / `.dmg`) — download, run, done. Built-in setup wizard, no terminal required | `npm install -g openclaw@latest` → CLI onboarding. Requires Node.js 24. Windows needs WSL2 (no native Windows support) |
 | **Local AI (offline)** | **Local-first** — Ollama with 39 curated models out of the box. Works fully offline. Cloud is opt-in | Cloud-first design — requires an API key to start. Local model support through provider config |
 | **Memory** | **Personal knowledge graph** — 10 entity types, typed directional relations, visual explorer, FAISS semantic search + 1-hop graph expansion, memory decay, orphan repair | Flat markdown files (`MEMORY.md` + daily notes) with semantic search. No structured graph |
-| **Knowledge refinement** | **Dream Cycle** — nightly duplicate merging (≥0.93 similarity), description enrichment from conversation context, relationship inference, 3-layer anti-contamination system, dream journal | Dreaming (experimental) — Light/Deep/REM phases that promote short-term signals to long-term memory via scoring thresholds |
-| **Document intelligence** | **Map-reduce LLM pipeline** — extracts structured entities and relations into the knowledge graph with source provenance. Supports PDF, DOCX, EPUB, HTML, Markdown | File read/write/edit operations in the workspace |
+| **Knowledge refinement** | **Dream Cycle** — 4-phase nightly engine: duplicate merging (≥0.93 similarity), description enrichment, relationship inference with hub diversity caps and rejection cache, confidence decay on stale relations. 3-layer anti-contamination system, dream journal | Dreaming (experimental) — Light/Deep/REM phases that promote short-term signals to long-term memory via scoring thresholds |
+| **Document intelligence** | **Map-reduce LLM pipeline** — extracts structured entities and relations into the knowledge graph with source provenance. Curated 67-type relation vocabulary, entity caps, self-loop rejection. Supports PDF, DOCX, EPUB, HTML, Markdown | File read/write/edit operations in the workspace |
 | **Wiki vault** | **Obsidian-compatible export** — one `.md` per entity with `[[wiki-links]]`, YAML frontmatter, and per-type indexes | Not available |
 | **Voice** | **Fully local** — faster-whisper STT + Kokoro TTS with 10 voices. Audio never leaves your machine | ElevenLabs (cloud TTS) + system fallback. Voice Wake on macOS/iOS |
 | **Health tracking** | **Built-in tracker** — medications, symptoms, exercise, mood, sleep, periods. Streak analysis, CSV export, Plotly charts | Not available |
 | **Tools** | 25 tools / 70 sub-operations — Gmail, Calendar, Arxiv, YouTube, Wolfram Alpha, Plotly charts, wiki vault, habit tracker, image generation | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
 | **Messaging channels** | Telegram (voice, photo, documents, reactions, buttons) + Gmail. *Slack, Discord, WhatsApp, Teams coming soon* | **23+ channels** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, and many more |
-| **Autonomous agents** | **Background tasks as sub-agents** — each task overrides model, skills, and permissions independently. Multiple run in parallel with their own persistent threads | Multi-agent routing with isolated sessions per sender/channel |
+| **Autonomous agents** | **Advanced workflows** — step-based pipelines with conditions, approval gates, webhook triggers, concurrency groups, and per-workflow safety mode. Multiple run in parallel with their own persistent threads | Multi-agent routing with isolated sessions per sender/channel |
 | **Desktop app** | Native window (pywebview) + system tray on **Windows & macOS**. One-click installers for both | macOS menu bar app. No native Windows app (WSL2 required). iOS & Android companion apps |
 | **Canvas** | Mermaid diagrams and Plotly charts rendered inline | A2UI — agent-driven interactive visual workspace |
 | **Plugins** | Sandboxed plugin marketplace with hot-reload and security scanning | npm plugin ecosystem + ClawHub skill registry. Large community catalog |

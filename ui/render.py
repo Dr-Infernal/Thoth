@@ -7,11 +7,14 @@ context.  They receive ``state`` and ``p`` explicitly, never via closure.
 from __future__ import annotations
 
 import html as _html
+import logging
 import os
 import re
 from datetime import datetime
 
 from nicegui import ui
+
+logger = logging.getLogger(__name__)
 
 from ui.state import AppState, P
 
@@ -318,7 +321,7 @@ def render_message_content(msg: dict) -> None:
                         fig = _pio.from_json(_fj)
                         ui.plotly(fig).classes("w-full")
                     except Exception:
-                        pass
+                        logger.debug("Chart rendering failed in tool result", exc_info=True)
                     content = _dt
                 if content.startswith("__IMAGE__:"):
                     _me = content.find("\n\n", 10)
@@ -327,7 +330,7 @@ def render_message_content(msg: dict) -> None:
                     try:
                         render_image_with_save(_ib)
                     except Exception:
-                        pass
+                        logger.debug("Image rendering failed in tool result", exc_info=True)
                     content = _dt
                 if content.startswith("__HTML__:"):
                     _me = content.find("\n\n", 9)
@@ -336,7 +339,7 @@ def render_message_content(msg: dict) -> None:
                     try:
                         ui.html(_hc).classes("w-full")
                     except Exception:
-                        pass
+                        logger.debug("HTML widget rendering failed in tool result", exc_info=True)
                     content = _dt
                 if len(content) > 5_000:
                     content = content[:5_000] + "\n\n… (truncated)"
@@ -371,7 +374,7 @@ def render_message_content(msg: dict) -> None:
                 fig = _pio.from_json(fig_json)
                 ui.plotly(fig).classes("w-full")
         except Exception:
-            pass
+            logger.debug("Chart rendering failed", exc_info=True)
 
     # Main text with inline YouTube embeds
     text = msg.get("content", "")
@@ -393,10 +396,10 @@ def render_message_content(msg: dict) -> None:
             "  div.textContent = el.textContent;"
             "  pre.replaceWith(div);"
             "});"
-            "if (typeof mermaid !== 'undefined') { mermaid.run({nodes: document.querySelectorAll('pre.mermaid')}); }"
+            "mermaid.run({nodes: document.querySelectorAll('pre.mermaid'), suppressErrors: true});"
         )
     except RuntimeError:
-        pass
+        logger.debug("JS runtime unavailable for hljs/mermaid", exc_info=True)
 
 
 def add_chat_message(msg: dict, p: P) -> None:

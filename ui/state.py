@@ -72,6 +72,7 @@ class GenerationState:
     accumulated: str = ""
     thinking_text: str = ""
     tool_results: list = field(default_factory=list)
+    pending_tools: dict = field(default_factory=dict)
     chart_data: list = field(default_factory=list)
     captured_images: list = field(default_factory=list)
     interrupt_data: Any = None

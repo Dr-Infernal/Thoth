@@ -107,6 +107,7 @@ async def consume_generation(
         if gen.stop_event.is_set() and not _stopped_shown:
             _stopped_shown = True
             gen.status = "stopped"
+            gen.accumulated += "\n\n\u23f9\ufe0f *[Stopped]*"
             _drain_deadline = asyncio.get_event_loop().time() + 30
             if not gen.detached:
                 try:
@@ -118,10 +119,9 @@ async def consume_generation(
                         gen.thinking_md = None
                     if gen.assistant_md:
                         gen.assistant_md.set_visibility(True)
-                        gen.accumulated += "\n\n\u23f9\ufe0f *[Stopped]*"
                         gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
                 except Exception:
-                    pass
+                    logger.debug("Stop-handling UI cleanup failed", exc_info=True)
             if gen.tts_active:
                 state.tts_service.stop()
 
@@ -181,11 +181,11 @@ async def consume_generation(
                         gen.assistant_md.set_visibility(True)
                         gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
                 except Exception:
-                    pass
+                    logger.debug("Error-event UI cleanup failed", exc_info=True)
             try:
                 repair_orphaned_tool_calls(gen.enabled_tools, gen.config)
             except Exception:
-                pass
+                logger.debug("repair_orphaned_tool_calls failed", exc_info=True)
             try:
                 _agent = get_agent_graph()
                 _agent.update_state(
@@ -203,9 +203,9 @@ async def consume_generation(
                         _pending_exp = ui.expansion(
                             f"\U0001f504 {payload}\u2026", icon="hourglass_empty"
                         ).classes("w-full")
-                        _pending_exp._thoth_tool_name = payload
+                        gen.pending_tools[payload] = _pending_exp
                 except Exception:
-                    pass
+                    logger.debug("Tool-call expansion creation failed", exc_info=True)
 
         elif event_type == "tool_done":
             _handle_tool_done(gen, state, p, payload, cb)
@@ -224,7 +224,7 @@ async def consume_generation(
                             sanitize=False,
                         )
                 except Exception:
-                    pass
+                    logger.debug("Summarizing label update failed", exc_info=True)
 
         elif event_type == "thinking":
             pass  # spinner already visible
@@ -248,7 +248,7 @@ async def consume_generation(
                     if p.chat_scroll:
                         p.chat_scroll.scroll_to(percent=1.0)
                 except Exception:
-                    pass
+                    logger.debug("Thinking-token rendering failed", exc_info=True)
 
         elif event_type == "token":
             gen.accumulated += payload
@@ -258,7 +258,7 @@ async def consume_generation(
                     if p.chat_scroll:
                         p.chat_scroll.scroll_to(percent=1.0)
                 except Exception:
-                    pass
+                    logger.debug("Token content update failed", exc_info=True)
 
             # Streaming TTS (only when attached)
             if gen.tts_active:
@@ -312,7 +312,7 @@ async def consume_generation(
                         gen.assistant_md.set_visibility(True)
                         gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
                 except Exception:
-                    pass
+                    logger.debug("Done-event UI finalization failed", exc_info=True)
 
         if _break_loop:
             break
@@ -333,7 +333,10 @@ async def consume_generation(
             # so code blocks get proper highlight.js and mermaid diagrams render.
             if gen.accumulated:
                 if gen.assistant_md:
-                    gen.assistant_md.delete()
+                    try:
+                        gen.assistant_md.delete()
+                    except (ValueError, RuntimeError):
+                        logger.debug("assistant_md already removed from DOM", exc_info=True)
                     gen.assistant_md = None
                 if gen.wrapper:
                     with gen.wrapper:
@@ -345,13 +348,11 @@ async def consume_generation(
                 )
                 ui.run_javascript(
                     "setTimeout(function() {"
-                    "  if (typeof mermaid !== 'undefined') {"
-                    "    mermaid.run({nodes: document.querySelectorAll('pre.mermaid')});"
-                    "  }"
-                    "}, 100);"
+                    "  mermaid.run({nodes: document.querySelectorAll('pre.mermaid'), suppressErrors: true});"
+                    "}, 150);"
                 )
             except RuntimeError:
-                pass
+                logger.debug("JS runtime unavailable for hljs/mermaid", exc_info=True)
     except Exception:
         logger.error("Error in post-stream finalization", exc_info=True)
 
@@ -417,7 +418,7 @@ def _handle_tool_done(
                 with gen.tool_col:
                     ui.plotly(fig).classes("w-full")
             except Exception:
-                pass
+                logger.debug("Chart rendering failed", exc_info=True)
         tool_content = display_text
 
     # Image marker detection (plugins / rich returns)
@@ -435,7 +436,7 @@ def _handle_tool_done(
                 with gen.tool_col:
                     render_image_with_save(_img_b64)
             except Exception:
-                pass
+                logger.debug("Image marker rendering failed", exc_info=True)
         tool_content = display_text
 
     # HTML marker detection (plugins / rich returns)
@@ -452,16 +453,13 @@ def _handle_tool_done(
                 with gen.tool_col:
                     ui.html(_html_content).classes("w-full")
             except Exception:
-                pass
+                logger.debug("HTML widget rendering failed", exc_info=True)
         tool_content = display_text
 
     # Update the pending expansion or create a new one
     if not gen.detached and gen.tool_col:
         try:
-            matched_exp = None
-            for child in gen.tool_col:
-                if hasattr(child, '_thoth_tool_name'):
-                    matched_exp = child
+            matched_exp = gen.pending_tools.pop(tool_name, None)
             if matched_exp:
                 matched_exp._props["icon"] = "check_circle"
                 matched_exp._text = f"\u2705 {tool_name}"
@@ -472,7 +470,6 @@ def _handle_tool_done(
                         display += "\n\n\u2026 (truncated)"
                     with matched_exp:
                         ui.code(display).classes("w-full text-xs")
-                del matched_exp._thoth_tool_name
             else:
                 with gen.tool_col:
                     with ui.expansion(f"\u2705 {tool_name}", icon="check_circle").classes("w-full"):
@@ -482,7 +479,7 @@ def _handle_tool_done(
                                 display += "\n\n\u2026 (truncated)"
                             ui.code(display).classes("w-full text-xs")
         except Exception:
-            pass
+            logger.debug("Tool expansion update failed for %s", tool_name, exc_info=True)
 
     gen.tool_results.append({"name": tool_name, "content": tool_content})
 
@@ -521,7 +518,7 @@ def _handle_tool_done(
             if p.terminal_scroll:
                 p.terminal_scroll.scroll_to(percent=1.0)
         except Exception:
-            pass
+            logger.debug("Terminal panel rendering failed", exc_info=True)
 
     # Vision capture
     if tool_name in ("\U0001f441\ufe0f Vision", "analyze_image"):
@@ -534,7 +531,7 @@ def _handle_tool_done(
                     with gen.tool_col:
                         render_image_with_save(b64_img)
                 except Exception:
-                    pass
+                    logger.debug("Vision capture rendering failed", exc_info=True)
             vsvc.last_capture = None
 
     # Browser screenshot thumbnail
@@ -555,7 +552,7 @@ def _handle_tool_done(
                                 extra_style="border: 1px solid #333; margin-top: 4px;",
                             )
         except Exception:
-            pass
+            logger.debug("Browser screenshot rendering failed", exc_info=True)
 
     # Filesystem image display (workspace_read_file on image files)
     if tool_name in ("workspace_read_file",):
@@ -568,7 +565,7 @@ def _handle_tool_done(
                     with gen.tool_col:
                         render_image_with_save(_fs_img["b64"])
         except Exception:
-            pass
+            logger.debug("Filesystem image rendering failed", exc_info=True)
 
     # Image generation display (generate_image / edit_image)
     if raw_tool_name in ("generate_image", "edit_image"):
@@ -581,7 +578,7 @@ def _handle_tool_done(
                     with gen.tool_col:
                         render_image_with_save(_gen_img)
         except Exception:
-            pass
+            logger.debug("Image generation rendering failed", exc_info=True)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -686,7 +683,7 @@ async def send_message(
             try:
                 _processing_note.delete()
             except Exception:
-                pass
+                logger.debug("Processing note cleanup failed", exc_info=True)
 
     # ── Build agent input ────────────────────────────────────────────
     agent_input = text
@@ -783,7 +780,7 @@ async def send_message(
                 try:
                     repair_orphaned_tool_calls(enabled_tools, config)
                 except Exception:
-                    pass
+                    logger.debug("repair_orphaned_tool_calls failed in stream finally", exc_info=True)
             gen.q.put(None)
 
     threading.Thread(target=_sync_stream, daemon=True).start()
@@ -865,7 +862,7 @@ async def resume_after_interrupt(
                 try:
                     repair_orphaned_tool_calls(enabled_tools, config)
                 except Exception:
-                    pass
+                    logger.debug("repair_orphaned_tool_calls failed in resume finally", exc_info=True)
             gen.q.put(None)
 
     threading.Thread(target=_sync_resume, daemon=True).start()

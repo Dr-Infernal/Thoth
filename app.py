@@ -280,6 +280,29 @@ async def on_startup():
     _st.startup_ready = True
 
 
+# ── Webhook API Route ────────────────────────────────────────────────────────
+
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+
+async def _webhook_handler(request: Request) -> JSONResponse:
+    """Handle POST /api/webhook/{task_id} for webhook-triggered tasks."""
+    task_id = request.path_params.get("task_id", "")
+    secret = request.query_params.get("secret")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    from tasks import handle_webhook
+    result = handle_webhook(task_id, secret=secret, payload=payload)
+    status_code = 200 if result.get("status") == "ok" else 400
+    return JSONResponse(result, status_code=status_code)
+
+
+app.add_route("/api/webhook/{task_id}", _webhook_handler, methods=["POST"])
+
+
 @app.on_shutdown
 async def on_shutdown():
     print("[shutdown] Cleaning up sessions…")

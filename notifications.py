@@ -96,6 +96,9 @@ def _desktop_notify(title: str, message: str) -> None:
             pass
     try:
         from plyer import notification
+        # Windows balloon tips limit message to 256 chars
+        if len(message) > 253:
+            message = message[:253] + "…"
         notification.notify(
             title=title,
             message=message,

@@ -74,7 +74,25 @@ def build_sidebar(
                 rebuild_main()
                 _rebuild_thread_list_ref[0]()
 
-            ui.button("🏠 Home", on_click=_go_home).classes("flex-grow").props("flat")
+            _home_btn = ui.button("🏠 Home", on_click=_go_home).classes("flex-grow").props("flat")
+            _home_badge = ui.badge("", color="orange").props("floating").style("display: none;")
+            _home_badge.move(_home_btn)
+
+            def _update_home_badge() -> None:
+                """Show/hide pulsing badge with pending approval count."""
+                try:
+                    from tasks import get_pending_approvals
+                    count = len(get_pending_approvals())
+                except Exception:
+                    count = 0
+                if count > 0:
+                    _home_badge.text = str(count)
+                    _home_badge.style("display: inline-flex;")
+                else:
+                    _home_badge.style("display: none;")
+
+            _update_home_badge()
+            ui.timer(5.0, _update_home_badge)
 
             def _new_thread():
                 tid = uuid.uuid4().hex[:12]
@@ -97,6 +115,69 @@ def build_sidebar(
                 _rebuild_thread_list_ref[0]()
 
             ui.button("＋ New", on_click=_new_thread).classes("flex-grow").props("color=primary")
+
+        # ── Pending Approvals strip ──────────────────────────────────
+        # Compact cards above thread list; auto-refreshes every 5s.
+        _approval_strip = ui.column().classes("w-full gap-0")
+
+        def _rebuild_approval_strip() -> None:
+            """Refresh the sidebar approval cards."""
+            _approval_strip.clear()
+            try:
+                from tasks import get_pending_approvals, respond_to_approval
+                pending = get_pending_approvals()
+            except Exception:
+                pending = []
+            if not pending:
+                return
+            with _approval_strip:
+                ui.separator().classes("q-my-xs")
+                ui.label(f"⏳ Approvals ({len(pending)})").classes(
+                    "text-xs font-bold"
+                ).style("color: #f0c040;")
+                for appr in pending:
+                    with ui.card().classes("w-full q-my-xs").style(
+                        "padding: 0.4rem 0.6rem; border-left: 3px solid #f0c040;"
+                    ):
+                        with ui.column().classes("w-full gap-0"):
+                            ui.label(
+                                f"🔔 {appr.get('task_name', 'Task')}"
+                            ).classes("text-xs font-bold ellipsis").style(
+                                "max-width: 200px;"
+                            )
+                            _msg = appr.get("message", "")
+                            if _msg:
+                                ui.label(_msg[:80] + ("…" if len(_msg) > 80 else "")).classes(
+                                    "text-xs text-grey-5"
+                                )
+                            with ui.row().classes("gap-1 q-mt-xs"):
+                                async def _appr(tok=appr["resume_token"]):
+                                    from nicegui import run
+                                    result = await run.io_bound(respond_to_approval, tok, True)
+                                    if result:
+                                        ui.notify("✅ Approved", type="positive")
+                                    else:
+                                        ui.notify("ℹ️ Already handled", type="info")
+                                    _rebuild_approval_strip()
+
+                                async def _deny(tok=appr["resume_token"]):
+                                    from nicegui import run
+                                    result = await run.io_bound(respond_to_approval, tok, False)
+                                    if result:
+                                        ui.notify("❌ Denied", type="warning")
+                                    else:
+                                        ui.notify("ℹ️ Already handled", type="info")
+                                    _rebuild_approval_strip()
+
+                                ui.button("✅", on_click=_appr).props(
+                                    "round dense size=xs"
+                                ).style("background: #2d8a4e; color: white;").tooltip("Approve")
+                                ui.button("❌", on_click=_deny).props(
+                                    "round flat dense size=xs"
+                                ).style("color: #ff6b6b;").tooltip("Deny")
+
+        _rebuild_approval_strip()
+        ui.timer(5.0, _rebuild_approval_strip)
 
         ui.label("Conversations").classes("text-subtitle2 mt-2")
         p.thread_container = ui.column().classes("w-full gap-0")

@@ -7,7 +7,7 @@ Replaces the flat ``memories`` table with a connected graph of **entities**
 Architecture
 ~~~~~~~~~~~~
 * **SQLite** is the durable store (WAL mode, same ``~/.thoth/memory.db``).
-* **NetworkX** ``DiGraph`` is an in-memory mirror rebuilt on startup from
+* **NetworkX** ``MultiDiGraph`` is an in-memory mirror rebuilt on startup from
   SQLite.  All reads hit the graph; all writes go to SQLite first, then
   update NetworkX and the FAISS index atomically.
 * **FAISS** vector index is preserved for semantic recall — embeddings are
@@ -49,6 +49,13 @@ logger = logging.getLogger(__name__)
 # and concurrent access from agent + extraction threads causes segfaults.
 _faiss_lock = threading.Lock()
 
+# Lock protecting the in-memory NetworkX graph.  Multiple threads
+# (live saves, extraction timer, dream daemon) mutate the graph
+# concurrently.  RLock is used because nested calls exist (e.g.
+# _dedup_and_save → save_memory → save_entity → _auto_link_to_user
+# → add_relation).
+_graph_lock = threading.RLock()
+
 # When True, save_entity / update_entity / delete_entity skip the
 # per-call rebuild_index().  Callers must call rebuild_index() once
 # after the batch.  Used by the extraction pipeline.
@@ -63,6 +70,61 @@ _SURROGATE_RE = re.compile('[\ud800-\udfff]')
 def _sanitize_text(s: str) -> str:
     """Strip lone UTF-16 surrogates that are invalid in strict UTF-8."""
     return _SURROGATE_RE.sub('', s) if s else s
+
+
+def extract_json_block(text: str, bracket: str = "[") -> str | None:
+    """Extract the first balanced JSON array or object from *text*.
+
+    Uses bracket-counting instead of greedy regex so nested structures
+    (e.g. ``[[1,2],[3,4]]``) are matched correctly and stray brackets
+    in surrounding prose are ignored.
+
+    Parameters
+    ----------
+    text : str
+        Raw LLM response that may contain a JSON block.
+    bracket : str
+        ``'['`` to find an array, ``'{'`` to find an object.
+
+    Returns the matched substring (valid for ``json.loads``) or ``None``.
+    """
+    open_br = bracket
+    close_br = "]" if bracket == "[" else "}"
+    start = text.find(open_br)
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+
+    for i in range(start, len(text)):
+        ch = text[i]
+
+        if escape_next:
+            escape_next = False
+            continue
+
+        if ch == "\\":
+            if in_string:
+                escape_next = True
+            continue
+
+        if ch == '"':
+            in_string = not in_string
+            continue
+
+        if in_string:
+            continue
+
+        if ch == open_br:
+            depth += 1
+        elif ch == close_br:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+
+    return None  # unbalanced brackets
 
 # ── Data directory ───────────────────────────────────────────────────────────
 _DATA_DIR = pathlib.Path(
@@ -82,6 +144,133 @@ VALID_ENTITY_TYPES = {
 
 # Keep backward compat alias
 VALID_CATEGORIES = VALID_ENTITY_TYPES
+
+# Controlled vocabulary of allowed relation types.
+# Any relation created with a type NOT in this set will be logged as a
+# warning (but still accepted to avoid breaking existing data).
+# Dream inference uses this to reject vague types.
+VALID_RELATION_TYPES = {
+    # Family / social
+    "knows", "friend_of", "colleague_of", "boss_of", "mentor_of",
+    "mother_of", "father_of", "sibling_of", "married_to", "child_of",
+    "partner_of", "parent_of", "family_member_of", "cousin_of",
+    # Location
+    "lives_in", "works_at", "located_in", "born_in", "visits",
+    "based_in", "headquarters_in",
+    # Work / organisational
+    "works_on", "manages", "member_of", "part_of", "employed_by",
+    "founded", "leads", "reports_to", "manager_of",
+    # Preference / interest
+    "prefers", "enjoys", "dislikes", "interested_in", "has_hobby",
+    # Temporal
+    "deadline_for", "scheduled_for", "started_on", "completed_on",
+    # Knowledge / skill
+    "studies", "proficient_in", "certified_in", "learning",
+    "has_skill", "teaches",
+    # Media
+    "reading", "watching", "recommends", "authored", "listening_to",
+    # General / ownership
+    "uses", "created_by", "owns", "has_pet", "pet_of",
+    "treats", "attends", "participates_in",
+    # Auto-link system types
+    "related_to", "associated_with", "has_event",
+    # Document extraction types
+    "extracted_from", "uploaded",
+    "builds_on", "cites", "extends", "contradicts",
+}
+
+# Aliases map common LLM-produced variants to their canonical form.
+# Checked *before* the VALID_RELATION_TYPES warning so normalised types
+# never produce a warning.
+_RELATION_ALIASES: dict[str, str] = {
+    # is_X_of → X_of
+    "is_father_of": "father_of",
+    "is_mother_of": "mother_of",
+    "is_sibling_of": "sibling_of",
+    "is_child_of": "child_of",
+    "is_parent_of": "parent_of",
+    "is_friend_of": "friend_of",
+    "is_colleague_of": "colleague_of",
+    "is_boss_of": "boss_of",
+    "is_mentor_of": "mentor_of",
+    "is_member_of": "member_of",
+    "is_part_of": "part_of",
+    "is_pet_of": "pet_of",
+    # Synonym mapping
+    "works_for": "employed_by",
+    "employed_at": "employed_by",
+    "resides_in": "lives_in",
+    "living_in": "lives_in",
+    "likes": "enjoys",
+    "hates": "dislikes",
+    "wrote": "authored",
+    "written_by": "authored",
+    "reads": "reading",
+    "watches": "watching",
+    "listens_to": "listening_to",
+    "skilled_in": "proficient_in",
+    "expert_in": "proficient_in",
+    "located_at": "located_in",
+    "situated_in": "located_in",
+    "managed_by": "reports_to",
+    "supervised_by": "reports_to",
+    "supervises": "manages",
+    "head_of": "leads",
+    "leading": "leads",
+    "belongs_to": "part_of",
+    "affiliated_with": "member_of",
+    "lover_of": "partner_of",
+    "spouse_of": "married_to",
+    "husband_of": "married_to",
+    "wife_of": "married_to",
+    "visited": "visits",
+    "visiting": "visits",
+    "founded_by": "founded",
+    "created": "created_by",
+    "made_by": "created_by",
+    "participates": "participates_in",
+    "attending": "attends",
+    "attended": "attends",
+    "studying": "studies",
+    "studied": "studies",
+    "teaching": "teaches",
+    "taught": "teaches",
+    "owns_pet": "has_pet",
+    "interested": "interested_in",
+    "hobby": "has_hobby",
+    "has_interest": "interested_in",
+    # Document extraction types
+    "extracted_from": "extracted_from",
+    "uploaded": "uploaded",
+    "published_by": "authored",
+    "implements": "uses",
+    "used_by": "uses",
+    "references": "cites",
+}
+
+
+def normalize_relation_type(relation_type: str) -> str:
+    """Map *relation_type* to its canonical form.
+
+    1. Exact match in ``_RELATION_ALIASES`` → return mapped value.
+    2. Strip ``is_`` or ``has_`` prefix and check ``VALID_RELATION_TYPES``.
+    3. Otherwise return the original (unchanged).
+    """
+    rt = relation_type.lower().strip().replace(" ", "_")
+    # 1. Explicit alias
+    if rt in _RELATION_ALIASES:
+        return _RELATION_ALIASES[rt]
+    # Already valid — no change needed
+    if rt in VALID_RELATION_TYPES:
+        return rt
+    # 2. Strip is_ / has_ prefix
+    for prefix in ("is_", "has_"):
+        if rt.startswith(prefix):
+            stripped = rt[len(prefix):]
+            if stripped in VALID_RELATION_TYPES:
+                return stripped
+    return rt
+
 
 # Category → default relation type when auto-linking a new entity to User.
 _CATEGORY_RELATION_MAP: dict[str, str] = {
@@ -327,47 +516,49 @@ _scrub_surrogates()
 # NetworkX in-memory graph
 # ═════════════════════════════════════════════════════════════════════════════
 
-_graph: nx.DiGraph = nx.DiGraph()
+_graph: nx.MultiDiGraph = nx.MultiDiGraph()
 _graph_ready = False
 
 
 def _load_graph() -> None:
     """Populate the NetworkX graph from SQLite.  Called once at startup."""
     global _graph, _graph_ready
-    _graph = nx.DiGraph()
-    conn = _get_conn()
+    with _graph_lock:
+        _graph = nx.MultiDiGraph()
+        conn = _get_conn()
 
-    # Load entities as nodes
-    for row in conn.execute("SELECT * FROM entities").fetchall():
-        row = dict(row)
-        _graph.add_node(row["id"], **row)
+        # Load entities as nodes
+        for row in conn.execute("SELECT * FROM entities").fetchall():
+            row = dict(row)
+            _graph.add_node(row["id"], **row)
 
-    # Load relations as edges
-    for row in conn.execute("SELECT * FROM relations").fetchall():
-        row = dict(row)
-        if row["source_id"] in _graph and row["target_id"] in _graph:
-            _graph.add_edge(
-                row["source_id"],
-                row["target_id"],
-                id=row["id"],
-                relation_type=row["relation_type"],
-                confidence=row["confidence"],
-                properties=row["properties"],
-                source=row["source"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
+        # Load relations as edges (use relation id as edge key)
+        for row in conn.execute("SELECT * FROM relations").fetchall():
+            row = dict(row)
+            if row["source_id"] in _graph and row["target_id"] in _graph:
+                _graph.add_edge(
+                    row["source_id"],
+                    row["target_id"],
+                    key=row["id"],
+                    id=row["id"],
+                    relation_type=row["relation_type"],
+                    confidence=row["confidence"],
+                    properties=row["properties"],
+                    source=row["source"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                )
 
-    _graph_ready = True
-    logger.info(
-        "Knowledge graph loaded: %d entities, %d relations",
-        _graph.number_of_nodes(),
-        _graph.number_of_edges(),
-    )
-    conn.close()
+        _graph_ready = True
+        logger.info(
+            "Knowledge graph loaded: %d entities, %d relations",
+            _graph.number_of_nodes(),
+            _graph.number_of_edges(),
+        )
+        conn.close()
 
 
-def _ensure_graph() -> nx.DiGraph:
+def _ensure_graph() -> nx.MultiDiGraph:
     """Return the graph, loading from SQLite if needed."""
     global _graph_ready
     if not _graph_ready:
@@ -647,8 +838,9 @@ def save_entity(
     }
 
     # Update NetworkX
-    g = _ensure_graph()
-    g.add_node(entity_id, **entity)
+    with _graph_lock:
+        g = _ensure_graph()
+        g.add_node(entity_id, **entity)
 
     # Update FAISS (skipped during batch extraction)
     if not _skip_reindex:
@@ -730,11 +922,12 @@ def update_entity(
     if row:
         entity = dict(row)
         # Update NetworkX node
-        g = _ensure_graph()
-        if entity_id in g:
-            g.nodes[entity_id].update(entity)
-        else:
-            g.add_node(entity_id, **entity)
+        with _graph_lock:
+            g = _ensure_graph()
+            if entity_id in g:
+                g.nodes[entity_id].update(entity)
+            else:
+                g.add_node(entity_id, **entity)
         if not _skip_reindex:
             _upsert_index(entity_id)
         # Wiki vault export (non-blocking)
@@ -756,9 +949,10 @@ def delete_entity(entity_id: str) -> bool:
 
     deleted = cur.rowcount > 0
     if deleted:
-        g = _ensure_graph()
-        if entity_id in g:
-            g.remove_node(entity_id)  # also removes incident edges
+        with _graph_lock:
+            g = _ensure_graph()
+            if entity_id in g:
+                g.remove_node(entity_id)  # also removes incident edges
         if not _skip_reindex:
             _remove_from_index(entity_id)
         # Wiki vault cleanup
@@ -791,10 +985,11 @@ def delete_entities_by_source(source: str) -> int:
     conn.commit()
     conn.close()
 
-    g = _ensure_graph()
-    for eid in ids:
-        if eid in g:
-            g.remove_node(eid)
+    with _graph_lock:
+        g = _ensure_graph()
+        for eid in ids:
+            if eid in g:
+                g.remove_node(eid)
 
     if not _skip_reindex:
         rebuild_index()
@@ -1063,6 +1258,11 @@ def add_relation(
     -------
     dict  with all relation columns, or ``None`` if either entity is missing.
     """
+    # Block self-loops (entity pointing to itself)
+    if source_id == target_id:
+        logger.debug("Rejected self-loop relation: %s --[%s]--> %s", source_id, relation_type, target_id)
+        return None
+
     # Validate both endpoints exist
     conn = _get_conn()
     src = conn.execute("SELECT id FROM entities WHERE id = ?", (source_id,)).fetchone()
@@ -1074,8 +1274,15 @@ def add_relation(
     rel_id = uuid.uuid4().hex[:12]
     now = datetime.now().isoformat()
     props_json = json.dumps(properties or {})
-    relation_type = relation_type.lower().strip().replace(" ", "_")
+    relation_type = normalize_relation_type(relation_type)
     confidence = max(0.0, min(1.0, confidence))
+
+    # Warn on unknown relation types (but still accept to avoid breakage)
+    if relation_type not in VALID_RELATION_TYPES:
+        logger.warning(
+            "Unknown relation type '%s' (%s → %s) — not in VALID_RELATION_TYPES",
+            relation_type, source_id, target_id,
+        )
 
     try:
         conn.execute(
@@ -1105,9 +1312,10 @@ def add_relation(
         "updated_at": now,
     }
 
-    # Update NetworkX
-    g = _ensure_graph()
-    g.add_edge(source_id, target_id, **rel)
+    # Update NetworkX (use relation ID as edge key for deterministic removal)
+    with _graph_lock:
+        g = _ensure_graph()
+        g.add_edge(source_id, target_id, key=rel_id, **rel)
 
     # Re-export both endpoints so .md Connections sections stay current
     for eid in (source_id, target_id):
@@ -1183,9 +1391,18 @@ def delete_relation(relation_id: str) -> bool:
     conn.commit()
     conn.close()
 
-    g = _ensure_graph()
-    if g.has_edge(row["source_id"], row["target_id"]):
-        g.remove_edge(row["source_id"], row["target_id"])
+    with _graph_lock:
+        g = _ensure_graph()
+        src, tgt = row["source_id"], row["target_id"]
+        # MultiDiGraph: remove by key (relation ID) to preserve parallel edges
+        if g.has_edge(src, tgt, key=relation_id):
+            g.remove_edge(src, tgt, key=relation_id)
+        elif g.has_edge(src, tgt):
+            # Fallback: edge exists but key doesn't match (legacy data)
+            # Find the edge with matching relation id
+            edge_keys = [k for k, d in g[src][tgt].items() if d.get("id") == relation_id]
+            for k in edge_keys:
+                g.remove_edge(src, tgt, key=k)
 
     # Re-export both endpoints so .md Connections sections stay current
     for eid in (row["source_id"], row["target_id"]):
@@ -1725,19 +1942,20 @@ def graph_enhanced_recall(
             # Collect the relations that connect this neighbor to the seed
             connecting_rels = []
             if g.has_edge(seed["id"], nbr["id"]):
-                edata = g[seed["id"]][nbr["id"]]
-                connecting_rels.append({
-                    "from": seed.get("subject", ""),
-                    "to": nbr.get("subject", ""),
-                    "type": edata.get("relation_type", "related"),
-                })
+                # MultiDiGraph: g[u][v] is {key: data_dict, ...}
+                for _ekey, edata in g[seed["id"]][nbr["id"]].items():
+                    connecting_rels.append({
+                        "from": seed.get("subject", ""),
+                        "to": nbr.get("subject", ""),
+                        "type": edata.get("relation_type", "related"),
+                    })
             if g.has_edge(nbr["id"], seed["id"]):
-                edata = g[nbr["id"]][seed["id"]]
-                connecting_rels.append({
-                    "from": nbr.get("subject", ""),
-                    "to": seed.get("subject", ""),
-                    "type": edata.get("relation_type", "related"),
-                })
+                for _ekey, edata in g[nbr["id"]][seed["id"]].items():
+                    connecting_rels.append({
+                        "from": nbr.get("subject", ""),
+                        "to": seed.get("subject", ""),
+                        "type": edata.get("relation_type", "related"),
+                    })
 
             # Derive neighbor score from its seed (halved) so neighbors
             # sort meaningfully instead of all being 0.
@@ -1796,8 +2014,9 @@ def delete_all_entities() -> int:
     count = cur.rowcount
 
     global _graph, _graph_ready
-    _graph = nx.DiGraph()
-    _graph_ready = True
+    with _graph_lock:
+        _graph = nx.MultiDiGraph()
+        _graph_ready = True
 
     if count:
         rebuild_index()

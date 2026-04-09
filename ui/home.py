@@ -53,7 +53,7 @@ def build_home(
         "no-caps inline-label active-color=amber indicator-color=amber "
         "align=center"
     ).style("border-bottom: 1px solid rgba(255,255,255,0.08);") as home_tabs:
-        tasks_tab = ui.tab("Tasks", icon="bolt")
+        tasks_tab = ui.tab("Workflows", icon="bolt")
         graph_tab = ui.tab("Knowledge", icon="psychology")
         activity_tab = ui.tab("Activity", icon="assessment")
 
@@ -110,8 +110,8 @@ def build_home(
 
                 ui.separator()
                 with ui.row().classes("w-full items-center justify-between"):
-                    ui.label("⚡ Tasks").classes("text-h5")
-                    ui.button("New Task", icon="add", on_click=lambda: show_task_dialog(
+                    ui.label("⚡ Workflows").classes("text-h5")
+                    ui.button("New Workflow", icon="add", on_click=lambda: show_task_dialog(
                         None, _refresh_home_tiles,
                     )).props("outline dense no-caps color=amber").style(
                         "font-weight: 600; font-size: 0.95rem;"
@@ -133,7 +133,7 @@ def build_home(
                                     ui.label(tk["description"]).classes(
                                         "text-xs text-grey-6 text-center w-full"
                                     )
-                                prompts = tk.get("prompts") or []
+                                prompts = tk.get("prompts") or tk.get("steps") or []
                                 info = f"{len(prompts)} step{'s' if len(prompts) != 1 else ''}"
                                 if tk.get("last_run"):
                                     try:
@@ -178,6 +178,40 @@ def build_home(
                                         "flat dense round size=sm"
                                     ).tooltip("Edit")
 
+                                    def _delete_tk(t=tk):
+                                        with ui.dialog() as dlg, ui.card().style(
+                                            "min-width: 300px;"
+                                        ):
+                                            ui.label(
+                                                f"Delete '{t['icon']} {t['name']}'?"
+                                            ).classes("font-bold")
+                                            ui.label(
+                                                "This cannot be undone."
+                                            ).classes("text-grey-6 text-xs")
+                                            with ui.row().classes("w-full justify-end mt-2"):
+                                                ui.button(
+                                                    "Cancel", on_click=dlg.close,
+                                                ).props("flat dense no-caps")
+                                                def _confirm_delete(d=dlg, task=t):
+                                                    from tasks import delete_task
+                                                    delete_task(task["id"])
+                                                    d.close()
+                                                    ui.notify(
+                                                        f"🗑️ '{task['name']}' deleted.",
+                                                        type="negative",
+                                                    )
+                                                    _refresh_home_tiles()
+                                                ui.button(
+                                                    "Delete", on_click=_confirm_delete,
+                                                ).props(
+                                                    "flat dense no-caps color=red"
+                                                )
+                                        dlg.open()
+
+                                    ui.button(icon="delete", on_click=_delete_tk).props(
+                                        "flat dense round size=sm"
+                                    ).tooltip("Delete").style("color: #888;")
+
                                     def _run_tk(t=tk):
                                         tid = uuid.uuid4().hex[:12]
                                         t_name = (
@@ -218,7 +252,7 @@ def build_home(
                                         if _is_disabled:
                                             run_btn.disable()
                 else:
-                    ui.label("No tasks yet — click + New Task to get started.").classes(
+                    ui.label("No workflows yet — click + New Workflow to get started.").classes(
                         "text-grey-6 text-sm q-mt-sm"
                     )
 
@@ -302,6 +336,78 @@ def _build_activity_content(container) -> None:
                             ).tooltip("Stop task")
             else:
                 ui.label("No tasks currently running.").classes("text-grey-6 text-sm q-ml-sm")
+
+            # Pending Approvals
+            from tasks import get_pending_approvals, respond_to_approval
+            _approvals_container = ui.column().classes("w-full")
+
+            def _rebuild_approvals():
+                """Refresh the pending-approvals section (called by timer)."""
+                _approvals_container.clear()
+                pending = get_pending_approvals()
+                if not pending:
+                    return
+                with _approvals_container:
+                    ui.separator().classes("q-my-sm")
+                    ui.label("⏳ Pending Approvals").classes("text-subtitle1 font-bold")
+                    for appr in pending:
+                        with ui.card().classes("w-full q-my-xs").style(
+                            "padding: 0.6rem 0.8rem; border-left: 3px solid #f0c040;"
+                        ):
+                            with ui.column().classes("w-full gap-1"):
+                                with ui.row().classes("w-full items-center no-wrap gap-2"):
+                                    ui.label("🔔").classes("text-lg")
+                                    ui.label(appr.get("task_name", "Task")).classes("font-bold")
+                                    ui.space()
+                                    created = appr.get("created_at", "")
+                                    if created:
+                                        try:
+                                            cdt = datetime.fromisoformat(created)
+                                            ui.label(cdt.strftime("%b %d, %I:%M %p")).classes(
+                                                "text-xs text-grey-6"
+                                            )
+                                        except (ValueError, TypeError):
+                                            pass
+                                msg = appr.get("message", "")
+                                if msg:
+                                    ui.label(msg).classes("text-sm text-grey-5 q-ml-lg")
+                                step_desc = appr.get("step_summary", "")
+                                if step_desc:
+                                    ui.label(f"Step: {step_desc}").classes(
+                                        "text-xs text-grey-6 q-ml-lg"
+                                    )
+                                with ui.row().classes("q-ml-lg gap-2"):
+                                    async def _approve(tok=appr["resume_token"]):
+                                        from nicegui import run
+                                        result = await run.io_bound(respond_to_approval, tok, True)
+                                        if result:
+                                            ui.notify("✅ Approved", type="positive")
+                                        else:
+                                            ui.notify("ℹ️ Already handled", type="info")
+                                        _rebuild_approvals()
+
+                                    async def _deny(tok=appr["resume_token"]):
+                                        from nicegui import run
+                                        result = await run.io_bound(respond_to_approval, tok, False)
+                                        if result:
+                                            ui.notify("❌ Denied", type="warning")
+                                        else:
+                                            ui.notify("ℹ️ Already handled", type="info")
+                                        _rebuild_approvals()
+
+                                    ui.button(
+                                        "Approve", on_click=_approve,
+                                    ).props("unelevated dense no-caps size=sm").style(
+                                        "background: #2d8a4e; color: white;"
+                                    )
+                                    ui.button(
+                                        "Deny", on_click=_deny,
+                                    ).props("flat dense no-caps size=sm").style(
+                                        "color: #ff6b6b;"
+                                    )
+
+            _rebuild_approvals()
+            ui.timer(5.0, _rebuild_approvals)
 
             # Upcoming
             ui.separator().classes("q-my-sm")
@@ -387,6 +493,49 @@ def _build_activity_content(container) -> None:
             else:
                 ui.label("Not yet run — starts automatically.").classes("text-grey-6 text-sm q-ml-sm")
 
+            # Extraction journal button
+            from memory_extraction import get_extraction_journal as _get_ext_journal
+
+            def _show_extraction_journal():
+                _ext_entries = _get_ext_journal(limit=20)
+                with ui.dialog() as dlg, ui.card().classes("w-full max-w-2xl"):
+                    ui.label("🧠 Extraction Journal").classes("text-h6")
+                    ui.separator()
+                    with ui.scroll_area().classes("w-full").style("max-height: 60vh"):
+                        if not _ext_entries:
+                            ui.label("No entries yet.").classes("text-grey-6")
+                        for _ej in reversed(_ext_entries):
+                            _ets = _ej.get("timestamp", "")
+                            try:
+                                _edt = datetime.fromisoformat(_ets)
+                                _efmt = _edt.strftime("%b %d, %I:%M %p")
+                            except (ValueError, TypeError):
+                                _efmt = _ets
+                            with ui.expansion(
+                                f"{_efmt} — {_ej.get('summary', '')}",
+                            ).classes("w-full"):
+                                _tdetails = _ej.get("thread_details", [])
+                                if _tdetails:
+                                    for _td in _tdetails:
+                                        ui.label(
+                                            f"  {_td.get('thread', '?')}: "
+                                            f"extracted {_td.get('extracted', 0)}, "
+                                            f"saved {_td.get('saved', 0)}"
+                                        ).classes("text-xs q-ml-md")
+                                _eerrs = _ej.get("errors", [])
+                                if _eerrs:
+                                    for _ee in _eerrs:
+                                        ui.label(f"  Error: {_ee}").classes("text-xs text-negative q-ml-md")
+                                if not _tdetails and not _eerrs:
+                                    ui.label("No details available.").classes("text-xs text-grey-6")
+                    with ui.row().classes("justify-end q-mt-sm"):
+                        ui.button("Close", on_click=dlg.close).props("flat")
+                dlg.open()
+
+            ui.button("View Journal", on_click=_show_extraction_journal).props(
+                "flat dense size=sm"
+            ).classes("q-ml-sm text-xs")
+
             # Dream Cycle
             ui.separator().classes("q-my-sm")
             ui.label("🌙 Dream Cycle").classes("text-subtitle1 font-bold")
@@ -422,6 +571,81 @@ def _build_activity_content(container) -> None:
                                 ).classes("text-xs text-grey-6 q-ml-lg")
                             except (ValueError, TypeError):
                                 pass
+
+                    def _show_dream_journal():
+                        _entries = get_journal(limit=20)
+                        with ui.dialog() as dlg, ui.card().classes("w-full max-w-2xl"):
+                            ui.label("🌙 Dream Cycle Journal").classes("text-h6")
+                            ui.separator()
+                            with ui.scroll_area().classes("w-full").style("max-height: 60vh"):
+                                if not _entries:
+                                    ui.label("No entries yet.").classes("text-grey-6")
+                                for _je in reversed(_entries):
+                                    _jts = _je.get("timestamp", "")
+                                    try:
+                                        _jdt = datetime.fromisoformat(_jts)
+                                        _formatted_ts = _jdt.strftime("%b %d, %I:%M %p")
+                                    except (ValueError, TypeError):
+                                        _formatted_ts = _jts
+                                    with ui.expansion(
+                                        f"{_formatted_ts} — {_je.get('summary', '')}",
+                                    ).classes("w-full"):
+                                        # Merges
+                                        _merges = _je.get("merges", [])
+                                        if _merges:
+                                            ui.label(f"Merges ({len(_merges)})").classes("text-bold text-sm")
+                                            for _mg in _merges:
+                                                ui.label(
+                                                    f"  '{_mg.get('duplicate_subject', '?')}' → "
+                                                    f"'{_mg.get('survivor_subject', '?')}' "
+                                                    f"(score={_mg.get('score', '?')})"
+                                                ).classes("text-xs q-ml-md")
+                                        # Enrichments
+                                        _enrichments = _je.get("enrichments", [])
+                                        if _enrichments:
+                                            ui.label(f"Enrichments ({len(_enrichments)})").classes("text-bold text-sm")
+                                            for _en in _enrichments:
+                                                ui.label(
+                                                    f"  '{_en.get('subject', '?')}' "
+                                                    f"({_en.get('old_length', '?')} → "
+                                                    f"{_en.get('new_length', '?')} chars)"
+                                                ).classes("text-xs q-ml-md")
+                                                if _en.get("new_description"):
+                                                    ui.label(
+                                                        f"    → {_en['new_description'][:150]}…"
+                                                    ).classes("text-xs text-grey-7 q-ml-lg")
+                                        # Inferred Relations
+                                        _inferred = _je.get("inferred_relations", [])
+                                        if _inferred:
+                                            ui.label(f"Inferred Relations ({len(_inferred)})").classes("text-bold text-sm")
+                                            for _ir in _inferred:
+                                                _conf = _ir.get("confidence", "?")
+                                                _conf_str = f"{_conf:.2f}" if isinstance(_conf, (int, float)) else str(_conf)
+                                                ui.label(
+                                                    f"  {_ir.get('source_subject', '?')} "
+                                                    f"--[{_ir.get('relation_type', '?')}]--> "
+                                                    f"{_ir.get('target_subject', '?')} "
+                                                    f"(conf={_conf_str})"
+                                                ).classes("text-xs q-ml-md")
+                                                if _ir.get("evidence"):
+                                                    ui.label(
+                                                        f'    Evidence: "{_ir["evidence"][:120]}…"'
+                                                    ).classes("text-xs text-grey-7 q-ml-lg italic")
+                                        # Errors
+                                        _errs = _je.get("errors", [])
+                                        if _errs:
+                                            ui.label(f"Errors ({len(_errs)})").classes("text-bold text-sm text-negative")
+                                            for _er in _errs:
+                                                ui.label(f"  {_er}").classes("text-xs text-negative q-ml-md")
+                                        if not _merges and not _enrichments and not _inferred:
+                                            ui.label("No changes this cycle.").classes("text-xs text-grey-6")
+                            with ui.row().classes("justify-end q-mt-sm"):
+                                ui.button("Close", on_click=dlg.close).props("flat")
+                        dlg.open()
+
+                    ui.button("View Journal", on_click=_show_dream_journal).props(
+                        "flat dense size=sm"
+                    ).classes("q-ml-sm text-xs")
             else:
                 ui.label("Disabled — enable in Settings → Knowledge.").classes("text-grey-6 text-sm q-ml-sm")
 

@@ -190,11 +190,13 @@ def _extract_from_summary(title: str, summary: str) -> list[dict]:
         )
         raw = _llm_call(prompt)
 
-        # Extract JSON array from response
-        match = re.search(r"\[.*\]", raw, re.DOTALL)
-        if not match:
+        # Extract JSON array from response (bracket-counting
+        # handles nested arrays correctly, unlike greedy regex).
+        import knowledge_graph as _kg_parse
+        _json_str = _kg_parse.extract_json_block(raw, "[")
+        if not _json_str:
             return []
-        data = json.loads(match.group())
+        data = json.loads(_json_str)
         if not isinstance(data, list):
             return []
 
@@ -376,17 +378,30 @@ def extract_from_document(
             result["status"] = "completed"
             return result
 
-        # 6. Create the document media entity (hub)
+        # 6. Create the document media entity (hub) — dedup if re-uploading
         import knowledge_graph as kg
+        from memory import find_by_subject, update_memory
         source_label = f"document:{display_name}"
 
         kg._skip_reindex = True
-        hub_entity = kg.save_entity(
-            entity_type="media",
-            subject=title,
-            description=article,
-            source=source_label,
-        )
+
+        # Check if a hub entity already exists (re-upload scenario)
+        existing_hub = find_by_subject("media", title)
+        if existing_hub:
+            # Update description with the new article
+            try:
+                update_memory(existing_hub["id"], article, source=source_label)
+                hub_entity = existing_hub
+                logger.info("Updated existing document hub: %s", title)
+            except Exception:
+                hub_entity = existing_hub
+        else:
+            hub_entity = kg.save_entity(
+                entity_type="media",
+                subject=title,
+                description=article,
+                source=source_label,
+            )
         hub_id = hub_entity["id"] if hub_entity else None
         saved_count = 1 if hub_entity else 0
 
@@ -407,6 +422,31 @@ def extract_from_document(
                 _active_extraction["phase"] = "extract"
 
         extracted = _extract_from_summary(title, article)
+
+        # ── Post-extraction quality gates ────────────────────────────
+        if extracted:
+            _DOC_ENTITY_CAP = 12
+            _MIN_DESC_LEN = 30
+
+            # Separate entities and relations
+            entities = [e for e in extracted if e.get("category") and not e.get("relation_type")]
+            relations = [e for e in extracted if e.get("relation_type")]
+
+            # Filter entities with thin descriptions
+            entities = [
+                e for e in entities
+                if len((e.get("content") or "").strip()) >= _MIN_DESC_LEN
+            ]
+
+            # Cap entity count — keep highest confidence first, then first-seen order
+            if len(entities) > _DOC_ENTITY_CAP:
+                logger.info(
+                    "Document entity cap: %d entities → keeping top %d for %s",
+                    len(entities), _DOC_ENTITY_CAP, display_name,
+                )
+                entities = entities[:_DOC_ENTITY_CAP]
+
+            extracted = entities + relations
 
         # 8. Save entities + relations via _dedup_and_save
         if extracted:

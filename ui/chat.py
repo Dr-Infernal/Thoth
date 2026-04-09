@@ -278,13 +278,13 @@ def build_chat(
                             with _reattach_gen.tool_col:
                                 ui.plotly(_fig).classes("w-full")
                         except Exception:
-                            pass
+                            logger.debug("Chart rendering failed during reattach", exc_info=True)
                     for _img in _reattach_gen.captured_images:
                         try:
                             with _reattach_gen.tool_col:
                                 render_image_with_save(_img)
                         except Exception:
-                            pass
+                            logger.debug("Image rendering failed during reattach", exc_info=True)
                     _reattach_gen.assistant_md = ui.markdown(
                         _reattach_gen.accumulated,
                         extras=['code-friendly', 'fenced-code-blocks', 'tables'],

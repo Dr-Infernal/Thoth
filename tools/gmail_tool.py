@@ -199,41 +199,6 @@ def _make_custom_send(api_resource):
         bcc: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[str]] = None,
     ) -> str:
-        # In background workflows, validate recipients against task allowlist
-        try:
-            from agent import is_background_workflow, _task_allowed_recipients_var
-            if is_background_workflow():
-                allowed = [a.lower().strip()
-                           for a in (_task_allowed_recipients_var.get() or [])]
-                all_recipients = []
-                for field in (to, cc, bcc):
-                    if field is None:
-                        continue
-                    if isinstance(field, str):
-                        all_recipients.append(field.lower().strip())
-                    else:
-                        all_recipients.extend(r.lower().strip() for r in field)
-                blocked = [r for r in all_recipients if r not in allowed]
-                if blocked:
-                    if allowed:
-                        return (
-                            f"⚠️ BLOCKED: Cannot send email to {', '.join(blocked)} — "
-                            f"not in this task's allowed recipients list. "
-                            f"The task owner can add recipients in the task "
-                            f"editor under '🔒 Background permissions'.\n"
-                            f"Currently allowed: {', '.join(allowed)}\n"
-                            f"Do NOT retry this tool."
-                        )
-                    return (
-                        f"⚠️ BLOCKED: Cannot send email in a background task — "
-                        f"no allowed recipients configured. "
-                        f"The task owner can configure allowed recipients in "
-                        f"the task editor under '🔒 Background permissions'.\n"
-                        f"Do NOT retry this tool."
-                    )
-        except ImportError:
-            pass
-
         try:
             mime = _build_mime_message(message, to, subject, cc, bcc, attachments)
             raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")

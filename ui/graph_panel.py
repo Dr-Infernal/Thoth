@@ -89,11 +89,39 @@ def build_graph_panel() -> None:
             sanitize=False,
         )
         ui.html(
-            '<label style="display:flex; align-items:center; gap:4px; font-size:0.8rem; color:#ccc; cursor:pointer;">'
-            '<input type="checkbox" id="graph-full-toggle" checked '
-            'style="accent-color:#FFD54F;" /> Full map</label>',
+            '<button id="graph-full-toggle" style="'
+            'font-size:0.75rem; color:#FFD54F; background:none; border:1px solid #FFD54F;'
+            ' border-radius:4px; padding:2px 8px; cursor:pointer;"'
+            '>Show All</button>',
             sanitize=False,
         )
+
+        # ── "Run Dream Cycle" button ────────────────────────────────
+        async def _run_dream_now():
+            import dream_cycle as dc
+            if not dc.is_enabled():
+                ui.notify("Dream cycle is disabled in settings", type="warning")
+                return
+            btn_dream.disable()
+            btn_dream.text = "Running…"
+            try:
+                result = await run.io_bound(dc.run_dream_cycle, lambda msg: None)
+                summary = result.get("summary", "done")
+                ui.notify(f"Dream cycle complete — {summary}", type="positive")
+            except Exception as exc:
+                ui.notify(f"Dream cycle failed: {exc}", type="negative")
+            finally:
+                btn_dream.text = "🌙 Dream"
+                btn_dream.enable()
+
+        from nicegui import run
+
+        btn_dream = ui.button("🌙 Dream", on_click=_run_dream_now).props(
+            "flat dense no-caps size=sm"
+        ).style(
+            "font-size:0.75rem; color:#CE93D8; border:1px solid #CE93D8; "
+            "border-radius:4px; padding:2px 8px;"
+        ).tooltip("Run dream cycle now (merge, enrich, infer)")
 
     # ── vis-network canvas + overlay detail card ─────────────────────
     ui.html(
@@ -198,6 +226,7 @@ def build_graph_panel() -> None:
         '    G.network.once("stabilizationIterationsDone", function() {'
         '      if (focusId) { G.network.focus(focusId, { scale: 1.0, animation: true }); }'
         '      else { G.network.fit({ animation: true }); }'
+        '      setTimeout(function() { G.network.setOptions({ physics: false }); }, 5000);'
         '    });'
         # ── Click → detail card (enhanced with source + wiki link) ───────
         '    G.network.on("click", function(params) {'
@@ -274,8 +303,6 @@ def build_graph_panel() -> None:
         '    var subNodes = G.allNodes.filter(function(n) { return visited.has(n.id); });'
         '    var subEdges = G.allEdges.filter(function(e) { return visited.has(e.from) && visited.has(e.to); });'
         '    G.currentNodes = subNodes; G.currentEdges = subEdges; G.isFullGraph = false;'
-        '    var toggle = document.getElementById("graph-full-toggle");'
-        '    if (toggle) toggle.checked = false;'
         '    G.updateStatsLabel(subNodes.length, subEdges.length);'
         '    G.createNetwork(subNodes, subEdges, nodeId);'
         '  };'
@@ -441,28 +468,26 @@ def build_graph_panel() -> None:
         '    }'
         '    var fullToggle = document.getElementById("graph-full-toggle");'
         '    if (fullToggle) {'
-        '      fullToggle.onchange = function() {'
-        '        if (fullToggle.checked) {'
-        '          G.isFullGraph = true; G.currentNodes = G.allNodes; G.currentEdges = G.allEdges;'
-        '          G.activeFilters.clear();'
-        '          G.activeSourceFilters.clear();'
-        '          var si = document.getElementById("graph-search"); if (si) si.value = "";'
-        '          document.querySelectorAll("#graph-type-filters button").forEach(function(b) {'
-        '            var c = G.typeColors[b.dataset.type] || "#B0BEC5";'
-        '            b.style.background = "none"; b.style.color = c;'
-        '          });'
-        '          document.querySelectorAll("#graph-source-filters button").forEach(function(b) {'
-        '            b.style.background = "none"; b.style.color = b.style.borderColor;'
-        '          });'
-        '          G.updateStatsLabel(G.allNodes.length, G.allEdges.length);'
-        '          G.createNetwork(G.allNodes, G.allEdges, G.centerId);'
-        '        }'
+        '      fullToggle.onclick = function() {'
+        '        G.isFullGraph = true; G.currentNodes = G.allNodes; G.currentEdges = G.allEdges;'
+        '        G.activeFilters.clear();'
+        '        G.activeSourceFilters.clear();'
+        '        var si = document.getElementById("graph-search"); if (si) si.value = "";'
+        '        document.querySelectorAll("#graph-type-filters button").forEach(function(b) {'
+        '          var c = G.typeColors[b.dataset.type] || "#B0BEC5";'
+        '          b.style.background = "none"; b.style.color = c;'
+        '        });'
+        '        document.querySelectorAll("#graph-source-filters button").forEach(function(b) {'
+        '          b.style.background = "none"; b.style.color = b.style.borderColor;'
+        '        });'
+        '        G.updateStatsLabel(G.allNodes.length, G.allEdges.length);'
+        '        G.createNetwork(G.allNodes, G.allEdges, G.centerId);'
         '      };'
         '    }'
         '  };'
         # ── Boot ─────────────────────────────────────────────────────────
         '  function boot() {'
-        '    if (typeof vis === "undefined" || !document.getElementById("graph-container")) {'
+        '    if (!document.getElementById("graph-container")) {'
         '      window._thothGraphBootTimer = setTimeout(boot, 100);'
         '      return;'
         '    }'

@@ -46,7 +46,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DEFAULT_VERSION: "3.12.0"
+  DEFAULT_VERSION: "3.13.0"
 
 jobs:
   # ════════════════════════════════════════════════════════════════════════════
@@ -111,11 +111,11 @@ jobs:
       #           --storepass "$env:CERTUM_PASSWORD" `
       #           --alias "Open Source Code Signing" `
       #           --tsaurl http://time.certum.pl `
-      #           dist\ThothSetup_3.12.0.exe
+      #           dist\ThothSetup_3.13.0.exe
       #
       #     # Option B: signtool (if using USB token / local cert)
       #     # signtool sign /fd SHA256 /tr http://time.certum.pl /td SHA256 `
-      #     #   /f cert.pfx /p "$env:CERTUM_PASSWORD" dist\ThothSetup_3.12.0.exe
+      #     #   /f cert.pfx /p "$env:CERTUM_PASSWORD" dist\ThothSetup_3.13.0.exe
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4

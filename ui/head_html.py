@@ -15,6 +15,20 @@ HEAD_HTML = """\
 <script src="/static/vis-network.min.js"></script>
 <script src="/static/mermaid.min.js"></script>
 <script>mermaid.initialize({startOnLoad: false, theme: 'dark', securityLevel: 'strict'});</script>
+<script>
+(function() {
+  var _mermaidTimer = null;
+  new MutationObserver(function() {
+    var nodes = document.querySelectorAll('pre.mermaid');
+    if (nodes.length > 0) {
+      clearTimeout(_mermaidTimer);
+      _mermaidTimer = setTimeout(function() {
+        mermaid.run({nodes: document.querySelectorAll('pre.mermaid'), suppressErrors: true});
+      }, 150);
+    }
+  }).observe(document.documentElement, {childList: true, subtree: true});
+})();
+</script>
 <style>
     .thoth-msg pre { overflow-x: auto; max-width: 100%; }
     .thoth-msg a { color: #64b5f6; }

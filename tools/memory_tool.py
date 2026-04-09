@@ -292,6 +292,11 @@ def _link_memories(source_id: str, target_id: str, relation_type: str) -> str:
         source_entity = _resolve_entity(source_id)
         target_entity = _resolve_entity(target_id)
         if not source_entity:
+            # Retry once after a short delay — the entity may have been
+            # created by a parallel tool call in the same batch.
+            time.sleep(0.5)
+            source_entity = _resolve_entity(source_id)
+        if not source_entity:
             return f"Error: source entity '{source_id}' not found. Use search_memory or list_memories to find the correct name or ID."
         if not target_entity:
             # Retry once after a short delay — the entity may have been

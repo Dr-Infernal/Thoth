@@ -5,7 +5,6 @@ from api_keys import apply_keys
 from prompts import AGENT_SYSTEM_PROMPT, SUMMARIZE_PROMPT
 from langchain_classic.retrievers import ContextualCompressionRetriever
 from langchain_classic.retrievers.document_compressors import LLMChainExtractor
-from langchain_classic.retrievers.document_compressors import EmbeddingsFilter
 from langchain_core.messages import trim_messages, ToolMessage, AIMessage
 from langgraph.types import interrupt, Command
 from threads import pick_or_create_thread, checkpointer
@@ -24,31 +23,22 @@ apply_keys()
 _compressor = None
 
 def _get_compressor():
-    """Return a compressor based on the configured mode (smart / deep / off).
+    """Return a compressor based on the configured mode (deep / off).
 
-    * **smart** — ``EmbeddingsFilter`` using the existing Qwen3-Embedding-0.6B
-      model.  Zero extra LLM calls, ~50 ms overhead.
-    * **deep** — ``LLMChainExtractor`` (original behaviour).  K extra LLM calls
-      per tool invocation.  Respects ``_model_override_var``.
-    * **off** — no compression; returns ``None``.
+    * **deep** — ``LLMChainExtractor``.  K extra LLM calls per tool
+      invocation; highest relevance.  Respects ``_model_override_var``.
+    * **off** (default) — no compression; ``_pre_model_trim()`` handles
+      context overflow by proportionally shrinking tool outputs.
     """
     global _compressor
     from tools.registry import get_global_config
-    mode = get_global_config("compression_mode", "smart")
+    mode = get_global_config("compression_mode", "off")
 
-    if mode == "off":
+    if mode != "deep":
         _compressor = None
         return None
 
-    if mode == "smart":
-        from documents import get_embedding_model
-        _compressor = EmbeddingsFilter(
-            embeddings=get_embedding_model(),
-            similarity_threshold=0.5,
-        )
-        return _compressor
-
-    # mode == "deep" — original LLMChainExtractor behaviour
+    # mode == "deep" — LLMChainExtractor behaviour
     _ov = _model_override_var.get() or ""
     if _ov and _ov != get_current_model() and (is_model_local(_ov) or is_cloud_model(_ov)):
         _compressor = LLMChainExtractor.from_llm(get_llm_for(_ov))
@@ -381,6 +371,12 @@ def _pre_model_trim(state: dict) -> dict:
             break
     trimmed.insert(insert_idx, time_msg)
 
+    # ── Inject background-mode override when running as a BG task ────
+    if is_background_workflow():
+        from prompts import AGENT_BG_OVERRIDE
+        bg_msg = SystemMessage(content=AGENT_BG_OVERRIDE)
+        trimmed.insert(insert_idx + 1, bg_msg)
+
     # ── Inject enabled skill instructions ────────────────────────────
     # Skills are user-configured workflows (SKILL.md files) whose
     # instructions are appended as an extra SystemMessage right after the
@@ -554,15 +550,19 @@ _model_override_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
     "model_override", default=""
 )
 
-# ContextVars for task-scoped permissions — set by tasks.py before agent
-# invocation so that tools can check at runtime whether a background task
-# is allowed to send email or run shell commands.
-_task_allowed_commands_var: _contextvars.ContextVar[list] = _contextvars.ContextVar(
-    "task_allowed_commands", default=[]
+# ContextVar for task safety mode — propagates to tool executor threads
+# so self-gating tools (shell, gmail, etc.) can enforce per-task safety.
+# Values: "block" | "approve" | "allow_all" | "" (not in a task)
+_safety_mode_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
+    "safety_mode", default=""
 )
-_task_allowed_recipients_var: _contextvars.ContextVar[list] = _contextvars.ContextVar(
-    "task_allowed_recipients", default=[]
-)
+
+
+def get_safety_mode() -> str:
+    """Return the active safety mode for the current execution context.
+
+    Returns ``""`` when not running inside a background task."""
+    return _safety_mode_var.get()
 
 
 def is_background_workflow() -> bool:
@@ -788,7 +788,10 @@ def _wrap_with_interrupt_gate(tool) -> None:
                 args_str = repr(args[0]) if len(args) == 1 else repr(args)
                 if kwargs:
                     args_str += ", " + ", ".join(f"{k}={v!r}" for k, v in kwargs.items())
-            if _background_workflow_var.get():
+            # In background workflows with block mode, refuse outright.
+            # approve mode: fall through to interrupt() so the pipeline
+            # can pause and let the user decide.
+            if _background_workflow_var.get() and _safety_mode_var.get() != "approve":
                 return (f"⚠️ BLOCKED: '{_label}' requires user confirmation "
                         "and cannot run in a background workflow. "
                         "Do NOT retry this tool. Inform the user that this "
@@ -810,7 +813,7 @@ def _wrap_with_interrupt_gate(tool) -> None:
 
         def _gated_run(*args, _fn=_orig, _label=label, _tname=tool.name, **kwargs):
             args_str = ", ".join(f"{k}={v!r}" for k, v in kwargs.items())
-            if _background_workflow_var.get():
+            if _background_workflow_var.get() and _safety_mode_var.get() != "approve":
                 return (f"⚠️ BLOCKED: '{_label}' requires user confirmation "
                         "and cannot run in a background workflow. "
                         "Do NOT retry this tool. Inform the user that this "
@@ -913,7 +916,8 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
         model_label = get_current_model()
 
     is_background = _background_workflow_var.get()
-    cache_key = frozenset(enabled_tool_names) | frozenset({f"ctx:{get_context_size()}", f"model:{model_label}", f"bg:{is_background}"})
+    _mode = _safety_mode_var.get() if is_background else ""
+    cache_key = frozenset(enabled_tool_names) | frozenset({f"ctx:{get_context_size()}", f"model:{model_label}", f"bg:{is_background}", f"safety:{_mode}"})
 
     if cache_key not in _agent_cache:
         # Collect LangChain tool wrappers for enabled tools
@@ -930,29 +934,25 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
             from plugins import registry as plugin_registry_mod
             lc_tools.extend(plugin_registry_mod.get_langchain_tools())
             destructive_names.update(plugin_registry_mod.get_destructive_names())
-            _plugin_bg_allowed = plugin_registry_mod.get_background_allowed_names()
         except Exception as exc:
             logger.debug("Plugin tool injection skipped: %s", exc)
-            _plugin_bg_allowed = set()
 
         if is_background:
-            # Tiered background permissions:
-            # ALWAYS BLOCKED: file_delete, delete_calendar, delete_memory,
-            #                 tracker_delete, task_delete
-            # ALWAYS ALLOWED: move_file, move_calendar_event
-            # RUNTIME-GATED:  send_gmail_message (by allowed_recipients)
-            #                 run_command "needs_approval" (by allowed_commands)
-            # The runtime-gated tools are kept in the tool list but validate
-            # permissions inside their own _run / func at execution time.
-            _ALWAYS_ALLOWED_BG = {
-                "workspace_move_file", "move_calendar_event",
-                "send_gmail_message",
-            } | _plugin_bg_allowed
-            # run_command is NOT in destructive_names (shell self-gates),
-            # so it's already kept.  We only strip the hard-blocked ones.
-            lc_tools = [t for t in lc_tools
-                        if t.name not in destructive_names
-                        or t.name in _ALWAYS_ALLOWED_BG]
+            # Background tool gating — three modes:
+            #  block:     strip all destructive tools (LLM can't call them)
+            #  approve:   keep destructive tools but wrap with interrupt()
+            #             so the pipeline pauses for user approval
+            #  allow_all: keep everything ungated
+            # run_command is NOT in destructive_names (shell self-gates
+            # at runtime via classify_command), so it is always kept.
+            if _mode == "block":
+                lc_tools = [t for t in lc_tools
+                            if t.name not in destructive_names]
+            elif _mode == "approve":
+                for t in lc_tools:
+                    if t.name in destructive_names:
+                        _wrap_with_interrupt_gate(t)
+            # else: allow_all — keep everything, no gates
         else:
             # Interactive sessions: gate destructive tools with interrupt() —
             # the graph will pause, yield an "interrupt" event, and wait for
@@ -1013,13 +1013,21 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
 
 
 def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict,
-                 *, stop_event: threading.Event | None = None) -> str:
+                 *, stop_event: threading.Event | None = None) -> str | dict:
     """Invoke the ReAct agent and return the final answer text.
 
     If *stop_event* is provided and becomes set, the function raises
     ``TaskStoppedError`` after the current node completes.  This gives
     ~5-20 cancellation points per agent step (LLM call, each tool call)
     without requiring full token-level streaming.
+
+    Returns
+    -------
+    str
+        The agent's final text response.
+    dict
+        If the graph was paused by an ``interrupt()`` call (e.g. shell
+        tool approval gate), returns ``{"type": "interrupt", "interrupts": [...]}``.
     """
     _model_ov = (config.get("configurable") or {}).get("model_override")
     agent = get_agent_graph(enabled_tool_names, model_override=_model_ov)
@@ -1108,6 +1116,21 @@ def invoke_agent(user_input: str, enabled_tool_names: list[str], config: dict,
 
         # Read final state from checkpoint
         state = agent.get_state(config)
+
+        # ── Interrupt detection ──────────────────────────────────────
+        # If the graph paused due to an interrupt() call (e.g. shell
+        # tool approval gate), return interrupt data instead of text.
+        if state and state.next:
+            all_interrupts: list[dict] = []
+            for task in state.tasks:
+                if hasattr(task, "interrupts") and task.interrupts:
+                    for intr in task.interrupts:
+                        item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
+                        item["__interrupt_id"] = intr.id
+                        all_interrupts.append(item)
+            if all_interrupts:
+                return {"type": "interrupt", "interrupts": all_interrupts}
+
         if state and state.values:
             for msg in reversed(state.values.get("messages", [])):
                 if hasattr(msg, "type") and msg.type == "ai" and msg.content:
@@ -1251,6 +1274,67 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
         resume_val = approved
     yield from _stream_graph(agent, Command(resume=resume_val), config,
                              stop_event=stop_event)
+
+
+def resume_invoke_agent(enabled_tool_names: list[str], config: dict, approved: bool,
+                        *, interrupt_ids: list[str] | None = None,
+                        stop_event: threading.Event | None = None) -> str | dict:
+    """Resume an interrupted agent graph (non-streaming, for tasks).
+
+    Returns the final answer text, or an interrupt dict if the graph
+    pauses again (e.g. a second tool call needing approval).
+    """
+    _model_ov = (config.get("configurable") or {}).get("model_override")
+    agent = get_agent_graph(enabled_tool_names, model_override=_model_ov)
+
+    _current_thread_id_var.set(
+        (config.get("configurable") or {}).get("thread_id", "")
+    )
+    _model_override_var.set(_model_ov or "")
+    set_active_model_override(_model_ov or "")
+
+    if interrupt_ids and len(interrupt_ids) > 1:
+        resume_val = {iid: approved for iid in interrupt_ids}
+    else:
+        resume_val = approved
+
+    try:
+        for _event in agent.stream(
+            Command(resume=resume_val),
+            config=config,
+            stream_mode="updates",
+        ):
+            if stop_event and stop_event.is_set():
+                raise TaskStoppedError("Task stopped during resume")
+    except TaskStoppedError:
+        raise
+    except Exception as exc:
+        exc_str = str(exc)
+        _err_msg = _friendly_api_error(exc_str)
+        logger.error("resume_invoke_agent error: %s", exc_str)
+        return _err_msg
+
+    # Check for another interrupt (agent may call a second dangerous tool)
+    state = agent.get_state(config)
+    if state and state.next:
+        all_interrupts: list[dict] = []
+        for task in state.tasks:
+            if hasattr(task, "interrupts") and task.interrupts:
+                for intr in task.interrupts:
+                    item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
+                    item["__interrupt_id"] = intr.id
+                    all_interrupts.append(item)
+        if all_interrupts:
+            return {"type": "interrupt", "interrupts": all_interrupts}
+
+    # Extract final answer
+    if state and state.values:
+        for msg in reversed(state.values.get("messages", [])):
+            if hasattr(msg, "type") and msg.type == "ai" and msg.content:
+                text = _content_to_str(msg.content)
+                if text.strip():
+                    return text
+    return "I wasn't able to generate a response."
 
 
 def _stream_graph(agent, input_data, config: dict,

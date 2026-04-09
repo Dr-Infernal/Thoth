@@ -26,7 +26,7 @@ import pathlib
 import re
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 _CONFIG_FILE = _DATA_DIR / "dream_config.json"
 _JOURNAL_FILE = _DATA_DIR / "dream_journal.json"
+_REJECTION_CACHE_FILE = _DATA_DIR / "dream_rejections.json"
 
 # Defaults
 _DEFAULT_CONFIG = {
@@ -136,6 +137,45 @@ def get_dream_status() -> dict:
     }
 
 
+# ── Rejection cache ─────────────────────────────────────────────────────────
+_REJECTION_CACHE_DAYS = 7  # Skip re-evaluating rejected pairs for 7 days
+
+def _load_rejection_cache() -> dict[str, str]:
+    """Load pair rejection cache: {pair_key: iso_timestamp}."""
+    if _REJECTION_CACHE_FILE.exists():
+        try:
+            return json.loads(_REJECTION_CACHE_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _save_rejection_cache(cache: dict[str, str]) -> None:
+    _REJECTION_CACHE_FILE.write_text(json.dumps(cache, indent=2))
+
+
+def _record_rejection(entity_a_id: str, entity_b_id: str) -> None:
+    """Record that a pair was rejected by the LLM."""
+    cache = _load_rejection_cache()
+    pair_key = "|".join(sorted([entity_a_id, entity_b_id]))
+    cache[pair_key] = datetime.now().isoformat()
+    # Prune expired entries while we're here
+    cutoff = (datetime.now() - timedelta(days=_REJECTION_CACHE_DAYS)).isoformat()
+    cache = {k: v for k, v in cache.items() if v > cutoff}
+    _save_rejection_cache(cache)
+
+
+def _is_pair_recently_rejected(entity_a_id: str, entity_b_id: str) -> bool:
+    """Check if a pair was rejected within the cache window."""
+    cache = _load_rejection_cache()
+    pair_key = "|".join(sorted([entity_a_id, entity_b_id]))
+    ts = cache.get(pair_key)
+    if not ts:
+        return False
+    cutoff = (datetime.now() - timedelta(days=_REJECTION_CACHE_DAYS)).isoformat()
+    return ts > cutoff
+
+
 # ── Idle detection ───────────────────────────────────────────────────────────
 
 def _is_idle() -> bool:
@@ -174,6 +214,27 @@ def _already_ran_today() -> bool:
         return False
 
 
+def _is_ollama_busy() -> bool:
+    """Check if Ollama is currently processing a request.
+
+    Queries the ``/api/ps`` endpoint.  Returns True if any model is
+    currently loaded with active requests, meaning a user-facing task
+    is in progress and we should not compete for GPU.
+    """
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://127.0.0.1:11434/api/ps", method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            import json as _json
+            data = _json.loads(resp.read())
+            models = data.get("models", [])
+            # If any model is loaded, Ollama is in use
+            return len(models) > 0
+    except Exception:
+        # Can't reach Ollama — not busy (or using cloud model)
+        return False
+
+
 def _should_dream() -> bool:
     """All conditions met for a dream cycle?"""
     if not is_enabled():
@@ -183,6 +244,9 @@ def _should_dream() -> bool:
     if not _in_dream_window():
         return False
     if not _is_idle():
+        return False
+    if _is_ollama_busy():
+        logger.info("Dream cycle deferred — Ollama is busy processing a request")
         return False
     return True
 
@@ -347,9 +411,16 @@ def _merge_entities(entity_a: dict, entity_b: dict) -> dict | None:
 
     # Delete the duplicate
     try:
-        kg.delete_entity(duplicate["id"])
+        deleted = kg.delete_entity(duplicate["id"])
+        if not deleted:
+            logger.warning(
+                "Dream merge: delete_entity(%s) returned False — zombie entity",
+                duplicate["id"],
+            )
+            return None
     except Exception as exc:
         logger.debug("Dream merge delete failed: %s", exc)
+        return None
 
     return {
         "survivor_id": survivor["id"],
@@ -550,6 +621,41 @@ def _enrich_entity(
         if not _validate_enrichment(enriched, entity, other_subjects):
             return None
 
+    # Layer 3: Fact-grounding verification — reject sentences that
+    # introduce facts not mentioned in any excerpt or the old description.
+    # Split new content into sentences and check each one has evidence.
+    import re as _re_enrich
+    old_lower = old_desc.lower()
+    excerpts_lower = " ".join(excerpts).lower()
+    new_sentences = _re_enrich.split(r"(?<=[.!?])\s+", enriched)
+    ungrounded = []
+    for sentence in new_sentences:
+        s = sentence.strip().lower()
+        if not s or len(s) < 15:
+            continue  # Skip short fragments
+        # Check if key words from this sentence appear in sources
+        # Extract meaningful words (>3 chars, not stopwords)
+        words = [w for w in _re_enrich.findall(r"\b\w{4,}\b", s)
+                 if w not in {"this", "that", "with", "from", "have", "been",
+                              "also", "they", "their", "about", "which", "when",
+                              "where", "what", "into", "more", "some", "other",
+                              "than", "very", "each", "most"}]
+        if not words:
+            continue
+        # At least 40% of meaningful words must appear in sources
+        in_sources = sum(1 for w in words if w in old_lower or w in excerpts_lower)
+        ratio = in_sources / len(words) if words else 0
+        if ratio < 0.4:
+            ungrounded.append(sentence.strip()[:80])
+
+    if ungrounded:
+        logger.warning(
+            "Dream enrich rejected for '%s': %d ungrounded sentence(s): %s",
+            entity.get("subject", ""), len(ungrounded),
+            "; ".join(ungrounded[:3]),
+        )
+        return None
+
     try:
         kg.update_entity(entity["id"], enriched)
     except Exception as exc:
@@ -561,17 +667,22 @@ def _enrich_entity(
         "subject": entity.get("subject", ""),
         "old_length": len(old_desc),
         "new_length": len(enriched),
+        "old_description": old_desc[:200],
+        "new_description": enriched[:200],
     }
 
 
 # ── OP3: Relationship inference ──────────────────────────────────────────────
 
-def _find_cooccurring_pairs(batch: list[dict]) -> list[tuple[dict, dict, str]]:
+def _find_cooccurring_pairs(batch: list[dict]) -> list[tuple[dict, dict, str, int]]:
     """Find entity pairs that co-occur in conversations but have no edge.
 
-    Returns list of (entity_a, entity_b, conversation_excerpt) tuples.
-    Limited to 1 pair per entity to keep batch size manageable.
+    Returns list of (entity_a, entity_b, conversation_excerpt, co_occurrence_count)
+    tuples.  Limited to 1 pair per entity to keep batch size manageable.
+    Requires word-boundary matching and counts co-occurrences across
+    conversations to produce a quality signal.
     """
+    import re as _re
     import knowledge_graph as kg
     from threads import _list_threads
     from memory_extraction import _get_thread_messages, _format_conversation
@@ -580,86 +691,164 @@ def _find_cooccurring_pairs(batch: list[dict]) -> list[tuple[dict, dict, str]]:
     if not threads:
         return []
 
-    # Build entity lookup by subject/aliases (lowercased)
+    # Build entity lookup by subject/aliases (lowercased) with word-boundary
+    # regex patterns to avoid substring false positives (e.g. "Bob" matching
+    # "Bobsled").
     entity_names: dict[str, dict] = {}
+    entity_patterns: dict[str, _re.Pattern] = {}
     for e in batch:
         subj = (e.get("subject", "") or "").strip().lower()
         if subj and subj != "user":
             entity_names[subj] = e
+            entity_patterns[subj] = _re.compile(r"\b" + _re.escape(subj) + r"\b", _re.IGNORECASE)
         for alias in (e.get("aliases", "") or "").split(","):
             alias = alias.strip().lower()
             if alias and alias != "user":
                 entity_names[alias] = e
+                entity_patterns[alias] = _re.compile(r"\b" + _re.escape(alias) + r"\b", _re.IGNORECASE)
 
-    pairs: list[tuple[dict, dict, str]] = []
-    seen_pairs: set[tuple[str, str]] = set()
-    used_ids: set[str] = set()
+    # First pass: count co-occurrences across ALL conversations
+    pair_conversations: dict[tuple[str, str], list[str]] = {}  # pair_key → [excerpts]
 
     for tid, name, created, updated, *rest in threads:
-        if len(pairs) >= 25:  # Cap per cycle
-            break
         try:
             messages = _get_thread_messages(tid)
             if not messages:
                 continue
             conv_text = _format_conversation(messages)
-            conv_lower = conv_text.lower()
         except Exception:
             continue
 
-        # Find which entities from our batch appear in this conversation
+        # Find which entities from our batch appear (with word boundaries)
         found_in_conv: list[dict] = []
-        for name_str, entity in entity_names.items():
-            if name_str in conv_lower and entity["id"] not in used_ids:
-                if entity not in found_in_conv:
-                    found_in_conv.append(entity)
+        seen_entity_ids: set[str] = set()
+        for name_str, pattern in entity_patterns.items():
+            entity = entity_names[name_str]
+            if entity["id"] not in seen_entity_ids and pattern.search(conv_text):
+                found_in_conv.append(entity)
+                seen_entity_ids.add(entity["id"])
 
-        # Check pairs
+        # Record all pairs in this conversation
         for i, ea in enumerate(found_in_conv):
             for eb in found_in_conv[i + 1:]:
                 if ea["id"] == eb["id"]:
                     continue
                 pair_key = tuple(sorted([ea["id"], eb["id"]]))
-                if pair_key in seen_pairs:
-                    continue
 
-                # Check if they already have a relation
-                try:
-                    existing = kg.get_relations(ea["id"], direction="both")
-                    peer_ids = {r.get("peer_id") for r in existing}
-                    if eb["id"] in peer_ids:
-                        seen_pairs.add(pair_key)
-                        continue
-                except Exception:
-                    continue
-
-                # Extract excerpt around co-occurrence
-                for name_str in entity_names:
+                # Extract excerpt around first entity mention
+                excerpt = conv_text[:500]
+                for name_str, pattern in entity_patterns.items():
                     if entity_names[name_str]["id"] == ea["id"]:
-                        idx = conv_lower.find(name_str)
-                        if idx >= 0:
+                        m = pattern.search(conv_text)
+                        if m:
+                            idx = m.start()
                             start = max(0, idx - 200)
                             end = min(len(conv_text), idx + 500)
                             excerpt = conv_text[start:end]
                             break
-                else:
-                    excerpt = conv_text[:500]
 
-                pairs.append((ea, eb, excerpt))
-                seen_pairs.add(pair_key)
-                used_ids.add(ea["id"])
-                used_ids.add(eb["id"])
-                break  # One pair per entity
-            if ea["id"] in used_ids:
-                break
+                if pair_key not in pair_conversations:
+                    pair_conversations[pair_key] = []
+                pair_conversations[pair_key].append(excerpt)
+
+    # Second pass: filter, rank, and select pairs
+    from collections import Counter as _Counter
+
+    _VAGUE_EDGE_TYPES = {"related_to", "associated_with"}
+    _HUB_CAP = 3  # max appearances per entity across selected pairs
+
+    pairs: list[tuple[dict, dict, str, int]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    entity_use_count: _Counter = _Counter()
+
+    # Build entity lookup by ID for quick access
+    entity_by_id: dict[str, dict] = {e["id"]: e for e in batch}
+
+    # Sort by co-occurrence count descending (most evidence first)
+    ranked_pairs = sorted(pair_conversations.items(), key=lambda x: len(x[1]), reverse=True)
+
+    for pair_key, excerpts in ranked_pairs:
+        if len(pairs) >= 25:
+            break
+
+        ea_id, eb_id = pair_key
+
+        # Hub diversity cap: skip if either entity already used 3 times
+        if entity_use_count[ea_id] >= _HUB_CAP or entity_use_count[eb_id] >= _HUB_CAP:
+            continue
+
+        ea = entity_by_id.get(ea_id)
+        eb = entity_by_id.get(eb_id)
+        if not ea or not eb:
+            continue
+
+        # Skip pairs recently rejected by LLM
+        if _is_pair_recently_rejected(ea_id, eb_id):
+            continue
+
+        # Pre-flight merge check: if A's description mentions B's subject
+        # (or vice versa), these are likely duplicates — skip inference
+        _desc_a = (ea.get("description", "") or "").lower()
+        _desc_b = (eb.get("description", "") or "").lower()
+        _subj_a = (ea.get("subject", "") or "").strip().lower()
+        _subj_b = (eb.get("subject", "") or "").strip().lower()
+        if _subj_b and len(_subj_b) > 2 and _re.search(r"\b" + _re.escape(_subj_b) + r"\b", _desc_a):
+            logger.info(
+                "Dream skip infer (probable duplicate): '%s' description mentions '%s'",
+                ea.get("subject", ""), eb.get("subject", ""),
+            )
+            continue
+        if _subj_a and len(_subj_a) > 2 and _re.search(r"\b" + _re.escape(_subj_a) + r"\b", _desc_b):
+            logger.info(
+                "Dream skip infer (probable duplicate): '%s' description mentions '%s'",
+                eb.get("subject", ""), ea.get("subject", ""),
+            )
+            continue
+
+        # Check if they already have a meaningful (non-vague) relation
+        try:
+            existing = kg.get_relations(ea["id"], direction="both")
+            has_meaningful_edge = any(
+                r.get("peer_id") == eb["id"]
+                and r.get("relation_type", "related_to") not in _VAGUE_EDGE_TYPES
+                for r in existing
+            )
+            if has_meaningful_edge:
+                continue
+        except Exception:
+            continue
+
+        # Multi-excerpt evidence: join up to 3 best excerpts for rich context
+        co_count = len(excerpts)
+        sorted_excerpts = sorted(excerpts, key=len, reverse=True)
+        if co_count >= 3:
+            evidence = "\n\n---\n\n".join(sorted_excerpts[:3])
+        else:
+            evidence = sorted_excerpts[0]
+
+        pairs.append((ea, eb, evidence, co_count))
+        seen_pairs.add(pair_key)
+        entity_use_count[ea_id] += 1
+        entity_use_count[eb_id] += 1
 
     return pairs
 
 
-def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str, confidence: float) -> dict | None:
-    """Ask the LLM if two entities are related, given conversation evidence."""
+def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
+                    confidence: float = 0.7, co_occurrence_count: int = 1) -> dict | None:
+    """Ask the LLM if two entities are related, given conversation evidence.
+
+    The LLM returns confidence, evidence quote, and directionality.
+    Vague relation types are rejected.  Confidence below 0.6 is rejected.
+    """
     import knowledge_graph as kg
     from prompts import DREAM_INFER_PROMPT
+
+    # Banned vague relation types that add noise to the graph
+    _BANNED_TYPES = {
+        "related_to", "associated_with", "connected_to", "linked_to",
+        "has_relation", "involves", "correlates_with",
+    }
 
     prompt = DREAM_INFER_PROMPT.format(
         type_a=entity_a.get("entity_type", ""),
@@ -669,6 +858,7 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str, confidence: fl
         subject_b=entity_b.get("subject", ""),
         description_b=entity_b.get("description", ""),
         conversation_excerpt=excerpt[:1000],
+        co_occurrence_count=co_occurrence_count,
     )
 
     try:
@@ -679,10 +869,11 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str, confidence: fl
 
     # Parse JSON response
     try:
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not match:
+        import knowledge_graph as _kg_parse
+        _json_str = _kg_parse.extract_json_block(raw, "{")
+        if not _json_str:
             return None
-        result = json.loads(match.group())
+        result = json.loads(_json_str)
         if not result.get("has_relation"):
             return None
         rel_type = result.get("relation_type", "").strip().lower().replace(" ", "_")
@@ -691,12 +882,56 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str, confidence: fl
     except (json.JSONDecodeError, AttributeError):
         return None
 
+    # ── Post-filter: reject vague relation types ─────────────────────
+    if rel_type in _BANNED_TYPES:
+        logger.info(
+            "Dream infer rejected vague type '%s' for %s → %s",
+            rel_type, entity_a.get("subject", ""), entity_b.get("subject", ""),
+        )
+        return None
+
+    # ── Dynamic confidence from LLM ──────────────────────────────────
+    llm_confidence = result.get("confidence")
+    if isinstance(llm_confidence, (int, float)):
+        final_confidence = max(0.0, min(1.0, float(llm_confidence)))
+    else:
+        final_confidence = confidence  # Fallback to config default
+
+    # Reject low-confidence inferences
+    if final_confidence < 0.5:
+        logger.info(
+            "Dream infer rejected low confidence (%.2f) for %s → %s",
+            final_confidence, entity_a.get("subject", ""), entity_b.get("subject", ""),
+        )
+        return None
+
+    # ── Directionality from LLM ──────────────────────────────────────
+    llm_source = (result.get("source", "") or "").strip().lower()
+    llm_target = (result.get("target", "") or "").strip().lower()
+    subj_a = (entity_a.get("subject", "") or "").strip().lower()
+    subj_b = (entity_b.get("subject", "") or "").strip().lower()
+
+    # If LLM says source=B and target=A, swap the direction
+    if llm_source == subj_b and llm_target == subj_a:
+        source_entity, target_entity = entity_b, entity_a
+    else:
+        # Default: entity_a → entity_b (or LLM confirmed A → B)
+        source_entity, target_entity = entity_a, entity_b
+
+    # ── Evidence tracking ────────────────────────────────────────────
+    evidence = (result.get("evidence", "") or "").strip()
+    rel_properties = {}
+    if evidence:
+        rel_properties["evidence"] = evidence[:500]
+    rel_properties["co_occurrences"] = co_occurrence_count
+
     # Add the relation
     try:
         rel = kg.add_relation(
-            entity_a["id"], entity_b["id"], rel_type,
+            source_entity["id"], target_entity["id"], rel_type,
             source="dream_infer",
-            confidence=confidence,
+            confidence=final_confidence,
+            properties=rel_properties,
         )
         if not rel:
             return None
@@ -705,12 +940,14 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str, confidence: fl
         return None
 
     return {
-        "source_id": entity_a["id"],
-        "source_subject": entity_a.get("subject", ""),
-        "target_id": entity_b["id"],
-        "target_subject": entity_b.get("subject", ""),
+        "source_id": source_entity["id"],
+        "source_subject": source_entity.get("subject", ""),
+        "target_id": target_entity["id"],
+        "target_subject": target_entity.get("subject", ""),
         "relation_type": rel_type,
-        "confidence": confidence,
+        "confidence": final_confidence,
+        "evidence": evidence,
+        "co_occurrences": co_occurrence_count,
     }
 
 
@@ -758,10 +995,22 @@ def run_dream_cycle(on_status=None) -> dict:
     # Select batch
     batch_size = cfg.get("batch_size", 50)
     all_entities = kg.list_entities(limit=100_000)
-    # Rotate through entities: use the ones least recently processed
-    # Sort by updated_at ascending (oldest first) to prioritise stale entities
+    # Rotate through entities using a stored offset so each cycle
+    # processes a different slice instead of always the same oldest 50
     all_entities.sort(key=lambda e: e.get("updated_at", ""))
-    batch = all_entities[:batch_size]
+    batch_offset = cfg.get("_batch_offset", 0)
+    if batch_offset >= len(all_entities):
+        batch_offset = 0
+    end = batch_offset + batch_size
+    if end <= len(all_entities):
+        batch = all_entities[batch_offset:end]
+    else:
+        # Wrap around
+        batch = all_entities[batch_offset:] + all_entities[:end - len(all_entities)]
+    # Advance offset for next cycle (half-overlap for continuity)
+    next_offset = (batch_offset + batch_size // 2) % max(len(all_entities), 1)
+    cfg["_batch_offset"] = next_offset
+    _save_config(cfg)
 
     _status(f"Starting dream cycle — {len(batch)} entities (of {entity_count})")
 
@@ -822,21 +1071,80 @@ def run_dream_cycle(on_status=None) -> dict:
             except Exception as exc:
                 summary["errors"].append(f"Enrich error: {exc}")
 
-        # ── OP3: Relationship inference ──────────────────────────────
-        _status("Phase 3: Inferring relationships…")
+        # ── OP3: Confidence decay on stale inferences ────────────────
+        _status("Phase 3: Decaying stale inferences…")
+        _DECAY_AFTER_DAYS = 90
+        _DECAY_FACTOR = 0.9       # reduce by 10% each cycle
+        _DECAY_DELETE_BELOW = 0.3  # remove if confidence drops below this
+        summary["decayed"] = []
+        summary["pruned"] = []
+        try:
+            import sqlite3 as _sqlite3
+            _conn = _sqlite3.connect(kg.DB_PATH)
+            _conn.row_factory = _sqlite3.Row
+            cutoff_date = (datetime.now() - timedelta(days=_DECAY_AFTER_DAYS)).isoformat()
+            stale_rows = _conn.execute(
+                "SELECT id, source_id, target_id, relation_type, confidence, updated_at "
+                "FROM relations WHERE source = 'dream_infer' AND updated_at < ?",
+                (cutoff_date,),
+            ).fetchall()
+            for row in stale_rows:
+                old_conf = row["confidence"]
+                new_conf = round(old_conf * _DECAY_FACTOR, 4)
+                if new_conf < _DECAY_DELETE_BELOW:
+                    # Prune: too low to be useful
+                    kg.delete_relation(row["id"])
+                    summary["pruned"].append({
+                        "relation_id": row["id"],
+                        "relation_type": row["relation_type"],
+                        "old_confidence": old_conf,
+                    })
+                    _status(f"Pruned stale inference: {row['relation_type']} (conf {old_conf:.2f})")
+                else:
+                    _conn.execute(
+                        "UPDATE relations SET confidence = ?, updated_at = ? WHERE id = ?",
+                        (new_conf, datetime.now().isoformat(), row["id"]),
+                    )
+                    summary["decayed"].append({
+                        "relation_id": row["id"],
+                        "relation_type": row["relation_type"],
+                        "old_confidence": old_conf,
+                        "new_confidence": new_conf,
+                    })
+            _conn.commit()
+            _conn.close()
+            if summary["decayed"] or summary["pruned"]:
+                _status(
+                    f"Decayed {len(summary['decayed'])} stale inference(s), "
+                    f"pruned {len(summary['pruned'])}"
+                )
+        except Exception as exc:
+            summary["errors"].append(f"Decay error: {exc}")
+
+        # ── OP4: Relationship inference ──────────────────────────────
+        _status("Phase 4: Inferring relationships…")
         infer_confidence = cfg.get("infer_confidence", 0.7)
         pairs = _find_cooccurring_pairs(batch)
 
-        for entity_a, entity_b, excerpt in pairs[:15]:  # Cap inferences per cycle
+        for entity_a, entity_b, excerpt, co_count in pairs[:15]:  # Cap inferences per cycle
             try:
-                result = _infer_relation(entity_a, entity_b, excerpt, infer_confidence)
+                result = _infer_relation(
+                    entity_a, entity_b, excerpt,
+                    confidence=infer_confidence,
+                    co_occurrence_count=co_count,
+                )
                 if result:
                     summary["inferred_relations"].append(result)
                     _status(
                         f"Inferred: '{result['source_subject']}' "
                         f"--[{result['relation_type']}]--> "
-                        f"'{result['target_subject']}'"
+                        f"'{result['target_subject']}' "
+                        f"(conf={result['confidence']:.2f}, "
+                        f"co_occ={result.get('co_occurrences', '?')})"
                     )
+                else:
+                    # Cache rejection so we don't re-evaluate this pair
+                    _record_rejection(entity_a["id"], entity_b["id"])
             except Exception as exc:
                 summary["errors"].append(f"Infer error: {exc}")
 
@@ -861,14 +1169,18 @@ def run_dream_cycle(on_status=None) -> dict:
     m = len(summary["merges"])
     e = len(summary["enrichments"])
     r = len(summary["inferred_relations"])
+    d = len(summary.get("decayed", []))
+    p = len(summary.get("pruned", []))
     errs = len(summary["errors"])
     duration = (datetime.now() - start_time).total_seconds()
     summary["duration_s"] = round(duration, 1)
-    summary["summary"] = (
-        f"{m} merge(s), {e} enrichment(s), {r} inference(s)"
-        + (f", {errs} error(s)" if errs else "")
-        + f" in {duration:.0f}s"
-    )
+    parts = [f"{m} merge(s), {e} enrichment(s), {r} inference(s)"]
+    if d or p:
+        parts.append(f"{d} decayed, {p} pruned")
+    if errs:
+        parts.append(f"{errs} error(s)")
+    parts.append(f"in {duration:.0f}s")
+    summary["summary"] = ", ".join(parts)
 
     _status(f"Dream cycle complete — {summary['summary']}")
     _append_journal(summary)

@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./installer/build_mac_app.sh                  # local unsigned build
-#   ./installer/build_mac_app.sh 3.12.0            # specify version
+#   ./installer/build_mac_app.sh 3.13.0            # specify version
 #
 # For signed builds (CI), set environment variables:
 #   CODESIGN_IDENTITY="Developer ID Application: Name (TEAMID)"
@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-VERSION="${1:-3.12.0}"
+VERSION="${1:-3.13.0}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.12.13}"
 PBS_RELEASE="${PBS_RELEASE:-20260303}"
 
@@ -138,6 +138,8 @@ for f in "$PROJECT_DIR"/*.py; do
     base=$(basename "$f")
     case "$base" in
         workflows.py|seed_knowledge_graph.py) continue ;; # legacy, skip
+        test_suite.py|test_memory_e2e.py|integration_tests.py) continue ;; # test files, skip
+        _*.py) continue ;; # dev/temp scripts, skip
     esac
     cp "$f" "$APP_SRC/"
 done

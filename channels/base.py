@@ -167,9 +167,25 @@ class Channel(ABC):
 
     def send_approval_request(self, target: str | int,
                               interrupt_data: Any,
-                              config: dict) -> None:
-        """Send an approval prompt (buttons / interactive element)."""
+                              config: dict) -> str | None:
+        """Send an approval prompt (buttons / interactive element).
+
+        Returns a message reference (e.g. message_id) that can be used
+        later with :meth:`update_approval_message` to mark it resolved.
+        Returns ``None`` if no reference is available.
+        """
         raise NotImplementedError(f"{self.name} does not support approval buttons")
+
+    def update_approval_message(self, message_ref: str,
+                                status: str,
+                                source: str = "") -> None:
+        """Update a previously-sent approval message to show resolution.
+
+        *status* is ``"approved"`` or ``"denied"``.
+        *source* is the name of the channel/UI that performed the action.
+        Override to edit the original message and remove interactive buttons.
+        """
+        pass  # default: no-op (channel may not support editing)
 
     # ── Thread management ────────────────────────────────────────────
 

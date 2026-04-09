@@ -99,6 +99,30 @@ class _TaskCreateInput(BaseModel):
             "(e.g. 'qwen3:32b'). Leave empty to use the current brain model."
         ),
     )
+    steps: list[dict] | None = Field(
+        default=None,
+        description=(
+            "Advanced pipeline steps (overrides prompts). Each step is a dict with: "
+            "'type' (prompt|condition|approval|subtask|notify) — "
+            "IDs are auto-assigned as {type}_{counter} (prompt_1, condition_1, etc.). "
+            "prompt: {'prompt': str, 'on_error': 'stop'|'skip', 'max_retries': int}. "
+            "condition: {'condition': str, 'if_true': step_id, 'if_false': step_id}. "
+            "approval: {'message': str, 'timeout_minutes': int, 'if_approved': step_id (optional, default: next step), 'if_denied': step_id or 'end' (optional, default: 'end')}. "
+            "subtask: {'task_id': str, 'pass_output': bool}. "
+            "notify: {'message': str, 'channel': 'desktop' or any configured channel name (e.g. 'telegram')}. "
+            "IMPORTANT: 'email' is NOT a valid notify channel. To send email, use a prompt step that calls the gmail/email tool instead. "
+            "All step types support an optional 'next' field (step_id or 'end') to override linear flow after that step. "
+            "Use {{prev_output}} and {{step.<id>.output}} for data passing between steps."
+        ),
+    )
+    safety_mode: str | None = Field(
+        default=None,
+        description=(
+            "Safety mode for this task: 'block' (block destructive tools), "
+            "'approve' (pause for approval before destructive tools), "
+            "'allow_all' (no restrictions). Defaults to 'block'."
+        ),
+    )
 
 
 class _TaskListInput(BaseModel):
@@ -144,6 +168,19 @@ class _TaskUpdateInput(BaseModel):
             "Supports template variables: {{date}}, {{day}}, {{time}}, {{month}}, {{year}}."
         ),
     )
+    steps: list[dict] | None = Field(
+        default=None,
+        description=(
+            "New pipeline steps (full replacement). Same format as task_create steps. "
+            "Overrides prompts when set."
+        ),
+    )
+    safety_mode: str | None = Field(
+        default=None,
+        description=(
+            "Safety mode: 'block', 'approve', or 'allow_all'."
+        ),
+    )
     enabled: bool | None = Field(
         default=None,
         description="Set to false to pause the task, true to resume it.",
@@ -171,11 +208,13 @@ def _task_create(
     delivery_channel: str | None = None,
     delivery_target: str | None = None,
     model: str | None = None,
+    steps: list[dict] | None = None,
+    safety_mode: str | None = None,
 ) -> str:
     """Create a new task or quick timer."""
     try:
         # Default to notify_only for delay_minutes with no prompts
-        if delay_minutes and not prompts:
+        if delay_minutes and not prompts and not steps:
             notify_only = True
 
         task_id = tasks_db.create_task(
@@ -190,6 +229,8 @@ def _task_create(
             delivery_channel=delivery_channel,
             delivery_target=delivery_target,
             model_override=model or None,
+            steps=steps,
+            safety_mode=safety_mode or "block",
         )
 
         task = tasks_db.get_task(task_id)
@@ -205,10 +246,23 @@ def _task_create(
             parts.append(f"  Fires at: {task['at']}")
         if task.get("notify_only"):
             parts.append(f"  Type: Notification only")
+        elif task.get("steps"):
+            step_types = [s.get("type", "prompt") for s in task["steps"]]
+            parts.append(f"  Pipeline: {len(task['steps'])} steps ({', '.join(set(step_types))})")
         else:
             parts.append(f"  Steps: {len(task['prompts'])}")
+        if task.get("safety_mode") and task["safety_mode"] != "block":
+            parts.append(f"  Safety: {task['safety_mode']}")
         if task.get("delivery_channel"):
             parts.append(f"  Delivery: {task['delivery_channel']} → {task.get('delivery_target', 'default')}")
+
+        # Include Mermaid flow diagram for pipeline tasks
+        if task.get("steps"):
+            from tasks import generate_pipeline_mermaid
+            mermaid = generate_pipeline_mermaid(task["steps"])
+            if mermaid:
+                parts.append(f"\nPipeline flow:\n```mermaid\n{mermaid}\n```")
+                parts.append("\nIMPORTANT: Always include the pipeline flow diagram above in your response to the user.")
 
         return "\n".join(parts)
     except ValueError as exc:
@@ -239,8 +293,13 @@ def _task_list(include_history: bool = False) -> str:
             entry["fires_at"] = t["at"]
         if t.get("notify_only"):
             entry["type"] = "notification_only"
+        elif t.get("steps"):
+            entry["pipeline_steps"] = len(t["steps"])
+            entry["step_types"] = list(set(s.get("type", "prompt") for s in t["steps"]))
         else:
             entry["steps"] = len(t.get("prompts", []))
+        if t.get("safety_mode") and t["safety_mode"] != "block":
+            entry["safety_mode"] = t["safety_mode"]
         if t.get("delivery_channel"):
             entry["delivery"] = f"{t['delivery_channel']} → {t.get('delivery_target', 'default')}"
         if t.get("last_run"):
@@ -276,6 +335,8 @@ def _task_update(
     name: str | None = None,
     schedule: str | None = None,
     prompts: list[str] | None = None,
+    steps: list[dict] | None = None,
+    safety_mode: str | None = None,
     enabled: bool | None = None,
     model: str | None = None,
 ) -> str:
@@ -291,13 +352,17 @@ def _task_update(
         updates["schedule"] = schedule if schedule else None
     if prompts is not None:
         updates["prompts"] = prompts
+    if steps is not None:
+        updates["steps"] = steps
+    if safety_mode is not None:
+        updates["safety_mode"] = safety_mode
     if enabled is not None:
         updates["enabled"] = enabled
     if model is not None:
         updates["model_override"] = model if model else None
 
     if not updates:
-        return "No fields to update. Provide at least one of: name, schedule, prompts, enabled, model."
+        return "No fields to update. Provide at least one of: name, schedule, prompts, steps, safety_mode, enabled, model."
 
     try:
         tasks_db.update_task(task_id, **updates)
@@ -309,8 +374,21 @@ def _task_update(
             parts.append(f"  Schedule: {task.get('schedule') or 'manual'}")
         if "prompts" in updates:
             parts.append(f"  Steps: {len(task['prompts'])}")
+        if "steps" in updates:
+            parts.append(f"  Pipeline: {len(task.get('steps', []))} steps")
+        if "safety_mode" in updates:
+            parts.append(f"  Safety: {task.get('safety_mode', 'block')}")
         if "enabled" in updates:
             parts.append(f"  Enabled: {task.get('enabled', True)}")
+
+        # Include Mermaid flow diagram when steps are updated
+        if "steps" in updates and task.get("steps"):
+            from tasks import generate_pipeline_mermaid
+            mermaid = generate_pipeline_mermaid(task["steps"])
+            if mermaid:
+                parts.append(f"\nPipeline flow:\n```mermaid\n{mermaid}\n```")
+                parts.append("\nIMPORTANT: Always include the pipeline flow diagram above in your response to the user.")
+
         return "\n".join(parts)
     except ValueError as exc:
         return f"Error updating task: {exc}"
@@ -385,7 +463,9 @@ class TaskTool(BaseTool):
                     "30 minutes' → delay_minutes=30, notify_only=true). For "
                     "recurring agent tasks, provide prompts and a schedule. "
                     "Supports template variables in prompts: {{date}}, {{day}}, "
-                    "{{time}}, {{month}}, {{year}}."
+                    "{{time}}, {{month}}, {{year}}. "
+                    "For advanced pipelines with conditions, approvals, or "
+                    "branching, use 'steps' instead of 'prompts'."
                 ),
                 args_schema=_TaskCreateInput,
             ),
@@ -424,8 +504,9 @@ class TaskTool(BaseTool):
                 name="task_update",
                 description=(
                     "Update an existing task. Can change name, schedule, "
-                    "prompts, or enabled state. Requires the task ID from "
-                    "task_list. Only provide the fields you want to change."
+                    "prompts, steps, safety_mode, model, or enabled state. "
+                    "Requires the task ID from task_list. Only provide the "
+                    "fields you want to change."
                 ),
                 args_schema=_TaskUpdateInput,
             ),

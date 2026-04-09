@@ -8,10 +8,10 @@
   <a href="https://github.com/siddsachar/Thoth/releases"><img src="https://img.shields.io/github/v/release/siddsachar/Thoth?style=flat&label=release&color=c9a227" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/siddsachar/Thoth?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-c9a227?style=flat" alt="Platform">
-  <img src="https://img.shields.io/badge/tests-1133%20unit%20%7C%20155%20integration-brightgreen?style=flat" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-1354%20unit%20%7C%20155%20integration-brightgreen?style=flat" alt="Tests">
 </p>
 
-Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 25 integrated tools (70 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, image generation, long-term memory with a personal knowledge graph, scheduled tasks, habit tracking, and more — plus a **plugin system** with a built-in marketplace and a **multi-channel messaging framework** (Telegram with full media support; more channels coming). Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
+Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 25 integrated tools (70 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, image generation, long-term memory with a personal knowledge graph, **advanced workflows** with conditional branching and approval gates, habit tracking, and more — plus a **plugin system** with a built-in marketplace and a **multi-channel messaging framework** (Telegram with full media support; more channels coming). Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
 
 > **Local models are already amazing.** You'll be surprised what a 14B+ local model can do. If you start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
 
@@ -48,7 +48,7 @@ LangGraph-based autonomous agent with **25 tools / 70 sub-operations** — the a
 
 ### 🧠 Long-Term Memory & Knowledge Graph
 
-Thoth builds a **personal knowledge graph** — entities (person, place, event, preference, fact, project, organisation, concept, skill, media) linked by typed directional relations (`Dad --[father_of]--> User`), with alias resolution, auto-linking on save, memory decay, and background orphan repair. The agent can save, search, link, and explore memories through natural conversation. Graph-enhanced auto-recall retrieves semantically similar entities via FAISS and expands 1 hop in the NetworkX graph before every LLM call. An interactive **Knowledge tab** visualizes the full graph with search, entity-type filters, ego-graph toggle, and clickable detail cards. Background extraction produces structured triples with deterministic cross-category dedup.
+Thoth builds a **personal knowledge graph** — entities (person, place, event, preference, fact, project, organisation, concept, skill, media) linked by 67 typed directional relations with 60+ aliases (`Dad --[father_of]--> User`), with alias resolution, auto-linking on save, memory decay, and background orphan repair. Vague relation types (`related_to`, `associated_with`, etc.) are automatically rejected; relation pre-normalisation ensures consistent naming. The agent can save, search, link, and explore memories through natural conversation. Graph-enhanced auto-recall retrieves semantically similar entities via FAISS and expands 1 hop in the NetworkX graph before every LLM call. An interactive **Knowledge tab** visualizes the full graph with search, entity-type filters, ego-graph toggle, and clickable detail cards. Background extraction produces structured triples with deterministic cross-category dedup.
 
 [Details →](docs/ARCHITECTURE.md#long-term-memory--knowledge-graph)
 
@@ -60,13 +60,13 @@ Export the entire knowledge graph as an **Obsidian-compatible markdown vault** �
 
 ### 🌙 Dream Cycle (Nightly Knowledge Refinement)
 
-A background daemon that refines the knowledge graph during idle hours — **merging duplicates** (≥0.93 similarity), **enriching thin descriptions** from conversation context, and **inferring missing relationships** between co-occurring entities. Three-layer anti-contamination system prevents cross-entity fact-bleed: sentence-level excerpt filtering, deterministic post-enrichment validation, and hardened prompts. Configurable 1–5 AM window; all operations logged to a dream journal viewable in the Activity tab.
+A 4-phase background daemon that refines the knowledge graph during idle hours — **merging duplicates** (≥0.93 similarity), **enriching thin descriptions** from conversation context, **inferring missing relationships** between co-occurring entities, and **decaying stale confidence** on relations older than 90 days. Hub diversity caps, batch rotation, and a 7-day rejection cache ensure high-quality, non-repetitive inferences. Three-layer anti-contamination system prevents cross-entity fact-bleed. Ollama busy check defers cycles when the GPU is actively serving a user request. Configurable dream window; all operations logged to an expandable dream journal in the Activity tab. Manual 🌙 Dream button in the Knowledge graph panel.
 
 [Details →](docs/ARCHITECTURE.md#dream-cycle)
 
 ### 📄 Document Knowledge Extraction
 
-Uploaded documents are processed through a **map-reduce LLM pipeline** that extracts structured knowledge into the graph. Documents are split into windows, summarized, then reduced into a coherent article; core entities and relations are extracted with full source provenance. Supports PDF, DOCX, TXT, Markdown, HTML, and EPUB. Live progress pill in the status bar with phase indicator and stop button. Per-document cleanup removes vector store entries and all extracted entities.
+Uploaded documents are processed through a **map-reduce LLM pipeline** that extracts structured knowledge into the graph. Documents are split into windows, summarized, then reduced into a coherent article; core entities and relations are extracted with full source provenance. A curated relation vocabulary (67 types + 60 aliases) eliminates unknown-type warnings; entity caps (12 per document), minimum description length (30 chars), hub entity dedup, and self-loop rejection ensure clean output. Supports PDF, DOCX, TXT, Markdown, HTML, and EPUB. Live progress pill in the status bar with phase indicator and stop button. Per-document cleanup removes vector store entries and all extracted entities.
 
 [Details →](docs/ARCHITECTURE.md#document-knowledge-extraction)
 
@@ -84,7 +84,7 @@ Toggle-based voice input with local **faster-whisper** STT (4 model sizes, CPU-o
 
 ### 🖥️ Shell Access
 
-Full shell access with **3-tier safety** — safe commands (`ls`, `git status`) auto-execute, moderate commands (`rm`, `pip install`) require confirmation, dangerous commands (`shutdown`, `reboot`, `mkfs`) are blocked outright. Persistent sessions per thread, inline terminal panel, command history saved to disk. Background tasks support per-task command prefix allowlists.
+Full shell access with **3-tier safety** — safe commands (`ls`, `git status`) auto-execute, moderate commands (`rm`, `pip install`) require confirmation, dangerous commands (`shutdown`, `reboot`, `mkfs`) are blocked outright. Enhanced destructive-command detection for workflow safety-mode integration. Persistent sessions per thread, inline terminal panel, command history saved to disk. Background tasks and workflows support per-task command prefix allowlists.
 
 [Details →](docs/ARCHITECTURE.md#shell-access)
 
@@ -100,15 +100,15 @@ Camera capture, screen capture, and **workspace image file analysis** via local 
 
 [Details →](docs/ARCHITECTURE.md#vision)
 
-### ⚡ Tasks & Scheduling
+### ⚡ Workflows & Scheduling
 
-Unified task engine powered by **APScheduler** with 7 schedule types (daily, weekly, weekdays, weekends, interval, cron, one-shot delay). Template variables (`{{date}}`, `{{time}}`, `{{task_id}}`), multi-step prompt chaining, channel delivery (Telegram/Email), per-task model override, and configurable background permissions. Monitoring/polling patterns let the agent self-disable when conditions are met. Home-screen dashboard with task tiles, activity monitor, and run history.
+Advanced **workflow engine** powered by APScheduler with 7 schedule types (daily, weekly, weekdays, weekends, interval, cron, one-shot delay) and a full **step-based pipeline builder**. Five step types — Prompt, Condition, Approval, Subtask, and Notify — with conditional `if_true`/`if_false` branching, approval gates that pause for human decisions, webhook triggers, task-completion triggers, concurrency groups, and per-workflow safety mode (block destructive, require approval, or allow all). Template variables (`{{date}}`, `{{time}}`, `{{step.X.output}}`), channel delivery (Telegram/Email), per-task model override, and configurable background permissions. A redesigned workflow builder UI offers simple and advanced modes with a visual Mermaid flow preview. Pending approvals surface in the sidebar with badge counts and quick-approve buttons.
 
-[Details →](docs/ARCHITECTURE.md#tasks--scheduling)
+[Details →](docs/ARCHITECTURE.md#workflows--scheduling)
 
 ### 📬 Messaging Channels
 
-A generic **Channel ABC** lets any messaging platform plug into Thoth — channels declare capabilities (photo, voice, documents, reactions, buttons) and the system auto-generates tools and settings UI for each one. **Telegram** is the first full-featured channel: inbound voice transcription (faster-whisper), photo analysis (Vision), document handling with text extraction (PDF/CSV/JSON), emoji reactions (👀/👍/💔) for real-time status, inline keyboard buttons for interrupt approval, and image generation delivery. The agent can proactively send messages, photos, and documents to any registered channel.
+A generic **Channel ABC** lets any messaging platform plug into Thoth — channels declare capabilities (photo, voice, documents, reactions, buttons) and the system auto-generates tools and settings UI for each one. **Telegram** is the first full-featured channel: inbound voice transcription (faster-whisper), photo analysis (Vision), document handling with text extraction (PDF/CSV/JSON), emoji reactions (👀/👍/💔) for real-time status, inline keyboard buttons for interrupt approval, multi-channel approval routing for workflow approval gates, safety mode enforcement, and image generation delivery. The agent can proactively send messages, photos, and documents to any registered channel.
 
 [Details →](docs/ARCHITECTURE.md#messaging-channels)
 
@@ -138,7 +138,7 @@ Native window via **pywebview** with system tray, splash screen, right-click con
 
 ### 💬 Chat & Conversations
 
-Multi-turn threads with LangGraph checkpointer, auto-naming, per-thread model switching, and export (Markdown, text, PDF via Playwright). Attach images, PDFs, CSV, Excel, JSON — plus clipboard paste and drag-and-drop. Images persist across reloads via sidecar files. Inline rendering: **Plotly charts**, **Mermaid diagrams** (flowchart, sequence, state, ER, Gantt, mindmap), **YouTube embeds**, and syntax-highlighted code. **Status monitor panel** with animated avatar, 17 health-check pills, OAuth token monitoring, and one-click diagnosis.
+Multi-turn threads with LangGraph checkpointer, auto-naming, per-thread model switching, and export (Markdown, text, PDF via Playwright). Attach images, PDFs, CSV, Excel, JSON — plus clipboard paste and drag-and-drop. Images persist across reloads via sidecar files. Inline rendering: **Plotly charts**, **Mermaid diagrams** (flowchart, sequence, state, ER, Gantt, mindmap), **YouTube embeds**, and syntax-highlighted code. **Status monitor panel** with animated avatar, 17 health-check pills, OAuth token monitoring, and one-click diagnosis. Streaming robustness improvements replace silent failures with debug logging.
 
 [Details →](docs/ARCHITECTURE.md#chat--conversations)
 
@@ -162,7 +162,7 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 | 📋 **Meeting Notes** | Raw notes → actionable minutes |
 | 🎯 **Proactive Agent** | Anticipate needs, self-check at milestones |
 | 🪞 **Self-Reflection** | Review memory for gaps and contradictions |
-| ⚙️ **Task Automation** | Design effective scheduled workflows |
+| ⚙️ **Task Automation** | Design effective advanced workflows with step pipelines, conditions, and approvals |
 | 🌐 **Web Navigator** | Strategic browser automation patterns |
 
 [Details →](docs/ARCHITECTURE.md#bundled-skills)
@@ -178,14 +178,14 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 | **Getting started** | **One-click installer** (`.exe` / `.dmg`) — download, run, done. Built-in setup wizard, no terminal required | `npm install -g openclaw@latest` → CLI onboarding. Requires Node.js 24. Windows needs WSL2 (no native Windows support) |
 | **Local AI (offline)** | **Local-first** — Ollama with 39 curated models out of the box. Works fully offline. Cloud is opt-in | Cloud-first design — requires an API key to start. Local model support through provider config |
 | **Memory** | **Personal knowledge graph** — 10 entity types, typed directional relations, visual explorer, FAISS semantic search + 1-hop graph expansion, memory decay, orphan repair | Flat markdown files (`MEMORY.md` + daily notes) with semantic search. No structured graph |
-| **Knowledge refinement** | **Dream Cycle** — nightly duplicate merging (≥0.93 similarity), description enrichment from conversation context, relationship inference, 3-layer anti-contamination system, dream journal | Dreaming (experimental) — Light/Deep/REM phases that promote short-term signals to long-term memory via scoring thresholds |
-| **Document intelligence** | **Map-reduce LLM pipeline** — extracts structured entities and relations into the knowledge graph with source provenance. Supports PDF, DOCX, EPUB, HTML, Markdown | File read/write/edit operations in the workspace |
+| **Knowledge refinement** | **Dream Cycle** — 4-phase nightly engine: duplicate merging (≥0.93 similarity), description enrichment, relationship inference with hub diversity caps and rejection cache, confidence decay on stale relations. 3-layer anti-contamination system, dream journal | Dreaming (experimental) — Light/Deep/REM phases that promote short-term signals to long-term memory via scoring thresholds |
+| **Document intelligence** | **Map-reduce LLM pipeline** — extracts structured entities and relations into the knowledge graph with source provenance. Curated 67-type relation vocabulary, entity caps, self-loop rejection. Supports PDF, DOCX, EPUB, HTML, Markdown | File read/write/edit operations in the workspace |
 | **Wiki vault** | **Obsidian-compatible export** — one `.md` per entity with `[[wiki-links]]`, YAML frontmatter, and per-type indexes | Not available |
 | **Voice** | **Fully local** — faster-whisper STT + Kokoro TTS with 10 voices. Audio never leaves your machine | ElevenLabs (cloud TTS) + system fallback. Voice Wake on macOS/iOS |
 | **Health tracking** | **Built-in tracker** — medications, symptoms, exercise, mood, sleep, periods. Streak analysis, CSV export, Plotly charts | Not available |
 | **Tools** | 25 tools / 70 sub-operations — Gmail, Calendar, Arxiv, YouTube, Wolfram Alpha, Plotly charts, wiki vault, habit tracker, image generation | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
 | **Messaging channels** | Telegram (voice, photo, documents, reactions, buttons) + Gmail. *Slack, Discord, WhatsApp, Teams coming soon* | **23+ channels** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, and many more |
-| **Autonomous agents** | **Background tasks as sub-agents** — each task overrides model, skills, and permissions independently. Multiple run in parallel with their own persistent threads | Multi-agent routing with isolated sessions per sender/channel |
+| **Autonomous agents** | **Advanced workflows** — step-based pipelines with conditions, approval gates, webhook triggers, concurrency groups, and per-workflow safety mode. Multiple run in parallel with their own persistent threads | Multi-agent routing with isolated sessions per sender/channel |
 | **Desktop app** | Native window (pywebview) + system tray on **Windows & macOS**. One-click installers for both | macOS menu bar app. No native Windows app (WSL2 required). iOS & Android companion apps |
 | **Canvas** | Mermaid diagrams and Plotly charts rendered inline | A2UI — agent-driven interactive visual workspace |
 | **Plugins** | Sandboxed plugin marketplace with hot-reload and security scanning | npm plugin ecosystem + ClawHub skill registry. Large community catalog |
@@ -224,7 +224,7 @@ Thoth's agent has access to 25 tools that expose 70 individual operations to the
 | **📁 Filesystem** | Sandboxed file operations — read, write, copy, move, delete within a workspace folder; reads PDF, CSV, Excel (.xlsx/.xls), JSON/JSONL, TSV, and image files; images displayed inline in chat; structured data files return schema + stats + preview via pandas; PDF export via `export_to_pdf` (Playwright with fpdf2 fallback) | None |
 | **🖥️ Shell** | Execute shell commands with 3-tier safety (safe/moderate/blocked); persistent sessions per thread; user approval for destructive commands; inline terminal panel | None |
 | **🌐 Browser** | Autonomous web browsing in a visible Chromium window — navigate, click, type, scroll, snapshot, back, tab management; accessibility-tree snapshots with numbered element references; persistent profile for logins | None |
-| **📋 Tasks** | Create, list, update, delete, and run scheduled tasks — 7 trigger types (daily, weekly, weekdays, weekends, interval, cron, delay), channel delivery, per-task model override | None |
+| **📋 Workflows** | Create, list, update, delete, and run advanced workflows — step-based pipelines with conditions, approvals, triggers, 7 schedule types (daily, weekly, weekdays, weekends, interval, cron, delay), channel delivery, per-task model override | None |
 | **📋 Tracker** | Habit/health tracker — log meds, symptoms, exercise, periods; streak, adherence, trend analysis; CSV export | None |
 | **📬 Telegram** | Send messages, photos, and documents to any Telegram chat; receive voice, photo, and document messages with transcription, analysis, and text extraction | Bot API token |
 | **🖼️ Image Generation** | Generate images from text prompts and edit existing images via OpenAI/OpenRouter; rendered inline in chat and deliverable to channels | Cloud API key |
@@ -264,6 +264,7 @@ Thoth's agent has access to 25 tools that expose 70 individual operations to the
 │  │  Threads   │  │   Streaming Tokens   │  │   13 Tabs         │   │
 │  │  Controls  │  │   Tool Status        │  │   Tool Config     │   │
 │  │ Knowledge  │  │ Knowledge Graph View │  │   Cloud Settings  │   │
+│  │ Approvals  │  │   Approval Gates     │  │                   │   │
 │  └────────────┘  └──────────────────────┘  └───────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  Status Monitor — Avatar · 17 Health Pills · Diagnosis Btn  │   │
@@ -331,13 +332,13 @@ Thoth's agent has access to 25 tools that expose 70 individual operations to the
 
 ### Windows
 
-1. Download **[ThothSetup_3.12.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.13.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.12.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.13.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Open the DMG and drag **Thoth.app** into the **Applications** folder
 3. Launch **Thoth** from Applications or Launchpad
    - First run may prompt "Thoth is an app downloaded from the internet" → click **Open**

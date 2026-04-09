@@ -34,8 +34,7 @@ class WikipediaTool(BaseTool):
 
     def get_retriever(self, **kwargs):
         from langchain_community.retrievers.wikipedia import WikipediaRetriever
-        from agent import _compressed
-        return _compressed(WikipediaRetriever())
+        return WikipediaRetriever()
 
 
 registry.register(WikipediaTool())

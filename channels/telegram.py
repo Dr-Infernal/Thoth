@@ -61,6 +61,27 @@ _app: Application | None = None         # Telegram Application instance
 _running = False                        # Whether the polling loop is active
 _bot_loop: asyncio.AbstractEventLoop | None = None  # Loop the bot was started on
 _pending_interrupts: dict[int, dict] = {}  # {chat_id: interrupt_data}
+_pending_task_approvals: dict[int, dict] = {}  # {message_id: {resume_token, task_name}}
+_pending_lock = threading.Lock()  # Guards both _pending_interrupts and _pending_task_approvals
+_PENDING_TTL_SECONDS = 3600  # 1 hour — entries older than this are cleaned up
+
+
+def _cleanup_stale_pending() -> None:
+    """Remove entries older than _PENDING_TTL_SECONDS from pending dicts."""
+    import time as _time
+    now = _time.time()
+    with _pending_lock:
+        stale_int = [k for k, v in _pending_interrupts.items()
+                     if now - v.get("_ts", now) > _PENDING_TTL_SECONDS]
+        for k in stale_int:
+            _pending_interrupts.pop(k, None)
+        stale_task = [k for k, v in _pending_task_approvals.items()
+                      if now - v.get("_ts", now) > _PENDING_TTL_SECONDS]
+        for k in stale_task:
+            _pending_task_approvals.pop(k, None)
+    if stale_int or stale_task:
+        log.info("Cleaned up %d stale interrupts, %d stale task approvals",
+                 len(stale_int), len(stale_task))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -405,7 +426,8 @@ async def _cmd_newthread(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Store the new thread config so subsequent messages use it
     context.chat_data["thread_config"] = config
     # Clear any pending interrupts
-    _pending_interrupts.pop(chat_id, None)
+    with _pending_lock:
+        _pending_interrupts.pop(chat_id, None)
     await update.message.reply_text("🆕 Started a new conversation thread.")
 
 
@@ -576,10 +598,13 @@ async def _send_agent_response(
             log.warning("Failed to send image to Telegram: %s", exc)
 
     if interrupt_data:
-        _pending_interrupts[chat_id] = {
-            "data": interrupt_data,
-            "config": config,
-        }
+        import time as _time
+        with _pending_lock:
+            _pending_interrupts[chat_id] = {
+                "data": interrupt_data,
+                "config": config,
+                "_ts": _time.time(),
+            }
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("✅ Approve", callback_data="interrupt_approve"),
@@ -606,7 +631,7 @@ async def _run_agent_for_message(
     msg = update.message
 
     # Block while interrupt is pending
-    if chat_id in _pending_interrupts:
+    if chat_id in _pending_interrupts:  # race-free: dict 'in' is atomic under GIL
         await msg.reply_text(
             "⏸️ There's a pending approval — please tap ✅ Approve or ❌ Deny first."
         )
@@ -678,15 +703,48 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle inline keyboard button presses (interrupt approve/deny)."""
+    """Handle inline keyboard button presses (interrupt approve/deny + task approvals)."""
     query = update.callback_query
     await query.answer()  # Acknowledge the button press
 
     if not _is_authorised(update):
         return
 
+    # ── Task approval buttons (task_approve:<token> / task_deny:<token>) ──
+    cb_data = query.data or ""
+    if cb_data.startswith("task_approve:") or cb_data.startswith("task_deny:"):
+        token_prefix = cb_data.split(":", 1)[1]
+        approved = cb_data.startswith("task_approve:")
+        # Find full resume token from pending map
+        msg_id = query.message.message_id
+        with _pending_lock:
+            info = _pending_task_approvals.pop(msg_id, None)
+        if info is None:
+            await query.edit_message_text("ℹ️ This approval is no longer pending.")
+            return
+        action = "Approved ✅" if approved else "Denied ❌"
+        await query.edit_message_text(
+            f"{action} — {_escape_html(info['task_name'])}"
+        )
+        # Respond to approval in background thread
+        try:
+            from tasks import respond_to_approval
+            result = respond_to_approval(info["resume_token"], approved,
+                                          note="Approved via Telegram" if approved else "Denied via Telegram",
+                                          source="telegram")
+            if not result:
+                await update.effective_chat.send_message(
+                    "⚠️ Could not process approval — request may have expired."
+                )
+        except Exception as exc:
+            log.error("Task approval error: %s", exc)
+            await update.effective_chat.send_message(f"⚠️ Error: {exc}")
+        return
+
+    # ── Live chat interrupt buttons (interrupt_approve / interrupt_deny) ──
     chat_id = update.effective_chat.id
-    pending = _pending_interrupts.pop(chat_id, None)
+    with _pending_lock:
+        pending = _pending_interrupts.pop(chat_id, None)
     if pending is None:
         await query.edit_message_text("ℹ️ No pending approval to respond to.")
         return
@@ -730,10 +788,13 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             log.warning("Failed to send image to Telegram: %s", exc)
 
     if new_interrupt:
-        _pending_interrupts[chat_id] = {
-            "data": new_interrupt,
-            "config": config,
-        }
+        import time as _time
+        with _pending_lock:
+            _pending_interrupts[chat_id] = {
+                "data": new_interrupt,
+                "config": config,
+                "_ts": _time.time(),
+            }
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("✅ Approve", callback_data="interrupt_approve"),
@@ -941,6 +1002,17 @@ async def start_bot() -> bool:
 
     _bot_loop = asyncio.get_running_loop()
     _running = True
+
+    # Periodic cleanup of stale pending dicts (every 10 minutes)
+    async def _periodic_cleanup():
+        while _running:
+            await asyncio.sleep(600)
+            try:
+                _cleanup_stale_pending()
+            except Exception as exc:
+                log.warning("Pending cleanup error: %s", exc)
+    asyncio.ensure_future(_periodic_cleanup())
+
     log.info("Telegram bot started (polling)")
     return True
 
@@ -991,6 +1063,98 @@ def send_outbound(chat_id: int, text: str) -> None:
 
     future = asyncio.run_coroutine_threadsafe(_send(), _bot_loop)
     future.result(timeout=30)
+
+
+def send_task_approval(chat_id: int, resume_token: str,
+                       task_name: str, message: str) -> str | None:
+    """Send a task approval request with inline ✅/❌ buttons.
+
+    Called synchronously from ``tasks.py`` after pausing a pipeline.
+    Returns the message_id as a string (for cross-channel resolution),
+    or ``None`` on failure.
+    """
+    if not _running or _app is None:
+        raise RuntimeError("Telegram bot is not running — cannot send approval")
+    if _bot_loop is None or not _bot_loop.is_running():
+        raise RuntimeError("Telegram bot event loop is not available")
+
+    _sent_msg_id: list[int | None] = [None]
+
+    async def _send():
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "✅ Approve",
+                    callback_data=f"task_approve:{resume_token[:48]}",
+                ),
+                InlineKeyboardButton(
+                    "❌ Deny",
+                    callback_data=f"task_deny:{resume_token[:48]}",
+                ),
+            ]
+        ])
+        text = (
+            f"⏸️ <b>Approval Required</b>\n\n"
+            f"<b>{_escape_html(task_name)}</b>\n"
+            f"{_escape_html(message)}"
+        )
+        try:
+            sent = await _app.bot.send_message(
+                chat_id=chat_id, text=text,
+                parse_mode="HTML", reply_markup=keyboard,
+            )
+        except Exception:
+            plain = re.sub(r"<[^>]+>", "", text).replace(
+                "&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            sent = await _app.bot.send_message(
+                chat_id=chat_id, text=plain, reply_markup=keyboard,
+            )
+        import time as _time
+        with _pending_lock:
+            _pending_task_approvals[sent.message_id] = {
+                "resume_token": resume_token,
+                "task_name": task_name,
+                "_ts": _time.time(),
+            }
+        _sent_msg_id[0] = sent.message_id
+
+    future = asyncio.run_coroutine_threadsafe(_send(), _bot_loop)
+    future.result(timeout=30)
+    return str(_sent_msg_id[0]) if _sent_msg_id[0] is not None else None
+
+
+def _update_approval_msg(message_id: int, status: str,
+                         source: str = "") -> None:
+    """Edit a Telegram approval message to show it's resolved."""
+    if not _running or _app is None or _bot_loop is None:
+        return
+
+    icon = "✅" if status == "approved" else "❌"
+    label = "Approved" if status == "approved" else "Denied"
+    source_txt = f" (from {source})" if source else ""
+
+    async def _edit():
+        from channels.telegram import _get_allowed_user_id
+        chat_id = _get_allowed_user_id()
+        if chat_id is None:
+            return
+        try:
+            await _app.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{icon} <b>{label}</b>{source_txt}",
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            log.warning("Could not edit approval message %d: %s", message_id, exc)
+        with _pending_lock:
+            _pending_task_approvals.pop(message_id, None)
+
+    future = asyncio.run_coroutine_threadsafe(_edit(), _bot_loop)
+    try:
+        future.result(timeout=15)
+    except Exception:
+        pass
 
 
 def send_photo(chat_id: int, file_path: str, *, caption: str | None = None) -> None:
@@ -1147,9 +1311,22 @@ class TelegramChannel(Channel):
 
     def send_approval_request(self, target: str | int,
                               interrupt_data: Any,
-                              config: dict) -> None:
-        # Handled inline by _handle_message — not called externally
-        pass
+                              config: dict) -> str | None:
+        """Send a task approval request with inline buttons to Telegram."""
+        task_name = config.get("task_name", "Unknown task")
+        resume_token = config.get("resume_token", "")
+        message = config.get("message", "Approval required to continue.")
+        msg_ref = send_task_approval(int(target), resume_token, task_name, message)
+        return msg_ref
+
+    def update_approval_message(self, message_ref: str,
+                                status: str,
+                                source: str = "") -> None:
+        """Edit the Telegram approval message to show resolution."""
+        try:
+            _update_approval_msg(int(message_ref), status, source)
+        except Exception as exc:
+            log.warning("Failed to update Telegram approval message: %s", exc)
 
 
 # ──────────────────────────────────────────────────────────────────────

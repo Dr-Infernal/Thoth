@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 $BuildDir = Join-Path $PSScriptRoot "build"
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host " Thoth v3.12.0 Installer Builder"              -ForegroundColor Cyan
+Write-Host " Thoth v3.13.0 Installer Builder"              -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -223,7 +223,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Green
     Write-Host " Installer built successfully!"               -ForegroundColor Green
-    Write-Host " Output: dist\ThothSetup_3.12.0.exe"           -ForegroundColor Green
+    Write-Host " Output: dist\ThothSetup_3.13.0.exe"           -ForegroundColor Green
     Write-Host "============================================" -ForegroundColor Green
 } else {
     Write-Host ""

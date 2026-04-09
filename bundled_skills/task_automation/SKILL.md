@@ -6,7 +6,7 @@ description: Design effective automated workflows using scheduled tasks, prompt 
 tools:
   - task
 enabled_by_default: false
-version: "2.0"
+version: "3.0"
 tags:
   - automation
   - productivity
@@ -64,6 +64,78 @@ There are three task types:
 11. **Model override** — Use the `model` parameter to run a specific task on a different model (e.g. a heavier model for complex research, a lighter one for quick checks).
 12. **Persistent threads** — By default each run gets a fresh thread. For tasks that should maintain ongoing context across runs (e.g. a project status tracker that remembers prior updates), use `persistent_thread_id`.
 13. **Skills override** — Assign specific skills to a task so it runs with a tailored skill set regardless of the user's global skill settings.
+
+## Pipeline Mode (Advanced Steps)
+
+Pipeline mode replaces simple prompt lists with typed steps for complex workflows. Use `steps` instead of `prompts` when you need conditional branching, approval gates, subtasks, or notifications.
+
+### Step Types
+
+- **prompt** — Execute an agent prompt. Supports `{{prev_output}}` and `{{step.<id>.output}}` for data passing between steps. Optional: `on_error` (stop/skip), `max_retries`, `retry_delay_seconds`.
+- **condition** — Evaluate a condition on the previous step's output and branch. Fields: `condition` (expression), `if_true` (step ID to jump to), `if_false` (step ID or "end"). Operators: `contains:X`, `not_contains:X`, `equals:X`, `matches:REGEX`, `gt:N`, `lt:N`, `empty`, `not_empty`, `true`, `false`, `json:path:operator:value`, `llm:question`, `and:[...]`, `or:[...]`.
+- **approval** — Pause the pipeline and wait for human approval before continuing. Fields: `message`, `timeout_minutes` (0 = wait forever, default 30). The user approves or denies from the Activity tab.
+- **subtask** — Run another task inline as a sub-pipeline (max depth 2). Fields: `task_id`, `pass_output` (bool, pass previous output as input).
+- **notify** — Send a notification without agent invocation. Fields: `message`, `channel` (desktop/telegram/email).
+
+### Choosing the Right Condition Operator
+
+- **`llm:question`** — Best for natural language output. An LLM evaluates the question against the previous step's output and returns yes/no. Use when the output is free-form text (e.g. `llm:Were any relevant results found?`). Most reliable for ambiguous output.
+- **`contains:X` / `not_contains:X`** — Keyword match. Good for structured output or sentinel values.
+- **`empty` / `not_empty`** — Only when the step literally returns nothing on failure.
+- **`equals:X`** — Exact string match. Only reliable when the prompt is engineered to output a specific sentinel value (e.g. `"If no results, output exactly: NO_RESULTS"`).
+- **`json:path:operator:value`** — For structured JSON output with dot-path access.
+- **`and:[...]` / `or:[...]`** — Combine multiple operators.
+
+### Data Passing Between Steps
+
+Each step's output is captured. Use template variables to reference it in later steps:
+- `{{prev_output}}` — the output of the immediately preceding step.
+- `{{step.prompt_1.output}}` — the output of the step with ID `prompt_1`.
+
+Step IDs are auto-generated as `{type}_{counter}` — e.g. `prompt_1`, `condition_1`, `prompt_2`, `notify_1`. Do NOT provide an `id` field; it is assigned automatically based on step type and position.
+
+### Flow Control with `next`
+
+All step types accept an optional `next` field to override the default linear advancement:
+- `"next": "step_id"` — jump to a specific step after this one completes.
+- `"next": "end"` — terminate the pipeline after this step.
+
+This is essential for branching workflows: when a condition branches to an if_true path, the last step of that branch should use `"next": "end"` to prevent fall-through into the if_false path.
+
+### Safety Modes
+
+Every task has a `safety_mode` that controls access to destructive tools (shell commands, file writes, emails, calendar changes):
+- `block` (default) — destructive tools are removed entirely. Safest for automated runs.
+- `approve` — destructive tools are available, but the pipeline pauses for human approval before executing them. The user approves from the Activity tab.
+- `allow_all` — no restrictions. Use only for trusted, well-tested pipelines.
+
+### Pipeline Step Examples
+
+```python
+# Search → Condition → Branch → Approve → Notify
+# Step IDs are auto-assigned: prompt_1, condition_1, notify_1, prompt_2, approval_1, notify_2
+steps = [
+    {"type": "prompt", "prompt": "Search for breaking news about {{topic}}"},
+    {"type": "condition", "condition": "llm:Were any relevant results found?",
+     "if_true": "prompt_2", "if_false": "notify_1"},
+    {"type": "notify", "message": "No results for {{topic}}.", "channel": "desktop",
+     "next": "end"},
+    {"type": "prompt", "prompt": "Summarize: {{step.prompt_1.output}}"},
+    {"type": "approval", "message": "Send this summary to the team?"},
+    {"type": "notify", "message": "{{step.prompt_2.output}}", "channel": "telegram"},
+]
+```
+
+**Key patterns in this example:**
+- `llm:` condition operator for intelligent evaluation of free-text search output
+- `notify_1` has `"next": "end"` to stop the pipeline after the "no results" branch — without this, execution would fall through into `prompt_2`
+- `if_true` jumps to `prompt_2`, skipping the "no results" notify
+- Approval gate before sending via Telegram
+
+### When to Use Pipeline vs. Simple Prompts
+
+- **Simple prompts** for linear workflows where each step just needs conversation context.
+- **Pipeline steps** when you need: branching logic, approval gates before destructive actions, reusable subtask composition, explicit data routing between steps, or per-step error handling.
 
 ## Maintenance
 

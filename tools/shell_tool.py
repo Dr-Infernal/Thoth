@@ -57,7 +57,8 @@ _HISTORY_PATH = DATA_DIR / "shell_history.json"
 _BLOCKED_PATTERNS: list[re.Pattern] = [
     re.compile(p, re.IGNORECASE)
     for p in [
-        r"\brm\s+(-[a-z]*f[a-z]*\s+)?/\s*$",          # rm -rf /
+        r"\brm\s+(-[a-z]*f[a-z]*\s+)?/(\s*$|\*)",      # rm -rf / AND rm -rf /*
+        r"\brm\s+-[a-z]*r[a-z]*\s+/(etc|var|usr|home|boot|sys|proc)\b",  # rm system dirs
         r"\brm\s+-[a-z]*f[a-z]*\s+~/?$",               # rm -rf ~
         r"\bmkfs\b",                                     # format filesystem
         r"\bdd\s+.*of=/dev/",                            # dd to device
@@ -68,6 +69,10 @@ _BLOCKED_PATTERNS: list[re.Pattern] = [
         r"Remove-Item\s+.*-Recurse.*\s+[A-Z]:\\$",      # PowerShell rm C:\
         r"del\s+/[sq]\s+[A-Z]:\\",                       # Windows del /s C:\
         r":(){ :\|:& };:",                               # fork bomb
+        r"\|\s*(ba)?sh\b",                               # pipe to shell
+        r"\|\s*python[23]?\s+(-c\b|-)",                  # pipe to python -c / -
+        r"\bInvoke-Expression\b|\biex\b",                # PowerShell code exec
+        r"\bchmod\s+(-R\s+)?000\s+/",                    # chmod 000 /
     ]
 ]
 
@@ -98,10 +103,48 @@ _SAFE_PREFIXES: list[str] = [
     "top -l 1", "ps", "tasklist",
     "ipconfig", "ifconfig", "ip addr",
     "ping", "nslookup", "dig", "traceroute", "tracert",
-    "curl", "wget",
+    # NOTE: curl/wget intentionally excluded — prompt injection vectors
     # Env
     "env", "printenv", "$env:",
 ]
+
+# Operators that make any command potentially dangerous — if present,
+# skip safe-prefix matching and classify as needs_approval.
+# Catches: echo "x" > file, ls; rm -rf /, cat f | bash, $(cmd), `cmd`
+_UNSAFE_OPERATORS = re.compile(
+    r";|&&|\|\||[|]|>>?(?!/dev/null)"   # chain, pipe, redirect (except >/dev/null)
+    r"|\$\("                             # command substitution
+    r"|`"                                # backtick substitution
+)
+
+
+def _strip_quoted(text: str) -> str:
+    """Remove single- and double-quoted strings from *text*.
+
+    Returns the command with all quoted segments replaced by a
+    placeholder so that operators inside quotes (e.g. ``echo "a > b"``)
+    do not trigger the unsafe-operator check.  This is a lightweight
+    approach that covers the common case without a full shell parser.
+    """
+    result: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch in ('"', "'"):
+            # Skip to matching close quote
+            quote = ch
+            i += 1
+            while i < n and text[i] != quote:
+                if text[i] == '\\' and quote == '"' and i + 1 < n:
+                    i += 1  # skip escaped char in double quotes
+                i += 1
+            i += 1  # skip closing quote
+            result.append("_Q_")  # placeholder
+        else:
+            result.append(ch)
+            i += 1
+    return "".join(result)
 
 
 def classify_command(command: str, extra_blocked: list[re.Pattern] | None = None) -> str:
@@ -121,6 +164,21 @@ def classify_command(command: str, extra_blocked: list[re.Pattern] | None = None
     """
     cmd = command.strip()
 
+    # Multi-line commands: classify each line, take the most severe.
+    if '\n' in cmd:
+        severities = {"blocked": 2, "needs_approval": 1, "safe": 0}
+        worst = "safe"
+        for line in cmd.split('\n'):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            line_class = classify_command(line, extra_blocked)
+            if severities.get(line_class, 0) > severities.get(worst, 0):
+                worst = line_class
+            if worst == "blocked":
+                return "blocked"
+        return worst
+
     # Check built-in blocked patterns
     for pattern in _BLOCKED_PATTERNS:
         if pattern.search(cmd):
@@ -132,7 +190,14 @@ def classify_command(command: str, extra_blocked: list[re.Pattern] | None = None
             if pattern.search(cmd):
                 return "blocked"
 
-    # Check safe prefixes
+    # Disqualify from "safe" if the command contains shell operators that
+    # can chain, redirect, or substitute — these make any prefix unsafe.
+    # e.g. "echo hello > /etc/passwd" or "ls; rm -rf /home"
+    # Strip quoted strings first so operators inside quotes don't trigger.
+    if _UNSAFE_OPERATORS.search(_strip_quoted(cmd)):
+        return "needs_approval"
+
+    # Check safe prefixes (only reached for simple, single commands)
     cmd_lower = cmd.lower()
     for prefix in _SAFE_PREFIXES:
         if cmd_lower.startswith(prefix.lower()):
@@ -423,39 +488,18 @@ class ShellTool(BaseTool):
             )
 
         if classification == "needs_approval":
-            # In background workflows, check task-scoped command allowlist
+            # Determine execution context
             _is_bg = False
+            _mode = ""
             try:
-                from agent import is_background_workflow, _task_allowed_commands_var
+                from agent import is_background_workflow, get_safety_mode
                 _is_bg = is_background_workflow()
+                _mode = get_safety_mode()
             except ImportError:
                 pass
 
-            if _is_bg:
-                allowed = _task_allowed_commands_var.get() or []
-                cmd_lower = command.strip().lower()
-                if not any(cmd_lower.startswith(prefix.lower())
-                           for prefix in allowed):
-                    if allowed:
-                        return (
-                            f"⚠️ BLOCKED: Command '{command}' is not in this "
-                            f"task's allowed commands list. The task owner can "
-                            f"add it in the task editor under "
-                            f"'🔒 Background permissions'.\n"
-                            f"Currently allowed prefixes: {', '.join(allowed)}\n"
-                            f"Do NOT retry this tool."
-                        )
-                    return (
-                        f"⚠️ BLOCKED: Command '{command}' requires approval "
-                        f"and this task has no allowed commands configured. "
-                        f"The task owner can configure allowed command "
-                        f"prefixes in the task editor under "
-                        f"'🔒 Background permissions'.\n"
-                        f"Do NOT retry this tool."
-                    )
-                # Command matches an allowed prefix — skip interrupt, proceed
-            else:
-                # Interactive session — gate with interrupt
+            if not _is_bg:
+                # Interactive session — always gate with interrupt
                 approval = interrupt({
                     "tool": "run_command",
                     "label": "Run shell command",
@@ -464,6 +508,23 @@ class ShellTool(BaseTool):
                 })
                 if not approval:
                     return "Command cancelled by user."
+            elif _mode == "block":
+                # Background task, block mode — refuse non-safe commands
+                return (
+                    f"🚫 BLOCKED: This command requires approval and cannot "
+                    f"run in block safety mode: {command}"
+                )
+            elif _mode == "approve":
+                # Background task, approve mode — gate with interrupt
+                approval = interrupt({
+                    "tool": "run_command",
+                    "label": "Run shell command",
+                    "description": f"Run shell command: {command}",
+                    "args": {"command": command},
+                })
+                if not approval:
+                    return "Command denied by user."
+            # else: allow_all or unknown — fall through to execute
 
         # ── Execute ──────────────────────────────────────────────────────
         try:

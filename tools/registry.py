@@ -115,6 +115,12 @@ def set_enabled(name: str, value: bool) -> None:
     _enabled[name] = value
     _save_config()
     _invalidate_agent_cache()
+    # Also invalidate the task tool-inference keyword map
+    try:
+        from tasks import invalidate_keyword_map_cache
+        invalidate_keyword_map_cache()
+    except ImportError:
+        pass
 
 
 def get_tool(name: str) -> "BaseTool | None":

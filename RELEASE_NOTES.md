@@ -2,6 +2,137 @@
 
 ---
 
+## v3.13.0 — Advanced Workflows, Approval Gates & Memory Quality Overhaul
+
+Tasks evolve into **advanced workflows** with step-based pipelines, conditional branching, and approval gates. The **dream cycle** gets a comprehensive quality overhaul — hub diversity caps, batch rotation, rejection caching, confidence decay, and Ollama busy checks. **Memory extraction** gains vague-type banning, relation pre-normalisation, and cross-source merge protection. **Document extraction** is hardened with entity caps, description quality gates, self-loop rejection, and a curated relation vocabulary that eliminates 96% of unknown-type warnings. Ships with **221 new tests** across 3 sections, bringing the total to **1354 PASS**, 0 FAIL, 1 WARN.
+
+### 🔀 Advanced Workflow Builder
+
+Tasks are renamed to **Workflows** throughout the application and gain a full pipeline builder with branching logic.
+
+- **Step-based pipelines** — 5 step types: Prompt, Condition, Approval, Subtask, and Notify; each step can reference previous step output via `{{step.X.output}}` variables
+- **Conditional branching** — `if_true` / `if_false` routing with expression operators: contains, regex, JSON path, and LLM evaluation
+- **Approval gates** — workflows pause at approval steps and wait for human decision; configurable timeout with `if_approved` / `if_denied` routing
+- **Webhook triggers** — workflows can be triggered via `POST /api/webhook/<task_id>` with auto-generated secrets for authentication
+- **Task-completion triggers** — one workflow can trigger another on completion, enabling chained automation
+- **Concurrency groups** — prevent parallel execution of related workflows; only one workflow per group runs at a time
+- **Safety mode** — per-workflow setting: block destructive tools, require approval on destructive, or allow all; enforced across shell, task, and channel tools
+- **Tools override** — per-step tool selection with auto-detection from prompt content
+- **Agent-callable** — the task tool now accepts step definitions, triggers, safety mode, and concurrency group for programmatic workflow creation
+
+### 🏗️ Workflow Builder UI
+
+A redesigned task dialog with simple and advanced modes.
+
+- **Simple/Advanced toggle** — simple mode preserves the existing single-prompt interface; advanced mode exposes the full pipeline builder
+- **Step builder** — drag-to-reorder, delete, type-change for each step; visual condition builder with operator picker, JSON path input, and LLM question textarea
+- **Variable insertion menu** — `{{step.X.output}}`, `{{date}}`, `{{time}}`, and context variables insertable via dropdown
+- **Flow preview** — Mermaid diagram generated from step graph with refresh button
+- **Validation** — required field checks, reference validation, and operator-specific rules before save
+
+### ✋ Approval Gates
+
+Built-in pause/resume for human decisions on destructive or high-stakes actions.
+
+- **Pending approvals panel** — Activity tab shows pending approval cards with task name, message, and Approve / Deny buttons; auto-refreshes every 5 seconds
+- **Sidebar badge** — orange count badge on the Home button when approvals are pending; compact approval strip above the thread list with quick-approve buttons
+- **Multi-channel routing** — approval requests sent to configured channels (Telegram, desktop notifications) with inline keyboard buttons
+- **Agent integration** — agent checks pending approvals before resuming; routes to `if_approved` or `if_denied` step based on user response
+
+### 🧠 Dream Cycle Quality Overhaul
+
+A comprehensive quality improvement to the dream inference engine, validated across three 5-cycle test rounds.
+
+- **Hub diversity cap** — limits any single entity to at most 3 appearances across inferred pairs per cycle, preventing popular entities from monopolising inferences
+- **Batch rotation** — stored offset with half-overlap ensures fresh entity pairs each cycle instead of re-evaluating the same 50 oldest entities
+- **Rejection cache** — pairs rejected by the LLM are cached for 7 days in `dream_rejections.json`; avoids wasting LLM calls on previously rejected combinations
+- **Pre-flight merge check** — before inferring a relation between entities A and B, checks if A's description already mentions B's subject (likely already merged); skips if so
+- **Skip vague edges** — dream inference skips existing vague relation types (`related_to`, `associated_with`, etc.) when checking for existing connections
+- **Multi-excerpt evidence** — inference prompt now receives multiple conversation excerpts per entity pair for richer context
+- **Confidence decay** — new Phase 3 in the dream cycle: relations older than 90 days lose 10% confidence per cycle; relations below 0.3 are pruned automatically
+- **Ollama busy check** — queries `/api/ps` before starting a dream cycle; defers if Ollama is actively serving a user request to avoid GPU competition
+- **`uses` prompt tightening** — rule 6 in the inference prompt: "`uses` means actively employs as a tool, dependency, or platform — NOT merely mentions, searches for, or discusses"
+- **🌙 Dream button** — manual dream cycle trigger in the graph panel; async execution with status notifications
+
+### 🔬 Memory Extraction Hardening
+
+Improvements to the background conversation extraction pipeline.
+
+- **Vague-type ban** — `related_to`, `associated_with`, `connected_to`, `linked_to`, `has_relation`, `involves`, and `correlates_with` are rejected before saving, preventing noisy low-value edges
+- **Relation pre-normalisation** — `normalize_relation_type()` is called before any checks (ban, confidence gate), ensuring aliases like `is_father_of` are canonicalised to `father_of` before evaluation
+- **Cross-source merge protection** — when a document entity matches a personal entity via FAISS semantic search, the similarity threshold is raised from 0.80 to 0.90 to prevent impersonal document content from overwriting personal memories
+
+### 📄 Document Extraction Improvements
+
+Quality gates and relation vocabulary cleanup for the document map-reduce pipeline, validated by extracting 5 representative test documents (research paper, architecture doc, meeting notes, product spec, book chapter).
+
+- **Curated relation vocabulary** — 6 new types added to `VALID_RELATION_TYPES`: `extracted_from`, `uploaded`, `builds_on`, `cites`, `extends`, `contradicts`; 4 alias mappings: `published_by → authored`, `implements → uses`, `used_by → uses`, `references → cites`; eliminates 96% of unknown-type warnings in existing document data
+- **Prompt cleanup** — `DOC_EXTRACT_PROMPT` no longer suggests banned types (`related_to`, `associated_with`) or direction-confusing types (`used_by`); replaced with valid alternatives; confidence floor aligned from 0.5 to 0.6
+- **Hub entity dedup** — `extract_from_document` checks for an existing media entity with `find_by_subject` before creating a new one; updates the existing hub on re-upload instead of creating a duplicate
+- **Entity cap** — extracted entities capped at 12 per document; prevents LLM over-extraction on long documents
+- **Min description length** — entities with descriptions shorter than 30 characters are rejected as thin stubs
+- **Self-loop rejection** — `add_relation()` now blocks relations where source and target are the same entity (e.g. `Autonomous Agents → used_by → Autonomous Agents`)
+
+### 🔧 Other Changes
+
+- **Workflows rename** — "Tasks" renamed to "Workflows" throughout the UI (sidebar, home page, dialogs)
+- **Web search tool** — replaced LangChain TavilySearchResults wrapper with direct TavilyClient API calls for faster execution
+- **Shell tool safety** — enhanced destructive-command detection for safety-mode enforcement in workflows
+- **Streaming robustness** — replaced silent exception swallowing with `logger.debug()` calls; pending tools tracked via dict instead of DOM search; Mermaid rendering uses `suppressErrors: true`
+- **Compression mode** — removed "Smart" option; now "Off (default)" and "Deep (LLM)" only
+- **Dream window picker** — interactive HH:00 time inputs for configuring the dream schedule
+- **Extraction journal** — viewer button in Activity tab showing detailed extraction stats per thread
+- **Dream journal** — expandable entries showing merges, enrichments, inferred relations, and errors per cycle
+- **Graph panel** — "Show All" restyled as button; dream button added
+- **Mac installer** — test files (`test_suite.py`, `test_memory_e2e.py`, `integration_tests.py`) and dev scripts (`_*.py`) excluded from build
+
+### 🧪 Tests
+
+- **221 new tests** across 3 sections (48–49), bringing the total to **1354 PASS**, 0 FAIL, 1 WARN
+- **Section 48: Dream Cycle & Extraction Improvements** (13 tests, 48a–48am) — extraction vague-type rejection, extraction pre-normalisation, pre-flight merge check, `uses` prompt tightening, dream button in graph panel, Ollama busy check, confidence decay
+- **Section 49: Document Extraction Improvements** (13 tests, 49a–49m) — document relation types in `VALID_RELATION_TYPES`, alias mappings, normalisation, self-loop rejection, prompt cleanup, hub entity dedup, entity cap, min description length, cross-source merge threshold, functional self-loop test, cross-window dedup merge test
+- **5-document extraction verification** — research paper, architecture doc, meeting notes, product spec, book chapter; 49 entities, 101 relations, 0 unknown types, 0 self-loops, 0 banned types, 0 thin descriptions (perfect score)
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| `tasks.py` | Step-based pipelines, conditions, approvals, webhooks, triggers, concurrency groups, safety mode |
+| `agent.py` | Approval-gate integration, step branching execution, safety-mode tool filtering |
+| `dream_cycle.py` | 4-phase engine: hub cap, batch rotation, rejection cache, pre-flight merge, Ollama busy check, confidence decay |
+| `memory_extraction.py` | Vague-type ban, relation pre-normalisation, cross-source merge threshold |
+| `document_extraction.py` | Hub dedup, entity cap, min description length, quality gates |
+| `knowledge_graph.py` | 6 new relation types, 4 aliases, self-loop rejection |
+| `prompts.py` | Dream inference rules, DOC_EXTRACT_PROMPT relation cleanup + confidence floor |
+| `ui/task_dialog.py` | Simple/advanced workflow builder, step editor, condition builder, flow preview |
+| `ui/home.py` | Pending approvals panel, extraction journal, dream journal, workflows rename |
+| `ui/sidebar.py` | Approval badge, approval strip |
+| `ui/graph_panel.py` | Dream button, Show All button |
+| `ui/settings.py` | Compression mode redesign, dream window time picker |
+| `ui/streaming.py` | Logging, pending tools tracking, Mermaid robustness |
+| `ui/render.py` | Minor rendering tweaks |
+| `ui/head_html.py` | HTML additions |
+| `ui/chat.py` | Minor fix |
+| `ui/state.py` | State addition |
+| `channels/telegram.py` | Multi-channel approval routing, safety mode enforcement |
+| `channels/base.py` | Approval notification interface |
+| `tools/shell_tool.py` | Safety classification for approval gates |
+| `tools/task_tool.py` | Agent-callable workflow builder with steps schema |
+| `tools/web_search_tool.py` | Direct TavilyClient API calls |
+| `tools/base.py` | Tool registry updates |
+| `tools/documents_tool.py` | Minor tweak |
+| `tools/memory_tool.py` | Addition |
+| `tools/registry.py` | Registry updates |
+| `tools/wikipedia_tool.py` | Minor fix |
+| `tools/gmail_tool.py` | Cleanup (−35 lines) |
+| `notifications.py` | Approval notification support |
+| `app.py` | Webhook trigger endpoint |
+| `bundled_skills/task_automation/SKILL.md` | Advanced workflow documentation and examples |
+| `installer/build_mac_app.sh` | Exclude test files from Mac build |
+| `test_suite.py` | 221 new tests in sections 48–49 |
+
+---
+
 ## v3.12.0 — Plugin System, Multi-Channel Architecture & Image Generation
 
 Thoth gains a full **plugin architecture** with a built-in **marketplace**, a **multi-channel messaging framework** that abstracts Telegram behind a generic Channel ABC (ready for Slack, Discord, and more), a complete **Telegram upgrade** with voice transcription, photo analysis, document extraction, and emoji reactions, an **image generation tool** powered by OpenAI/OpenRouter, a **Google Account setup wizard**, and expanded **task delivery** to any channel. Ships with **168 new tests** across 8 sections, bringing the total to **1133 PASS**, 0 FAIL, 2 WARN.
