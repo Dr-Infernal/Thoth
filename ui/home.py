@@ -370,7 +370,8 @@ def _build_activity_content(container) -> None:
                                             pass
                                 msg = appr.get("message", "")
                                 if msg:
-                                    ui.label(msg).classes("text-sm text-grey-5 q-ml-lg")
+                                    display_msg = (msg[:200] + "…") if len(msg) > 200 else msg
+                                    ui.label(display_msg).classes("text-sm text-grey-5 q-ml-lg")
                                 step_desc = appr.get("step_summary", "")
                                 if step_desc:
                                     ui.label(f"Step: {step_desc}").classes(

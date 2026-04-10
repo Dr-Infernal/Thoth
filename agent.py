@@ -767,6 +767,8 @@ def _enrich_description(tool_name: str, label: str, args_str: str, kwargs: dict)
                 return f"{label}: {task['icon']} {task['name']}"
         except Exception:
             pass
+    if len(args_str) > 300:
+        args_str = args_str[:300] + "…"
     return f"{label}: {args_str}"
 
 

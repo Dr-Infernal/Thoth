@@ -1093,10 +1093,16 @@ def send_task_approval(chat_id: int, resume_token: str,
                 ),
             ]
         ])
+        _MAX_TG = 4096
+        _overhead = len("⏸️ <b>Approval Required</b>\n\n<b></b>\n") + len(_escape_html(task_name)) + 50
+        _max_msg = _MAX_TG - _overhead
+        _esc_msg = _escape_html(message)
+        if len(_esc_msg) > _max_msg:
+            _esc_msg = _esc_msg[:_max_msg] + "…"
         text = (
             f"⏸️ <b>Approval Required</b>\n\n"
             f"<b>{_escape_html(task_name)}</b>\n"
-            f"{_escape_html(message)}"
+            f"{_esc_msg}"
         )
         try:
             sent = await _app.bot.send_message(
