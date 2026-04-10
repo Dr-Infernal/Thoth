@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>&#x1305F; Thoth - Personal AI Sovereignty</title>
-    <meta name="description" content="A local-first AI assistant built for personal AI sovereignty. 25 integrated tools, personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, habit tracking, messaging channels, image generation, and community plugins. Run everything locally via Ollama, or add opt-in cloud models when you need frontier reasoning. Your data stays on your machine either way.">
+    <meta name="description" content="A local-first AI assistant built for personal AI sovereignty. 25 integrated tools, personal knowledge graph, voice, vision, shell access, browser automation, advanced workflows with approval gates, habit tracking, messaging channels, image generation, and community plugins. Run everything locally via Ollama, or add opt-in cloud models when you need frontier reasoning. Your data stays on your machine either way.">
 
     <!-- Canonical -->
     <link rel="canonical" href="https://siddsachar.github.io/Thoth/">
@@ -13,7 +13,7 @@
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://siddsachar.github.io/Thoth/">
     <meta property="og:title" content="Thoth - Personal AI Sovereignty">
-    <meta property="og:description" content="A local-first AI assistant with 25 integrated tools, a personal knowledge graph, voice, vision, shell access, browser automation, scheduled tasks, and a plugin marketplace. Your data stays on your machine.">
+    <meta property="og:description" content="A local-first AI assistant with 25 integrated tools, a personal knowledge graph, voice, vision, shell access, browser automation, advanced workflows, and a plugin marketplace. Your data stays on your machine.">
     <meta property="og:image" content="https://img.youtube.com/vi/xYJC2IVKH7Y/maxresdefault.jpg">
     <meta property="og:image:width" content="1280">
     <meta property="og:image:height" content="720">
@@ -21,7 +21,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Thoth - Personal AI Sovereignty">
-    <meta name="twitter:description" content="A local-first AI assistant with 25 tools, knowledge graph, voice, vision, shell, browser automation, and plugins. Your data stays on your machine.">
+    <meta name="twitter:description" content="A local-first AI assistant with 25 tools, knowledge graph, voice, vision, shell, browser automation, advanced workflows, and plugins. Your data stays on your machine.">
     <meta name="twitter:image" content="https://img.youtube.com/vi/xYJC2IVKH7Y/maxresdefault.jpg">
 
     <!-- Favicon (inline SVG) -->
@@ -33,7 +33,7 @@
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "Thoth",
-        "description": "A local-first AI assistant built for personal AI sovereignty with 25 integrated tools, a personal knowledge graph, voice, vision, and a plugin marketplace.",
+        "description": "A local-first AI assistant built for personal AI sovereignty with 25 integrated tools, a personal knowledge graph, voice, vision, advanced workflows, and a plugin marketplace.",
         "applicationCategory": "UtilitiesApplication",
         "operatingSystem": "Windows 10/11, macOS",
         "offers": {
@@ -44,7 +44,7 @@
         "license": "https://www.apache.org/licenses/LICENSE-2.0",
         "url": "https://siddsachar.github.io/Thoth/",
         "downloadUrl": "https://github.com/siddsachar/Thoth/releases",
-        "softwareVersion": "3.12.0",
+        "softwareVersion": "3.13.0",
         "author": {
             "@type": "Person",
             "name": "siddsachar",
@@ -914,8 +914,8 @@
             <a href="#tools">Tools</a>
             <a href="#comparison">Compare</a>
             <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="nav-dl">Windows</a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="nav-dl">macOS</a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/ThothSetup_3.13.0.exe" class="nav-dl">Windows</a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/Thoth-3.13.0-macOS-arm64.dmg" class="nav-dl">macOS</a>
         </div>
     </nav>
 
@@ -925,13 +925,13 @@
         <h1>Your AI runs here.<br>Your data stays <em>here.</em></h1>
         <p class="hero-body">
             Thoth is a local-first AI assistant with 25 integrated tools, a personal knowledge graph,
-            voice, vision, shell access, browser automation, scheduled tasks, and a plugin marketplace.
+            voice, vision, shell access, browser automation, advanced workflows, and a plugin marketplace.
             Run everything locally via Ollama, or add cloud models when you need frontier reasoning.
             Either way, nothing leaves your machine.
         </p>
         <div class="hero-actions">
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="btn btn--primary">Download for Windows <span class="btn-hint">.exe</span></a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="btn btn--primary">Download for macOS <span class="btn-hint">.dmg</span></a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/ThothSetup_3.13.0.exe" class="btn btn--primary">Download for Windows <span class="btn-hint">.exe</span></a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/Thoth-3.13.0-macOS-arm64.dmg" class="btn btn--primary">Download for macOS <span class="btn-hint">.dmg</span></a>
             <a href="https://github.com/siddsachar/Thoth" class="btn btn--ghost" target="_blank">View on GitHub</a>
         </div>
         <div class="hero-meta">
@@ -1013,13 +1013,14 @@
                     <h2>A knowledge graph that knows <em>you</em></h2>
                     <p>
                         Thoth builds a connected web of people, places, preferences, events, and their relationships -
-                        not just isolated facts. 10 entity types linked through typed relations, so the agent can reason
-                        about how things in your life connect.
+                        not just isolated facts. 10 entity types linked through 67 typed directional relations with
+                        60+ aliases and automatic normalisation, so the agent can reason about how things in your life connect.
                     </p>
                     <p>
                         Graph-enhanced auto-recall surfaces relevant memories plus their connections before every response.
-                        An interactive network diagram renders everything visually - search, filter by type, click nodes
-                        for details, toggle between full-graph and ego-graph views.
+                        Vague relations are automatically rejected; a curated vocabulary keeps the graph clean.
+                        An interactive network diagram renders everything visually - search, filter by type,
+                        click nodes for details, toggle between full-graph and ego-graph views.
                     </p>
                 </div>
                 <div class="highlight-visual">
@@ -1066,8 +1067,9 @@
             <div class="feature-row">
                 <div class="feature-item">
                     <span class="feature-icon">&#x29D6;</span>
-                    <h3>Tasks &amp; Scheduling</h3>
-                    <p>Named, multi-step tasks on 7 schedule types - daily, weekly, weekdays, weekends, interval, cron, or one-shot delay. Per-task model override, channel delivery to Telegram, template variables, persistent run history, and 5 built-in templates.</p>
+                    <h3>Workflows &amp; Scheduling</h3>
+                    <p>Step-based pipelines with conditional branching, approval gates, and 7 schedule types. 5 step types - Prompt, Condition, Approval, Subtask, Notify - with variable passing between steps. Webhook and task-completion triggers, concurrency groups, per-workflow safety mode, and channel delivery to Telegram.</p>
+                    <span class="feature-tag">Upgraded in 3.13</span>
                 </div>
                 <div class="feature-item">
                     <span class="feature-icon">&#x2261;</span>
@@ -1080,8 +1082,8 @@
                 <div class="feature-item">
                     <span class="feature-icon">&#x2B21;</span>
                     <h3>Multi-Channel Messaging</h3>
-                    <p>Pluggable channel framework with capability detection and shared media pipeline. Telegram is fully live - voice transcription, photo analysis, document extraction, emoji reactions, inline approval buttons. Every message runs through the full agent.</p>
-                    <span class="feature-tag">Upgraded in 3.12</span>
+                    <p>Pluggable channel framework with capability detection and shared media pipeline. Telegram is fully live - voice transcription, photo analysis, document extraction, emoji reactions, inline approval buttons. Workflow approval requests route to configured channels with interactive approve/deny buttons.</p>
+                    <span class="feature-tag">Upgraded in 3.13</span>
                 </div>
                 <div class="feature-item">
                     <span class="feature-icon">&#x25CE;</span>
@@ -1135,12 +1137,14 @@
                 <div class="feature-item">
                     <span class="feature-icon">&#x263D;</span>
                     <h3>Dream Cycle</h3>
-                    <p>A nightly background process that autonomously enriches your knowledge graph - re-examines recent conversations to discover missed entities, infers new relationships, writes a structured dream journal. 3-layer anti-contamination prevents fact cross-bleed.</p>
+                    <p>A 4-phase nightly process that autonomously enriches your knowledge graph - discovers missed entities, infers new relationships, decays stale connections, and prunes orphans. Hub diversity caps, batch rotation, rejection caching, and Ollama busy checks keep it efficient and accurate.</p>
+                    <span class="feature-tag">Upgraded in 3.13</span>
                 </div>
                 <div class="feature-item">
                     <span class="feature-icon">&#x21A5;</span>
                     <h3>Document Knowledge Extraction</h3>
-                    <p>Automatically extracts entities and relationships from uploaded documents into the knowledge graph. PDF, DOCX, TXT, and CSV analyzed on upload. Provenance tracking links every extracted fact back to its source.</p>
+                    <p>Automatically extracts entities and relationships from uploaded documents into the knowledge graph. PDF, DOCX, TXT, and CSV analyzed on upload. Curated relation vocabulary, entity caps, description quality gates, and self-loop rejection keep the graph clean. Provenance tracking links every extracted fact back to its source.</p>
+                    <span class="feature-tag">Upgraded in 3.13</span>
                 </div>
             </div>
 
@@ -1161,7 +1165,7 @@
                 <div class="feature-item feature-item--wide">
                     <span class="feature-icon">&#x2B29;</span>
                     <h3>Flexible Model Selection</h3>
-                    <p>39 curated local models plus cloud models from OpenAI and OpenRouter. Full reasoning model support - thinking tokens in a collapsible bubble with persistence across reloads. Per-thread and per-task model switching, star your favourites. Configurable context windows up to 256K tokens.</p>
+                    <p>39 curated local models plus cloud models from OpenAI and OpenRouter. Full reasoning model support - thinking tokens in a collapsible bubble with persistence across reloads. Per-thread and per-workflow model switching, star your favourites. Configurable context windows up to 256K tokens.</p>
                 </div>
             </div>
         </div>
@@ -1223,7 +1227,7 @@
                     <div class="tool-chip">Filesystem <span class="chip-badge">Free</span></div>
                     <div class="tool-chip">Shell <span class="chip-badge">Free</span></div>
                     <div class="tool-chip">Browser <span class="chip-badge">Free</span></div>
-                    <div class="tool-chip">Tasks <span class="chip-badge">Free</span></div>
+                    <div class="tool-chip">Workflows <span class="chip-badge">Free</span></div>
                     <div class="tool-chip">Tracker <span class="chip-badge">Free</span></div>
                     <div class="tool-chip">Telegram <span class="chip-badge chip-badge--key">Bot Token</span></div>
                 </div>
@@ -1252,11 +1256,11 @@
         <div class="container">
             <div class="highlight-inner">
                 <div class="highlight-text">
-                    <h2>Plugins, tasks, and channels</h2>
+                    <h2>Plugins, workflows, and channels</h2>
                     <p>
-                        Build scheduled multi-step tasks with cron, daily, weekly, or interval triggers.
-                        Deliver results to Telegram. Extend the agent with community plugins from the
-                        built-in marketplace - or write your own.
+                        Build advanced workflows with step-based pipelines, approval gates, conditional branching,
+                        and 7 schedule types. Route results and approval requests to Telegram.
+                        Extend the agent with community plugins from the built-in marketplace - or write your own.
                     </p>
                     <p>
                         Plugins run sandboxed with pattern blocking, dependency safety, and 5-second load timeouts.
@@ -1306,7 +1310,7 @@
                     <tr>
                         <td>Memory</td>
                         <td><s>Limited, opaque, provider-controlled</s></td>
-                        <td>Knowledge graph - entities, relationships, visual explorer</td>
+                        <td>Knowledge graph - 10 entity types, 67 relation types, visual explorer, FAISS semantic search</td>
                     </tr>
                     <tr>
                         <td>Tools</td>
@@ -1316,7 +1320,7 @@
                     <tr>
                         <td>Customisation</td>
                         <td><s>Pick a model, write a system prompt</s></td>
-                        <td>Swap models per thread, mix local + cloud, cron tasks, plugins</td>
+                        <td>Swap models per thread, mix local + cloud, advanced workflows, plugins</td>
                     </tr>
                     <tr>
                         <td>Voice</td>
@@ -1353,7 +1357,7 @@
                 <div class="install-step">
                     <div class="install-step-num">&#x25B6; 03</div>
                     <h3>Start talking</h3>
-                    <p>Ask anything in natural language - the agent handles the rest. Search the web, check email, analyze your screen, track a medication, schedule a task.</p>
+                    <p>Ask anything in natural language - the agent handles the rest. Search the web, check email, analyze your screen, track a medication, schedule a workflow.</p>
                 </div>
             </div>
         </div>
@@ -1389,8 +1393,8 @@
             <h2>Take back your <em>AI sovereignty</em></h2>
             <p>Free, open source, and yours to keep. No accounts. No subscriptions. No data harvesting.</p>
             <div class="cta-buttons">
-                <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/ThothSetup_3.12.0.exe" class="btn btn--primary">Download for Windows <span class="btn-hint">.exe</span></a>
-                <a href="https://github.com/siddsachar/Thoth/releases/download/v3.12.0/Thoth-3.12.0-macOS-arm64.dmg" class="btn btn--primary">Download for macOS <span class="btn-hint">.dmg</span></a>
+                <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/ThothSetup_3.13.0.exe" class="btn btn--primary">Download for Windows <span class="btn-hint">.exe</span></a>
+                <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/Thoth-3.13.0-macOS-arm64.dmg" class="btn btn--primary">Download for macOS <span class="btn-hint">.dmg</span></a>
                 <a href="https://github.com/siddsachar/Thoth" class="btn btn--ghost" target="_blank">Star on GitHub</a>
             </div>
         </div>
@@ -1407,7 +1411,7 @@
 
     <footer>
         <p>
-            &#x1305F; Thoth &middot; v3.12.0 &middot; Apache 2.0 &middot;
+            &#x1305F; Thoth &middot; v3.13.0 &middot; Apache 2.0 &middot;
             <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a>
         </p>
     </footer>

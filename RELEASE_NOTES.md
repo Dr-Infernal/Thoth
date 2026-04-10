@@ -2,7 +2,7 @@
 
 ---
 
-## v3.13.0 — Advanced Workflows, Approval Gates & Memory Quality Overhaul
+## v3.13.0 — Advanced Workflows, Approval Gates & Memory Overhaul
 
 Tasks evolve into **advanced workflows** with step-based pipelines, conditional branching, and approval gates. The **dream cycle** gets a comprehensive quality overhaul — hub diversity caps, batch rotation, rejection caching, confidence decay, and Ollama busy checks. **Memory extraction** gains vague-type banning, relation pre-normalisation, and cross-source merge protection. **Document extraction** is hardened with entity caps, description quality gates, self-loop rejection, and a curated relation vocabulary that eliminates 96% of unknown-type warnings. Ships with **221 new tests** across 3 sections, bringing the total to **1354 PASS**, 0 FAIL, 1 WARN.
 
