@@ -8,7 +8,7 @@
   <a href="https://github.com/siddsachar/Thoth/releases"><img src="https://img.shields.io/github/v/release/siddsachar/Thoth?style=flat&label=release&color=c9a227" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/siddsachar/Thoth?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-c9a227?style=flat" alt="Platform">
-  <img src="https://img.shields.io/badge/tests-1354%20unit%20%7C%20155%20integration-brightgreen?style=flat" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-All%20Pass-brightgreen?style=flat" alt="Tests">
 </p>
 
 Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 25 integrated tools (70 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, image generation, long-term memory with a personal knowledge graph, **advanced workflows** with conditional branching and approval gates, habit tracking, and more — plus a **plugin system** with a built-in marketplace and a **multi-channel messaging framework** (Telegram with full media support; more channels coming). Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
