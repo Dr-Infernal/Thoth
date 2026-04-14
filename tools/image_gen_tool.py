@@ -1,4 +1,4 @@
-"""Image generation tool — generate and edit images via OpenAI / OpenRouter.
+"""Image generation tool — generate and edit images via OpenAI / Google.
 
 The agent calls ``generate_image`` to create images from text prompts, or
 ``edit_image`` to modify an existing image (pasted, last generated, or from
@@ -6,8 +6,15 @@ a file path).  Generated images are rendered inline in the chat via the
 ``captured_images`` pipeline (same as vision / browser screenshots).
 
 The user picks a provider+model combination in Settings → Models (e.g.
-``openai/gpt-image-1.5``).  Only providers whose API key is configured
-appear in the dropdown.
+``openai/gpt-image-1.5`` or ``google/gemini-3.1-flash-image-preview``).
+Only providers whose API key is configured appear in the dropdown.
+
+Google providers:
+  - **Nano Banana** models use the ``generate_content`` API (same endpoint as
+    chat) with ``response_modalities=['IMAGE']``.  They support both
+    generation and editing.
+  - **Imagen 4** models use the dedicated ``generate_images`` API.  They
+    support generation only (no editing).
 """
 
 from __future__ import annotations
@@ -26,21 +33,107 @@ from tools import registry
 logger = logging.getLogger(__name__)
 
 # ── Available image generation models ────────────────────────────────────
-IMAGE_GEN_MODELS = [
-    {"id": "gpt-image-1.5", "label": "GPT Image 1.5 (Best quality)"},
+# Per-provider model registries.
+_OPENAI_MODELS = [
+    {"id": "gpt-image-1.5", "label": "GPT Image 1.5"},
     {"id": "gpt-image-1", "label": "GPT Image 1"},
-    {"id": "gpt-image-1-mini", "label": "GPT Image 1 Mini (Cheapest)"},
+    {"id": "gpt-image-1-mini", "label": "GPT Image 1 Mini"},
 ]
+
+_GOOGLE_NANO_BANANA_MODELS = [
+    {"id": "gemini-3.1-flash-image-preview", "label": "Nano Banana 2"},
+    {"id": "gemini-3-pro-image-preview", "label": "Nano Banana Pro"},
+    {"id": "gemini-2.5-flash-image", "label": "Nano Banana"},
+]
+
+_GOOGLE_IMAGEN_MODELS = [
+    {"id": "imagen-4.0-generate-001", "label": "Imagen 4"},
+    {"id": "imagen-4.0-fast-generate-001", "label": "Imagen 4 Fast"},
+    {"id": "imagen-4.0-ultra-generate-001", "label": "Imagen 4 Ultra"},
+]
+
+_GOOGLE_MODELS = _GOOGLE_NANO_BANANA_MODELS + _GOOGLE_IMAGEN_MODELS
+
+_XAI_MODELS = [
+    {"id": "grok-imagine-image", "label": "Grok Imagine"},
+]
+
+# Flat list for backward compat (used by existing tests).
+IMAGE_GEN_MODELS = _OPENAI_MODELS + _GOOGLE_MODELS + _XAI_MODELS
+
+# Sets for quick type detection
+_IMAGEN_MODEL_IDS = {m["id"] for m in _GOOGLE_IMAGEN_MODELS}
+_NANO_BANANA_MODEL_IDS = {m["id"] for m in _GOOGLE_NANO_BANANA_MODELS}
+
+# Per-provider model lists (keyed same as _PROVIDERS)
+_PROVIDER_MODELS = {
+    "openai": _OPENAI_MODELS,
+    "google": _GOOGLE_MODELS,
+    "xai": _XAI_MODELS,
+}
 
 # Provider definitions — only providers with an images API
 _PROVIDERS = {
-    "openai": {"key": "OPENAI_API_KEY", "label": "OpenAI", "emoji": "🟢"},
+    "openai": {"key": "OPENAI_API_KEY", "label": "OpenAI", "emoji": "⬡"},
+    "google": {"key": "GOOGLE_API_KEY", "label": "Google", "emoji": "💎"},
+    "xai": {"key": "XAI_API_KEY", "label": "xAI", "emoji": "𝕏"},
 }
 
 DEFAULT_MODEL = "openai/gpt-image-1.5"
 
 IMAGE_SIZES = ["auto", "1024x1024", "1536x1024", "1024x1536"]
 IMAGE_QUALITIES = ["auto", "low", "medium", "high"]
+
+# ── Size / aspect-ratio mapping ──────────────────────────────────────────
+_OPENAI_SIZE_TO_ASPECT: dict[str, str] = {
+    "1024x1024": "1:1",
+    "1536x1024": "3:2",
+    "1024x1536": "2:3",
+}
+
+_OPENAI_SIZE_TO_GOOGLE = {
+    "1024x1024": ("1:1", "1K"),
+    "1536x1024": ("3:2", "1K"),
+    "1024x1536": ("2:3", "1K"),
+}
+
+_QUALITY_TO_RESOLUTION: dict[str, str | None] = {
+    "low": "512",
+    "medium": "1K",
+    "high": "2K",
+    "auto": None,   # let model default
+}
+
+# xAI quality → resolution mapping (only "1k" and "2k" supported)
+_XAI_QUALITY_TO_RESOLUTION: dict[str, str | None] = {
+    "low": "1k",
+    "medium": "1k",
+    "high": "2k",
+    "auto": None,
+}
+
+# Imagen 4 aspect ratios (subset supported by the API)
+_IMAGEN_ASPECT_RATIOS = {"1:1", "3:4", "4:3", "9:16", "16:9"}
+
+
+def _map_google_params(size: str, quality: str) -> tuple[str, str | None]:
+    """Convert OpenAI-style size/quality to Google (aspect_ratio, resolution).
+
+    Returns ``("1:1", "1K")`` by default.  Quality can override the
+    resolution tier (e.g. ``quality="high"`` → ``"2K"``).
+    """
+    if size != "auto" and size in _OPENAI_SIZE_TO_GOOGLE:
+        aspect_ratio, base_res = _OPENAI_SIZE_TO_GOOGLE[size]
+    else:
+        aspect_ratio, base_res = "1:1", "1K"
+
+    # Quality can override the resolution tier
+    if quality != "auto" and quality in _QUALITY_TO_RESOLUTION:
+        override = _QUALITY_TO_RESOLUTION[quality]
+        if override is not None:
+            base_res = override
+
+    return aspect_ratio, base_res
 
 # ── Side-channel for generated images ────────────────────────────────────
 # The streaming layer reads and clears this after generate/edit calls,
@@ -86,14 +179,18 @@ def get_available_image_models() -> dict[str, str]:
     for prov_id, prov in _PROVIDERS.items():
         if not get_key(prov["key"]):
             continue
-        for m in IMAGE_GEN_MODELS:
+        for m in _PROVIDER_MODELS.get(prov_id, []):
             config_val = f"{prov_id}/{m['id']}"
             opts[config_val] = f"{prov['emoji']}  {m['label']}  ({prov['label']})"
     return opts
 
 
-def _get_client():
-    """Return (openai.OpenAI client, provider_label) based on the user's model selection."""
+def _get_client() -> tuple:
+    """Return (client, provider_label, provider_id) based on the user's model selection.
+
+    For OpenAI: returns an ``openai.OpenAI`` client.
+    For Google: returns a ``google.genai.Client``.
+    """
     from api_keys import get_key
 
     provider, _ = _parse_model_config(_get_configured_selection())
@@ -111,8 +208,16 @@ def _get_client():
             f"Please add your {prov_info['label']} API key in Settings → Cloud."
         )
 
+    if provider == "google":
+        from google import genai
+        return genai.Client(api_key=api_key), prov_info["label"], provider
+
+    if provider == "xai":
+        import openai
+        return openai.OpenAI(api_key=api_key, base_url="https://api.x.ai/v1"), prov_info["label"], provider
+
     import openai
-    return openai.OpenAI(api_key=api_key), prov_info["label"]
+    return openai.OpenAI(api_key=api_key), prov_info["label"], provider
 
 
 def _get_configured_selection() -> str:
@@ -200,9 +305,108 @@ def _generate_image(
     """Generate an image from a text prompt."""
     global _last_generated_image
 
-    client, provider = _get_client()
+    client, provider_label, provider_id = _get_client()
     model = _get_configured_model()
 
+    logger.info("generate_image: model=%s, size=%s, quality=%s, provider=%s",
+                model, size, quality, provider_label)
+
+    # ── Google provider ──────────────────────────────────────────────────
+    if provider_id == "google":
+        from google.genai import types
+
+        aspect_ratio, resolution = _map_google_params(size, quality)
+
+        try:
+            if model in _IMAGEN_MODEL_IDS:
+                # Imagen 4 — dedicated generate_images endpoint
+                cfg = types.GenerateImagesConfig(
+                    number_of_images=1,
+                    aspect_ratio=aspect_ratio if aspect_ratio in _IMAGEN_ASPECT_RATIOS else "1:1",
+                )
+                response = client.models.generate_images(
+                    model=model, prompt=prompt, config=cfg,
+                )
+                if not response.generated_images:
+                    return "Image generation returned no images."
+                img_bytes = response.generated_images[0].image.image_bytes
+            else:
+                # Nano Banana — generate_content with IMAGE modality
+                img_cfg_kwargs: dict = {"aspect_ratio": aspect_ratio}
+                if resolution:
+                    img_cfg_kwargs["image_size"] = resolution
+                cfg = types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                    image_config=types.ImageConfig(**img_cfg_kwargs),
+                )
+                response = client.models.generate_content(
+                    model=model, contents=[prompt], config=cfg,
+                )
+                # Extract image bytes from response parts
+                img_bytes = None
+                for part in (response.parts or []):
+                    if part.inline_data and part.inline_data.data:
+                        img_bytes = part.inline_data.data
+                        break
+                if not img_bytes:
+                    return "Image generation returned no image data."
+        except Exception as e:
+            logger.error("Image generation failed: %s", e, exc_info=True)
+            return f"Image generation failed: {e}"
+
+        b64_str = base64.b64encode(img_bytes).decode("ascii")
+        _last_generated_image = b64_str
+        _image_cache["__last_generated__"] = img_bytes
+        return (
+            f"Image generated successfully. Model: {model} | "
+            f"Aspect ratio: {aspect_ratio} | Provider: {provider_label}"
+        )
+
+    # ── xAI provider ──────────────────────────────────────────────────────
+    # xAI does NOT support 'size' or 'style'. Uses 'aspect_ratio' & 'resolution'.
+    # These are xAI-specific params so must go via extra_body.
+    if provider_id == "xai":
+        aspect = _OPENAI_SIZE_TO_ASPECT.get(size, "1:1") if size != "auto" else "auto"
+        extra: dict = {}
+        if aspect != "auto":
+            extra["aspect_ratio"] = aspect
+        res = _XAI_QUALITY_TO_RESOLUTION.get(quality)
+        if res:
+            extra["resolution"] = res
+        if quality != "auto":
+            extra["quality"] = quality
+
+        try:
+            response = client.images.generate(
+                model=model,
+                prompt=prompt,
+                n=1,
+                response_format="b64_json",
+                extra_body=extra if extra else None,
+            )
+        except Exception as e:
+            logger.error("Image generation failed: %s", e, exc_info=True)
+            return f"Image generation failed: {e}"
+
+        image_data = response.data[0]
+        if hasattr(image_data, "b64_json") and image_data.b64_json:
+            b64_str = image_data.b64_json
+        elif hasattr(image_data, "url") and image_data.url:
+            import urllib.request
+            with urllib.request.urlopen(image_data.url) as resp:
+                b64_str = base64.b64encode(resp.read()).decode("ascii")
+        else:
+            return "Image generation returned no image data."
+
+        _last_generated_image = b64_str
+        _image_cache["__last_generated__"] = base64.b64decode(b64_str)
+        disp_aspect = aspect if aspect != "auto" else "auto"
+        return (
+            f"Image generated successfully. Model: {model} | "
+            f"Aspect ratio: {disp_aspect} | Provider: {provider_label}"
+        )
+
+    # ── OpenAI provider ──────────────────────────────────────────────────
     kwargs: dict = {
         "model": model,
         "prompt": prompt,
@@ -211,9 +415,6 @@ def _generate_image(
     }
     if quality != "auto":
         kwargs["quality"] = quality
-
-    logger.info("generate_image: model=%s, size=%s, quality=%s, provider=%s",
-                model, size, quality, provider)
 
     try:
         response = client.images.generate(**kwargs)
@@ -239,7 +440,7 @@ def _generate_image(
     _image_cache["__last_generated__"] = base64.b64decode(b64_str)
 
     revised_prompt = getattr(image_data, "revised_prompt", None)
-    result = f"Image generated successfully. Model: {model} | Size: {kwargs['size']} | Provider: {provider}"
+    result = f"Image generated successfully. Model: {model} | Size: {kwargs['size']} | Provider: {provider_label}"
     if revised_prompt:
         result += f"\nRevised prompt: {revised_prompt}"
     return result
@@ -254,17 +455,119 @@ def _edit_image(
     """Edit an existing image using a text prompt."""
     global _last_generated_image
 
+    client, provider_label, provider_id = _get_client()
+    model = _get_configured_model()
+
+    # Imagen 4 does not support editing
+    if model in _IMAGEN_MODEL_IDS:
+        return (
+            f"Image editing is not supported by {model}. "
+            "Imagen 4 models can only generate new images. "
+            "Please switch to a Nano Banana or OpenAI model for editing."
+        )
+
     # Resolve the source image to raw bytes
     try:
         image_bytes = _resolve_image_source(image_source)
     except ValueError as e:
         return str(e)
 
-    client, provider = _get_client()
-    model = _get_configured_model()
+    logger.info("edit_image: model=%s, size=%s, source=%s, provider=%s",
+                model, size, image_source, provider_label)
 
-    # The GPT Image API requires image[] (list) with explicit MIME type;
-    # raw bytes default to application/octet-stream which is rejected.
+    # ── Google Nano Banana — send image+text via generate_content ─────
+    if provider_id == "google":
+        from google.genai import types
+
+        mime = _detect_mime(image_bytes)
+        img_part = types.Part.from_bytes(data=image_bytes, mime_type=mime)
+
+        try:
+            cfg = types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+            )
+            response = client.models.generate_content(
+                model=model, contents=[prompt, img_part], config=cfg,
+            )
+            img_out = None
+            for part in (response.parts or []):
+                if part.inline_data and part.inline_data.data:
+                    img_out = part.inline_data.data
+                    break
+            if not img_out:
+                return "Image edit returned no image data."
+        except Exception as e:
+            logger.error("Image edit failed: %s", e, exc_info=True)
+            return f"Image edit failed: {e}"
+
+        b64_str = base64.b64encode(img_out).decode("ascii")
+        _last_generated_image = b64_str
+        _image_cache["__last_generated__"] = img_out
+        return (
+            f"Image edited successfully. Model: {model} | "
+            f"Provider: {provider_label}"
+        )
+
+    # ── xAI provider — uses JSON body with image URL, not multipart ─────
+    if provider_id == "xai":
+        import httpx
+
+        b64_src = base64.b64encode(image_bytes).decode("ascii")
+        mime = _detect_mime(image_bytes)
+        data_uri = f"data:{mime};base64,{b64_src}"
+
+        body: dict = {
+            "model": model,
+            "prompt": prompt,
+            "n": 1,
+            "response_format": "b64_json",
+            "image": {"url": data_uri, "type": "image_url"},
+        }
+        aspect = _OPENAI_SIZE_TO_ASPECT.get(size, None) if size != "auto" else None
+        if aspect:
+            body["aspect_ratio"] = aspect
+        if quality != "auto":
+            body["quality"] = quality
+        res = _XAI_QUALITY_TO_RESOLUTION.get(quality)
+        if res:
+            body["resolution"] = res
+
+        from api_keys import get_key
+        api_key = get_key("XAI_API_KEY")
+        try:
+            resp = httpx.post(
+                "https://api.x.ai/v1/images/edits",
+                headers={"Authorization": f"Bearer {api_key}",
+                         "Content-Type": "application/json"},
+                json=body,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.error("Image edit failed: %s", e, exc_info=True)
+            return f"Image edit failed: {e}"
+
+        items = data.get("data", [])
+        if not items:
+            return "Image edit returned no image data."
+        item = items[0]
+        b64_str = item.get("b64_json") or ""
+        if not b64_str and item.get("url"):
+            import urllib.request
+            with urllib.request.urlopen(item["url"]) as dl:
+                b64_str = base64.b64encode(dl.read()).decode("ascii")
+        if not b64_str:
+            return "Image edit returned no image data."
+
+        _last_generated_image = b64_str
+        _image_cache["__last_generated__"] = base64.b64decode(b64_str)
+        return (
+            f"Image edited successfully. Model: {model} | "
+            f"Provider: {provider_label}"
+        )
+
+    # ── OpenAI provider ──────────────────────────────────────────────────
     mime = _detect_mime(image_bytes)
     image_file = ("image.png", image_bytes, mime)
 
@@ -275,9 +578,6 @@ def _edit_image(
         "n": 1,
         "size": size if size != "auto" else "1024x1024",
     }
-
-    logger.info("edit_image: model=%s, size=%s, source=%s, provider=%s",
-                model, size, image_source, provider)
 
     try:
         response = client.images.edit(**kwargs)
@@ -301,7 +601,7 @@ def _edit_image(
     _image_cache["__last_generated__"] = base64.b64decode(b64_str)
 
     revised_prompt = getattr(image_data, "revised_prompt", None)
-    result = f"Image edited successfully. Model: {model} | Size: {kwargs['size']} | Provider: {provider}"
+    result = f"Image edited successfully. Model: {model} | Size: {kwargs['size']} | Provider: {provider_label}"
     if revised_prompt:
         result += f"\nRevised prompt: {revised_prompt}"
     return result
@@ -384,8 +684,8 @@ class ImageGenTool(BaseTool):
     def description(self) -> str:
         return (
             "Generate images from text descriptions and edit existing images. "
-            "Creates images using AI models (GPT Image). Requires an OpenAI "
-            "or OpenRouter API key."
+            "Creates images using AI models (OpenAI GPT Image or Google "
+            "Nano Banana / Imagen 4). Requires an OpenAI or Google API key."
         )
 
     @property

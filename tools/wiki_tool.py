@@ -202,17 +202,6 @@ class WikiTool(BaseTool):
     def as_langchain_tools(self) -> list:
         return [
             StructuredTool.from_function(
-                func=_search_wiki,
-                name="wiki_search",
-                description=(
-                    "Search across all wiki articles in the vault. Returns "
-                    "matching articles with titles and snippets. Use when the "
-                    "user asks about their knowledge base or wants to find "
-                    "information across their wiki."
-                ),
-                args_schema=_SearchWikiInput,
-            ),
-            StructuredTool.from_function(
                 func=_read_article,
                 name="wiki_read",
                 description=(

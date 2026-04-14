@@ -143,38 +143,72 @@ def _message_signature(msg: dict) -> str:
     return hashlib.sha1(raw).hexdigest()
 
 
-def persist_thread_image_state(thread_id: str | None, messages: list[dict]) -> None:
-    """Persist message image payloads for durable thread reloads."""
+def persist_thread_media_state(thread_id: str | None, messages: list[dict]) -> None:
+    """Persist message media payloads as files on disk with a v2 sidecar."""
     if not thread_id:
         return
     try:
-        from threads import save_thread_ui_images
+        from threads import save_thread_media, save_media_file, _next_media_filename
 
         entries: list[dict] = []
         for idx, msg in enumerate(messages):
+            media_items: list[dict] = []
+
+            # Images
             images = msg.get("images")
-            if not isinstance(images, list) or not images:
-                continue
-            clean_images = [img for img in images if isinstance(img, str) and img]
-            if not clean_images:
+            persist_flags = msg.get("_media_persist_flags", [])
+            if isinstance(images, list) and images:
+                for img_idx, img in enumerate(images):
+                    if isinstance(img, str) and img:
+                        # Per-image persist flag if available, else message-level fallback
+                        persist = (persist_flags[img_idx]
+                                   if img_idx < len(persist_flags)
+                                   else msg.get("_media_persist", False))
+                        # If it's already a filename (file-on-disk), keep it
+                        if not img.startswith("/") and not img.startswith("\\") and "." in img and len(img) < 200:
+                            # Looks like a filename already stored on disk
+                            media_items.append({"type": "image", "path": img, "persist": persist})
+                        else:
+                            # It's a base64 string — save to disk
+                            ext = _img_ext_from_b64(img)
+                            prefix = "gen" if persist else "cap"
+                            fname = _next_media_filename(thread_id, prefix, ext)
+                            raw = _b64.b64decode(img)
+                            save_media_file(thread_id, fname, raw)
+                            media_items.append({"type": "image", "path": fname, "persist": persist})
+                            # Replace base64 in message with filename for future calls
+                            images[img_idx] = fname
+
+            if not media_items:
                 continue
             entries.append({
                 "idx": idx,
                 "role": str(msg.get("role", "")),
                 "sig": _message_signature(msg),
-                "images": clean_images,
+                "media": media_items,
             })
-        save_thread_ui_images(thread_id, {"version": 1, "entries": entries})
+        save_thread_media(thread_id, {"version": 2, "entries": entries})
     except Exception:
-        logger.debug("Failed to persist thread image state", exc_info=True)
+        logger.debug("Failed to persist thread media state", exc_info=True)
 
 
-def _hydrate_thread_images(thread_id: str, messages: list[dict]) -> list[dict]:
-    """Merge persisted images into checkpoint-rebuilt messages."""
+def _img_ext_from_b64(b64: str) -> str:
+    """Determine image extension from base64 header bytes."""
+    if b64.startswith("iVBOR"):
+        return "png"
+    if b64.startswith("UklGR"):
+        return "webp"
+    if b64.startswith("R0lGO"):
+        return "gif"
+    return "jpg"
+
+
+def _hydrate_thread_media(thread_id: str, messages: list[dict]) -> list[dict]:
+    """Merge persisted media files back into checkpoint-rebuilt messages."""
     try:
-        from threads import load_thread_ui_images
+        from threads import load_thread_media, load_media_file
 
-        payload = load_thread_ui_images(thread_id)
+        payload = load_thread_media(thread_id)
         if not payload:
             return messages
         entries = payload.get("entries", [])
@@ -192,11 +226,8 @@ def _hydrate_thread_images(thread_id: str, messages: list[dict]) -> list[dict]:
                 continue
             role = str(entry.get("role", ""))
             sig = str(entry.get("sig", ""))
-            imgs = entry.get("images")
-            if not isinstance(imgs, list) or not imgs:
-                continue
-            clean_imgs = [img for img in imgs if isinstance(img, str) and img]
-            if not clean_imgs:
+            media = entry.get("media")
+            if not isinstance(media, list) or not media:
                 continue
 
             target_idx = None
@@ -212,8 +243,6 @@ def _hydrate_thread_images(thread_id: str, messages: list[dict]) -> list[dict]:
                         target_idx = cand
                         break
 
-            # User checkpoint content is reconstructed (strip_file_context), so
-            # signatures can differ from the live UI message content.
             if target_idx is None and isinstance(idx, int) and 0 <= idx < len(messages):
                 m = messages[idx]
                 if str(m.get("role", "")) == role and idx not in used_indices:
@@ -222,19 +251,25 @@ def _hydrate_thread_images(thread_id: str, messages: list[dict]) -> list[dict]:
             if target_idx is None:
                 continue
 
-            existing = messages[target_idx].get("images")
-            if isinstance(existing, list) and existing:
-                merged = list(existing)
-                for img in clean_imgs:
-                    if img not in merged:
-                        merged.append(img)
-                messages[target_idx]["images"] = merged
-            else:
-                messages[target_idx]["images"] = clean_imgs
+            # Load image files from disk and attach as filenames
+            img_filenames: list[str] = []
+            has_persist = False
+            for item in media:
+                if item.get("type") == "image":
+                    fname = item.get("path", "")
+                    if fname and load_media_file(thread_id, fname) is not None:
+                        img_filenames.append(fname)
+                    if item.get("persist"):
+                        has_persist = True
+
+            if img_filenames:
+                messages[target_idx]["images"] = img_filenames
+                if has_persist:
+                    messages[target_idx]["_media_persist"] = True
             used_indices.add(target_idx)
 
     except Exception:
-        logger.debug("Failed to hydrate thread images for reload", exc_info=True)
+        logger.debug("Failed to hydrate thread media for reload", exc_info=True)
 
     return messages
 
@@ -455,7 +490,7 @@ def load_thread_messages(thread_id: str) -> list[dict]:
                     "content": "",
                     "tool_results": list(pending_tool_results),
                 })
-            return _hydrate_thread_images(thread_id, msgs)
+            return _hydrate_thread_media(thread_id, msgs)
     except Exception:
         pass
     return []

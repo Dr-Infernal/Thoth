@@ -9,8 +9,11 @@ langchain-classic
 langchain-community
 langchain-huggingface
 langchain-ollama
+langchain-anthropic
+langchain-google-genai
 langchain-openai
 langchain-openrouter
+langchain-xai
 langchain-text-splitters
 langgraph
 langgraph-checkpoint-sqlite
@@ -100,3 +103,6 @@ playwright
 
 # ── Native Window (pywebview) ────────────────────────────────────────────────
 pywebview
+
+# ── Interactive Terminal (PTY) ───────────────────────────────────────────────
+pywinpty>=2.0; sys_platform == "win32"

@@ -123,6 +123,16 @@ class _TaskCreateInput(BaseModel):
             "'allow_all' (no restrictions). Defaults to 'block'."
         ),
     )
+    persistent_thread: bool = Field(
+        default=False,
+        description=(
+            "If true, all runs of this task share one conversation thread "
+            "so the agent can see prior outputs across runs. Use for "
+            "monitoring/polling tasks that need to compare against previous "
+            "results (e.g. price tracking, status dashboards). "
+            "Default false = each run gets a fresh thread."
+        ),
+    )
 
 
 class _TaskListInput(BaseModel):
@@ -192,6 +202,13 @@ class _TaskUpdateInput(BaseModel):
             "Set to empty string '' to clear and use the default model."
         ),
     )
+    persistent_thread: bool | None = Field(
+        default=None,
+        description=(
+            "Set to true to keep conversation history across runs, "
+            "or false to use a fresh thread each run."
+        ),
+    )
 
 
 # ── Tool functions ───────────────────────────────────────────────────────────
@@ -210,12 +227,18 @@ def _task_create(
     model: str | None = None,
     steps: list[dict] | None = None,
     safety_mode: str | None = None,
+    persistent_thread: bool = False,
 ) -> str:
     """Create a new task or quick timer."""
     try:
         # Default to notify_only for delay_minutes with no prompts
         if delay_minutes and not prompts and not steps:
             notify_only = True
+
+        # Generate persistent_thread_id if requested
+        p_thread_id = None
+        if persistent_thread:
+            p_thread_id = f"pt_{uuid.uuid4().hex[:10]}"
 
         task_id = tasks_db.create_task(
             name=name,
@@ -229,6 +252,7 @@ def _task_create(
             delivery_channel=delivery_channel,
             delivery_target=delivery_target,
             model_override=model or None,
+            persistent_thread_id=p_thread_id,
             steps=steps,
             safety_mode=safety_mode or "block",
         )
@@ -339,6 +363,7 @@ def _task_update(
     safety_mode: str | None = None,
     enabled: bool | None = None,
     model: str | None = None,
+    persistent_thread: bool | None = None,
 ) -> str:
     """Update fields on an existing task."""
     task = tasks_db.get_task(task_id)
@@ -360,9 +385,16 @@ def _task_update(
         updates["enabled"] = enabled
     if model is not None:
         updates["model_override"] = model if model else None
+    if persistent_thread is not None:
+        if persistent_thread:
+            # Only generate a new ID if one doesn't already exist
+            if not task.get("persistent_thread_id"):
+                updates["persistent_thread_id"] = f"pt_{uuid.uuid4().hex[:10]}"
+        else:
+            updates["persistent_thread_id"] = None
 
     if not updates:
-        return "No fields to update. Provide at least one of: name, schedule, prompts, steps, safety_mode, enabled, model."
+        return "No fields to update. Provide at least one of: name, schedule, prompts, steps, safety_mode, enabled, model, persistent_thread."
 
     try:
         tasks_db.update_task(task_id, **updates)
@@ -400,22 +432,17 @@ def _task_update(
 def _task_run_now(task_id: str) -> str:
     """Trigger immediate execution of an existing task."""
     from tools import registry as tool_registry
-    from threads import _save_thread_meta
 
     task = tasks_db.get_task(task_id)
     if not task:
         return f"Task '{task_id}' not found. Use task_list to see available tasks."
 
-    thread_id = task.get("persistent_thread_id") or uuid.uuid4().hex[:12]
-    thread_name = f"⚡ {task['name']} — {datetime.now().strftime('%b %d, %I:%M %p')}"
-    _save_thread_meta(thread_id, thread_name)
-
+    thread_id = tasks_db._prepare_task_thread(task)
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
     tasks_db.run_task_background(task_id, thread_id, enabled, notification=True)
 
     return (
         f"Task '{task['icon']} {task['name']}' started.\n"
-        f"Thread: {thread_name}\n"
         f"It will run in the background and you'll be notified when done."
     )
 

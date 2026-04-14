@@ -35,7 +35,6 @@ def open_settings(
     """
     # ── imports used across multiple tabs ──
     from api_keys import get_key, set_key, get_cloud_config
-    from agent import clear_agent_cache
     from tools import registry as tool_registry
     from models import (
         _ollama_reachable,
@@ -60,18 +59,26 @@ def open_settings(
         star_cloud_model,
         unstar_cloud_model,
         validate_openrouter_key,
+        validate_anthropic_key,
+        validate_google_key,
+        validate_xai_key,
         CONTEXT_SIZE_OPTIONS,
         CONTEXT_SIZE_LABELS,
         is_cloud_available,
         _cloud_model_cache,
     )
-    from vision import POPULAR_VISION_MODELS, list_cameras
+    from vision import POPULAR_VISION_MODELS
     from documents import load_processed_files, load_and_vectorize_document, reset_vector_store, remove_document
 
     # ── Recursive reopen helper ──
     def _reopen(tab: str = initial_tab):
         p.settings_dlg.close()
         open_settings(state, p, initial_tab=tab)
+
+    # ── Lazy helpers (deferred to avoid slow import on panel open) ──
+    def clear_agent_cache():
+        from agent import clear_agent_cache as _cac
+        _cac()
 
     # ══════════════════════════════════════════════════════════════════
     # TAB BUILDERS
@@ -194,7 +201,7 @@ def open_settings(
             "use your configured API keys."
         ).classes("text-grey-6 text-sm")
 
-        ui.label("✅ Downloaded  ⬇️ Available  🆕 Trending  🟢 OpenAI  🌐 OpenRouter").classes("text-xs text-grey-5 q-mt-xs")
+        ui.label("✅ Downloaded  ⬇️ Available  🆕 Trending  ⬡ OpenAI  🌐 OpenRouter").classes("text-xs text-grey-5 q-mt-xs")
         ui.label("🔑 API keys can be managed in the Cloud tab.").classes("text-xs text-grey-5")
 
         ui.separator()
@@ -501,6 +508,7 @@ def open_settings(
 
         vision_select.on_value_change(_on_vision_change)
 
+        from vision import list_cameras
         cameras = list_cameras()
         if cameras:
             cam_opts = {i: f"Camera {i}" for i in cameras}
@@ -517,7 +525,7 @@ def open_settings(
         ui.separator()
         ui.label("🎨 Image Generation").classes("text-h6")
         ui.label(
-            "Generate and edit images using AI models. Requires an OpenAI or OpenRouter API key."
+            "Generate and edit images using AI models. Requires an OpenAI, Google, or xAI API key."
         ).classes("text-grey-6 text-sm")
 
         from tools.image_gen_tool import get_available_image_models, DEFAULT_MODEL
@@ -528,7 +536,7 @@ def open_settings(
         _ig_model_opts = get_available_image_models()
         if not _ig_model_opts:
             ui.label(
-                "⚠️ No API keys configured. Add an OpenAI or OpenRouter key in the Cloud tab."
+                "⚠️ No API keys configured. Add an OpenAI, Google, or xAI key in the Cloud tab."
             ).classes("text-warning text-sm")
         else:
             # Ensure the current value is in the options (may be from another provider)
@@ -554,7 +562,7 @@ def open_settings(
     def _build_cloud_tab() -> None:
         ui.label("☁️ Cloud Models").classes("text-h6")
         ui.label(
-            "Connect to cloud LLMs via OpenAI (direct) or OpenRouter (100+ models)."
+            "Connect to cloud LLMs via OpenAI, Anthropic, Google, or OpenRouter (100+ models)."
         ).classes("text-grey-6 text-sm")
 
         _model_list_container = None
@@ -576,7 +584,7 @@ def open_settings(
                 if q and not all_models:
                     ui.label(f'No models matching "{q}"').classes("text-grey-6 text-sm")
                     return
-                for prov_label, prov_key in [("OpenAI", "openai"), ("OpenRouter", "openrouter")]:
+                for prov_label, prov_key in [("OpenAI", "openai"), ("Anthropic", "anthropic"), ("Google", "google"), ("xAI", "xai"), ("OpenRouter", "openrouter")]:
                     prov_models = [(m, _cloud_model_cache[m]) for m in all_models
                                    if _cloud_model_cache[m]["provider"] == prov_key]
                     if not prov_models:
@@ -631,7 +639,7 @@ def open_settings(
 
         # API Keys
         ui.separator()
-        with ui.expansion("🔑 OpenAI Direct", icon="key", value=bool(get_key("OPENAI_API_KEY"))).classes("w-full"):
+        with ui.expansion("🔑 OpenAI Direct", icon="key", value=False).classes("w-full"):
             ui.label("Direct access to OpenAI models.").classes("text-grey-6 text-sm")
             _oai_key = get_key("OPENAI_API_KEY")
             oai_input = ui.input(
@@ -648,7 +656,7 @@ def open_settings(
                     _refresh_model_list()
             ui.button("Save Key", icon="save", on_click=_save_oai).props("flat dense")
 
-        with ui.expansion("🌐 OpenRouter", icon="language", value=bool(get_key("OPENROUTER_API_KEY"))).classes("w-full"):
+        with ui.expansion("🌐 OpenRouter", icon="language", value=False).classes("w-full"):
             ui.label("One key for Claude, Gemini, Llama, and 100+ more.").classes("text-grey-6 text-sm")
             _or_key = get_key("OPENROUTER_API_KEY")
             or_input = ui.input(
@@ -670,12 +678,88 @@ def open_settings(
                     _refresh_model_list()
             ui.button("Save Key", icon="save", on_click=_save_or).props("flat dense")
 
+        with ui.expansion("🔶 Anthropic", icon="smart_toy", value=False).classes("w-full"):
+            ui.label("Direct access to Claude models.").classes("text-grey-6 text-sm")
+            _anth_key = get_key("ANTHROPIC_API_KEY")
+            anth_input = ui.input(
+                "Anthropic API Key", value=_anth_key,
+                password=True, password_toggle_button=True,
+            ).classes("w-full")
+
+            async def _save_anth():
+                val = anth_input.value.strip()
+                if val:
+                    valid = await run.io_bound(validate_anthropic_key, val)
+                    if not valid:
+                        ui.notify("❌ Invalid Anthropic API key", type="negative")
+                        return
+                set_key("ANTHROPIC_API_KEY", val)
+                ui.notify("Anthropic key saved ✅", type="positive")
+                if val:
+                    await run.io_bound(refresh_cloud_models)
+                    _refresh_model_list()
+            ui.button("Save Key", icon="save", on_click=_save_anth).props("flat dense")
+
+        with ui.expansion("💎 Google AI", icon="diamond", value=False).classes("w-full"):
+            ui.label("Direct access to Gemini models.").classes("text-grey-6 text-sm")
+            _goog_key = get_key("GOOGLE_API_KEY")
+            goog_input = ui.input(
+                "Google AI API Key", value=_goog_key,
+                password=True, password_toggle_button=True,
+            ).classes("w-full")
+
+            async def _save_goog():
+                val = goog_input.value.strip()
+                if val:
+                    valid = await run.io_bound(validate_google_key, val)
+                    if not valid:
+                        ui.notify("❌ Invalid Google AI API key", type="negative")
+                        return
+                set_key("GOOGLE_API_KEY", val)
+                ui.notify("Google AI key saved ✅", type="positive")
+                if val:
+                    await run.io_bound(refresh_cloud_models)
+                    _refresh_model_list()
+            ui.button("Save Key", icon="save", on_click=_save_goog).props("flat dense")
+
+        with ui.expansion("𝕏 xAI", icon="auto_awesome", value=False).classes("w-full"):
+            ui.label("Access Grok models for chat and image generation.").classes("text-grey-6 text-sm")
+            _xai_key = get_key("XAI_API_KEY")
+            xai_input = ui.input(
+                "xAI API Key", value=_xai_key,
+                password=True, password_toggle_button=True,
+            ).classes("w-full")
+
+            async def _save_xai():
+                val = xai_input.value.strip()
+                if val:
+                    valid = await run.io_bound(validate_xai_key, val)
+                    if not valid:
+                        ui.notify("⚠️ xAI key validation failed — saving anyway. "
+                                  "Models will appear if the key is valid.",
+                                  type="warning", timeout=5000)
+                set_key("XAI_API_KEY", val)
+                ui.notify("xAI key saved ✅", type="positive")
+                if val:
+                    await run.io_bound(refresh_cloud_models)
+                    _refresh_model_list()
+            ui.button("Save Key", icon="save", on_click=_save_xai).props("flat dense")
+
         # Setup Guide
         ui.separator()
         with ui.expansion("📖 Setup Guide", icon="help_outline").classes("w-full"):
             ui.markdown(
                 "### OpenAI Direct\n\n"
                 "1. Go to [platform.openai.com](https://platform.openai.com) → API Keys\n"
+                "2. Create a new key and paste it above\n\n"
+                "### Anthropic (Claude)\n\n"
+                "1. Go to [console.anthropic.com](https://console.anthropic.com) → API Keys\n"
+                "2. Create a new key and paste it above\n\n"
+                "### Google AI (Gemini)\n\n"
+                "1. Go to [aistudio.google.com](https://aistudio.google.com/apikey) → Get API Key\n"
+                "2. Create a new key and paste it above\n\n"
+                "### xAI (Grok)\n\n"
+                "1. Go to [console.x.ai](https://console.x.ai) → API Keys\n"
                 "2. Create a new key and paste it above\n\n"
                 "### OpenRouter\n\n"
                 "1. Go to [openrouter.ai](https://openrouter.ai) and create an account\n"
@@ -915,7 +999,7 @@ def open_settings(
             "filesystem", "shell", "gmail", "documents", "calendar", "timer",
             "url_reader", "calculator", "weather", "vision", "chart",
             "system_info", "conversation_search", "memory", "tracker",
-            "browser", "telegram", "task", "image_gen",
+            "browser", "telegram", "task", "image_gen", "wiki",
         }
         for tool in tool_registry.get_all_tools():
             if tool.name in skip_tools:
@@ -1101,6 +1185,37 @@ def open_settings(
         _build_ops_checkboxes(
             [("Read-only", _SAFE_OPS), ("Write", _WRITE_OPS), ("⚠️ Destructive", _DESTRUCTIVE_OPS)],
             current_ops, fs_tool,
+        )
+
+        # ── Logging ──────────────────────────────────────────────────
+        ui.separator()
+        ui.label("📝 Logging").classes("text-subtitle1 font-bold")
+        ui.label(
+            "Structured logs are saved daily to ~/.thoth/logs/ (7-day retention)."
+        ).classes("text-grey-6 text-xs")
+
+        from logging_config import get_file_log_level, set_file_log_level, get_log_dir
+
+        _level_options = ["DEBUG", "INFO", "WARNING", "ERROR"]
+        ui.select(
+            _level_options,
+            value=get_file_log_level(),
+            label="File log level",
+            on_change=lambda e: set_file_log_level(e.value),
+        ).classes("w-48").tooltip("Minimum severity written to log files")
+
+        async def _open_log_folder():
+            import subprocess, sys
+            log_dir = str(get_log_dir())
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer", log_dir])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", log_dir])
+            else:
+                subprocess.Popen(["xdg-open", log_dir])
+
+        ui.button("Open Log Folder", icon="folder_open", on_click=_open_log_folder).props(
+            "flat dense no-caps"
         )
 
     # ── Google Account Tab (unified Gmail + Calendar) ──────────────
@@ -1506,6 +1621,7 @@ def open_settings(
 
         def _toggle_vault(e):
             wiki_vault.set_enabled(e.value)
+            tool_registry.set_enabled("wiki", e.value)
             if e.value:
                 ui.notify("Wiki vault enabled — rebuilding…", type="info")
                 try:
@@ -1547,6 +1663,35 @@ def open_settings(
                 conv_count = vstats.get('conversations', 0)
                 if conv_count > 0:
                     ui.label(f"Conversations: {conv_count}").classes("font-bold")
+
+            # ── Vault sync detection ──────────────────────────────
+            edited = wiki_vault.check_vault_sync()
+            if edited:
+                with ui.card().classes("w-full bg-amber-1 border-l-4").style("border-color: #ff9800"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.icon("sync_problem", color="amber-8").classes("text-lg")
+                        ui.label(
+                            f"{len(edited)} file{'s' if len(edited) != 1 else ''} edited in vault"
+                        ).classes("font-bold text-amber-10")
+                    ui.label(
+                        "These files were modified outside Thoth. "
+                        "Sync to import changes into the knowledge graph."
+                    ).classes("text-xs text-grey-7")
+
+                    def _sync_vault():
+                        try:
+                            result = wiki_vault.sync_all_from_vault()
+                            ui.notify(
+                                f"✅ Synced {result['synced']} file(s) from vault",
+                                type="positive",
+                            )
+                            _reopen("Knowledge")
+                        except Exception as exc:
+                            ui.notify(f"Sync failed: {exc}", type="negative")
+
+                    ui.button("🔄 Sync from Vault", on_click=_sync_vault).props(
+                        "flat color=amber-8"
+                    )
 
             with ui.row().classes("gap-2"):
                 def _rebuild():
@@ -1720,6 +1865,12 @@ def open_settings(
 
                                 ui.button("🗑️ Delete", on_click=_del_mem).props("flat dense color=negative")
 
+                                def _edit_mem(mid=mem["id"]):
+                                    from ui.entity_editor import open_entity_editor
+                                    open_entity_editor(mid, on_saved=_refresh_memories)
+
+                                ui.button("✏️ Edit", on_click=_edit_mem).props("flat dense")
+
             cat_sel.on("update:model-value", lambda _: _refresh_memories())
             search_input.on("update:model-value", lambda _: _refresh_memories())
             _refresh_memories()
@@ -1825,91 +1976,96 @@ def open_settings(
         ui.separator()
 
         # ── Telegram ────────────────────────────────────────────────
-        ui.label("Telegram Bot").classes("text-h6")
-        ui.label("Chat with Thoth from Telegram using a personal bot.").classes("text-grey-6 text-sm")
+        def _tg_status_text():
+            if tg_running():
+                return "✅ Running"
+            if tg_configured():
+                return "⏸️ Stopped"
+            return "⚠️ Not configured"
 
-        with ui.expansion("📖 Setup Guide", icon="help_outline").classes("w-full"):
-            ui.markdown(
-                "### Quick Setup\n"
-                "1. Message [@BotFather](https://t.me/BotFather) → `/newbot`\n"
-                "2. Copy the **Bot Token**\n"
-                "3. Message [@userinfobot](https://t.me/userinfobot) for your **User ID**\n"
-                "4. Paste both below and click **Save**\n"
-                "5. Click **▶️ Start Bot**",
-                extras=['code-friendly', 'fenced-code-blocks', 'tables'],
-            ).classes("text-sm")
+        with ui.expansion(
+            f"🤖 Telegram Bot — {_tg_status_text()}",
+            icon="telegram",
+        ).classes("w-full") as tg_panel:
 
-        ui.separator()
+            tg_token = get_key("TELEGRAM_BOT_TOKEN")
+            tg_user_id = get_key("TELEGRAM_USER_ID")
 
-        tg_token = get_key("TELEGRAM_BOT_TOKEN")
-        tg_user_id = get_key("TELEGRAM_USER_ID")
+            token_input = ui.input(
+                label="Bot Token", value=tg_token,
+                password=True, password_toggle_button=True,
+            ).classes("w-full")
 
-        token_input = ui.input(
-            label="Bot Token", value=tg_token,
-            password=True, password_toggle_button=True,
-        ).classes("w-full")
+            user_id_input = ui.input(
+                label="Your Telegram User ID", value=tg_user_id,
+            ).classes("w-full")
 
-        user_id_input = ui.input(
-            label="Your Telegram User ID", value=tg_user_id,
-        ).classes("w-full")
-
-        status_container = ui.row().classes("items-center gap-2 mt-2")
-        _update_tg_status(status_container, tg_configured, tg_running)
-
-        def _save_tg_creds():
-            set_key("TELEGRAM_BOT_TOKEN", token_input.value.strip())
-            set_key("TELEGRAM_USER_ID", user_id_input.value.strip())
-            _update_tg_status(status_container, tg_configured, tg_running)
-            ui.notify("Telegram credentials saved", type="positive")
-
-        ui.button("💾 Save", on_click=_save_tg_creds).classes("mt-2")
-
-        ui.separator()
-        ui.label("Bot Control").classes("text-subtitle2 mt-2")
-
-        async def _start_tg():
-            if not tg_configured():
-                ui.notify("Please save your credentials first", type="warning")
-                return
-            try:
-                ok = await _tg_start_bot()
-                if ok:
-                    _ch_config.set("telegram", "auto_start", True)
-                    ui.notify("✅ Telegram bot started!", type="positive")
-                else:
-                    ui.notify("⚠️ Could not start — check credentials", type="warning")
-            except Exception as exc:
-                ui.notify(f"Error starting bot: {exc}", type="negative")
+            status_container = ui.row().classes("items-center gap-2 mt-2")
             _update_tg_status(status_container, tg_configured, tg_running)
 
-        async def _stop_tg():
-            try:
-                await _tg_stop_bot()
-                _ch_config.set("telegram", "auto_start", False)
-                ui.notify("Telegram bot stopped", type="info")
-            except Exception as exc:
-                ui.notify(f"Error stopping bot: {exc}", type="negative")
-            _update_tg_status(status_container, tg_configured, tg_running)
+            def _refresh_tg_header():
+                tg_panel._props["label"] = f"🤖 Telegram Bot — {_tg_status_text()}"
+                tg_panel.update()
 
-        with ui.row().classes("gap-2"):
-            ui.button("▶️ Start Bot", on_click=_start_tg).props("color=positive")
-            ui.button("⏹️ Stop Bot", on_click=_stop_tg).props("color=negative flat")
+            def _save_tg_creds():
+                set_key("TELEGRAM_BOT_TOKEN", token_input.value.strip())
+                set_key("TELEGRAM_USER_ID", user_id_input.value.strip())
+                _update_tg_status(status_container, tg_configured, tg_running)
+                _refresh_tg_header()
+                ui.notify("Telegram credentials saved", type="positive")
 
-        # Telegram outbound tool
-        tg_tool = tool_registry.get_tool("telegram")
-        if tg_tool:
-            ui.separator()
-            ui.label("Outbound Messaging").classes("text-subtitle2 mt-2")
-            ui.switch(
-                "Enable Telegram tool",
-                value=tool_registry.is_enabled("telegram"),
-                on_change=lambda e: (
-                    tool_registry.set_enabled("telegram", e.value),
-                    clear_agent_cache(),
-                ),
-            ).tooltip(tg_tool.description)
+            async def _start_tg():
+                if not tg_configured():
+                    ui.notify("Please save your credentials first", type="warning")
+                    return
+                try:
+                    ok = await _tg_start_bot()
+                    if ok:
+                        _ch_config.set("telegram", "auto_start", True)
+                        ui.notify("✅ Telegram bot started!", type="positive")
+                    else:
+                        ui.notify("⚠️ Could not start — check credentials", type="warning")
+                except Exception as exc:
+                    ui.notify(f"Error starting bot: {exc}", type="negative")
+                _update_tg_status(status_container, tg_configured, tg_running)
+                _refresh_tg_header()
 
-        ui.separator().classes("mt-6")
+            async def _stop_tg():
+                try:
+                    await _tg_stop_bot()
+                    _ch_config.set("telegram", "auto_start", False)
+                    ui.notify("Telegram bot stopped", type="info")
+                except Exception as exc:
+                    ui.notify(f"Error stopping bot: {exc}", type="negative")
+                _update_tg_status(status_container, tg_configured, tg_running)
+                _refresh_tg_header()
+
+            with ui.row().classes("gap-2 items-center"):
+                ui.button("💾 Save", on_click=_save_tg_creds)
+                ui.button("▶️ Start Bot", on_click=_start_tg).props("color=positive")
+                ui.button("⏹️ Stop Bot", on_click=_stop_tg).props("color=negative flat")
+
+            # Telegram outbound tool
+            tg_tool = tool_registry.get_tool("telegram")
+            if tg_tool:
+                ui.switch(
+                    "Enable Telegram tool",
+                    value=tool_registry.is_enabled("telegram"),
+                    on_change=lambda e: (
+                        tool_registry.set_enabled("telegram", e.value),
+                        clear_agent_cache(),
+                    ),
+                ).tooltip(tg_tool.description).classes("mt-2")
+
+            with ui.expansion("ⓘ Setup Guide").classes("w-full mt-2"):
+                ui.markdown(
+                    "1. Message [@BotFather](https://t.me/BotFather) → `/newbot`\n"
+                    "2. Copy the **Bot Token**\n"
+                    "3. Message [@userinfobot](https://t.me/userinfobot) for your **User ID**\n"
+                    "4. Paste both above and click **Save**\n"
+                    "5. Click **▶️ Start Bot**",
+                    extras=['code-friendly', 'fenced-code-blocks', 'tables'],
+                ).classes("text-sm")
 
     # ══════════════════════════════════════════════════════════════════
     # STATUS HELPERS (used by Channels tab)
@@ -1995,33 +2151,48 @@ def open_settings(
                         }
 
                 _initial = _tab_map.get(initial_tab, tab_models)
+
+                # ── Lazy tab loading (build only visible tab) ──
+                _tab_defs = [
+                    (tab_docs, "Documents", _build_documents_tab),
+                    (tab_models, "Models", _build_models_tab),
+                    (tab_cloud, "Cloud", _build_cloud_tab),
+                    (tab_tools, "Search", _build_tools_tab),
+                    (tab_skills, "Skills", _build_skills_tab),
+                    (tab_fs, "System", _build_system_access_tab),
+                    (tab_google, "Google", _build_google_account_tab),
+                    (tab_utils, "Utilities", _build_utilities_tab),
+                    (tab_tracker, "Tracker", _build_tracker_tab),
+                    (tab_knowledge, "Knowledge", _build_knowledge_tab),
+                    (tab_voice, "Voice", _build_voice_tab),
+                    (tab_channels, "Channels", _build_channels_tab),
+                    (tab_plugins, "Plugins", _build_plugins_tab),
+                ]
+                _built_tabs: set[str] = set()
+                _panel_map: dict[str, object] = {}
+                _builder_map: dict[str, Callable] = {}
+
                 with splitter.after:
                     with ui.tab_panels(tabs, value=_initial).classes("w-full h-full"):
-                        with ui.tab_panel(tab_docs).classes("px-6 py-4"):
-                            _build_documents_tab()
-                        with ui.tab_panel(tab_models).classes("px-6 py-4"):
-                            _build_models_tab()
-                        with ui.tab_panel(tab_cloud).classes("px-6 py-4"):
-                            _build_cloud_tab()
-                        with ui.tab_panel(tab_tools).classes("px-6 py-4"):
-                            _build_tools_tab()
-                        with ui.tab_panel(tab_skills).classes("px-6 py-4"):
-                            _build_skills_tab()
-                        with ui.tab_panel(tab_fs).classes("px-6 py-4"):
-                            _build_system_access_tab()
-                        with ui.tab_panel(tab_google).classes("px-6 py-4"):
-                            _build_google_account_tab()
-                        with ui.tab_panel(tab_utils).classes("px-6 py-4"):
-                            _build_utilities_tab()
-                        with ui.tab_panel(tab_tracker).classes("px-6 py-4"):
-                            _build_tracker_tab()
-                        with ui.tab_panel(tab_knowledge).classes("px-6 py-4"):
-                            _build_knowledge_tab()
-                        with ui.tab_panel(tab_voice).classes("px-6 py-4"):
-                            _build_voice_tab()
-                        with ui.tab_panel(tab_channels).classes("px-6 py-4"):
-                            _build_channels_tab()
-                        with ui.tab_panel(tab_plugins).classes("px-6 py-4"):
-                            _build_plugins_tab()
+                        for _t_obj, _t_name, _t_builder in _tab_defs:
+                            with ui.tab_panel(_t_obj).classes("px-6 py-4") as _pnl:
+                                if _t_obj is _initial:
+                                    _t_builder()
+                                    _built_tabs.add(_t_name)
+                                else:
+                                    ui.spinner(size="lg").classes("block mx-auto mt-8")
+                            _panel_map[_t_name] = _pnl
+                            _builder_map[_t_name] = _t_builder
+
+                    def _on_tab_switch(e):
+                        name = e.value if isinstance(e.value, str) else None
+                        if name and name not in _built_tabs and name in _builder_map:
+                            _built_tabs.add(name)
+                            panel = _panel_map[name]
+                            panel.clear()
+                            with panel:
+                                _builder_map[name]()
+
+                    tabs.on_value_change(_on_tab_switch)
 
     p.settings_dlg.open()

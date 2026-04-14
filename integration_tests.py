@@ -2511,11 +2511,11 @@ def section_17_wiki_vault():
                 from tools.wiki_tool import WikiTool
                 wt = WikiTool()
                 tools = wt.as_langchain_tools()
-                assert len(tools) == 5
+                assert len(tools) == 4, f"Expected 4 tools, got {len(tools)}"
                 names = {t.name for t in tools}
-                assert "wiki_search" in names
+                assert "wiki_search" not in names, "wiki_search should have been removed"
                 assert "wiki_read" in names
-                record("PASS", f"wiki_tool: WikiTool returns {len(tools)} tools")
+                record("PASS", f"wiki_tool: WikiTool returns {len(tools)} tools (wiki_search removed)")
             except Exception as e:
                 record("FAIL", "wiki_tool: WikiTool instantiation", str(e))
 
@@ -2698,6 +2698,234 @@ def section_18_document_extraction():
     _cleanup_entities()
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 19 · v3.14.0 — Editability, Vault Sync & Hybrid Search (live DB)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def section_19_v314_features():
+    print("\nSECTION 19 · v3.14.0 — Editability, Vault Sync & Hybrid Search")
+    print("-" * 40)
+
+    import json
+    import pathlib
+    import tempfile
+    import time as _time
+
+    import knowledge_graph as kg
+    import memory as mem
+
+    tag = _gen_id()
+
+    # --- 19a. Entity edit round-trip (update_entity with all fields) ---
+    subj_a = f"{_PREFIX}EditRT_{tag}"
+    try:
+        res = mem.save_memory("fact", subj_a, f"{subj_a} original desc", tags="test")
+        _cleanup_entity_ids.append(res["id"])
+        eid = res["id"]
+
+        kg.update_entity(
+            eid,
+            description=f"{subj_a} updated desc",
+            subject=f"{subj_a}_renamed",
+            entity_type="person",
+            aliases="AliasA,AliasB",
+            tags="tagX,tagY",
+        )
+        updated = kg.get_entity(eid)
+        assert updated is not None
+        assert updated["subject"] == f"{subj_a}_renamed"
+        assert updated["entity_type"] == "person"
+        assert "AliasA" in updated.get("aliases", "")
+        assert "tagX" in updated.get("tags", "")
+        assert "updated desc" in updated["description"]
+        record("PASS", "v314: entity edit round-trip (all fields)")
+    except Exception as e:
+        record("FAIL", "v314: entity edit round-trip", str(e))
+
+    # --- 19b. Vault export → parse_entity_md round-trip ---
+    try:
+        import wiki_vault as wv
+    except Exception as e:
+        record("FAIL", "v314: wiki_vault import", str(e))
+        _cleanup_entities()
+        return
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = pathlib.Path(td)
+        orig_data_dir = wv._DATA_DIR
+        orig_cfg_path = wv._CONFIG_PATH
+
+        wv._DATA_DIR = td_path
+        wv._CONFIG_PATH = td_path / "wiki_config.json"
+        vault_root = td_path / "vault"
+        wv.set_vault_path(str(vault_root))
+        wv.set_enabled(True)
+
+        try:
+            subj_b = f"{_PREFIX}VaultRT_{tag}"
+            res_b = mem.save_memory("person", subj_b, f"{subj_b} is a vault round-trip test person",
+                                    tags="rt_test")
+            _cleanup_entity_ids.append(res_b["id"])
+            eid_b = res_b["id"]
+            # Set aliases via update_memory (save_memory doesn't accept aliases)
+            mem.update_memory(eid_b, f"{subj_b} is a vault round-trip test person",
+                              aliases="VaultAlias")
+
+            entity = kg.get_entity(eid_b)
+            md_path = wv.export_entity(entity)
+            assert md_path and md_path.exists(), "export_entity did not create .md"
+
+            parsed = wv.parse_entity_md(md_path)
+            assert parsed is not None, "parse_entity_md returned None"
+            assert parsed["id"] == eid_b
+            assert parsed["entity_type"] == "person"
+            assert subj_b in parsed["subject"]
+            assert "vault round-trip" in parsed.get("description", "")
+            record("PASS", "v314: vault export → parse_entity_md round-trip")
+
+            # --- 19c. Vault sync detection (touch file → check_vault_sync) ---
+            try:
+                # Touch the file so its mtime is well ahead of DB updated_at
+                _time.sleep(0.1)
+                original_text = md_path.read_text(encoding="utf-8")
+                md_path.write_text(original_text.replace(
+                    "vault round-trip test person",
+                    "vault round-trip test person (EDITED IN VAULT)"
+                ), encoding="utf-8")
+                # Force mtime 10 seconds into the future to guarantee detection
+                import os
+                future = _time.time() + 10
+                os.utime(md_path, (future, future))
+
+                out_of_sync = wv.check_vault_sync()
+                matched = [o for o in out_of_sync if o["entity_id"] == eid_b]
+                if matched:
+                    record("PASS", "v314: check_vault_sync detects edited file")
+                else:
+                    record("FAIL", "v314: check_vault_sync did not detect edited file",
+                           f"got {len(out_of_sync)} items, none matched {eid_b}")
+            except Exception as e:
+                record("FAIL", "v314: check_vault_sync", str(e))
+
+            # --- 19d. import_from_vault applies changes ---
+            try:
+                ok = wv.import_from_vault(eid_b, md_path)
+                assert ok, "import_from_vault returned False"
+                after_import = kg.get_entity(eid_b)
+                assert "EDITED IN VAULT" in after_import.get("description", "")
+                record("PASS", "v314: import_from_vault applies vault edits to DB")
+            except Exception as e:
+                record("FAIL", "v314: import_from_vault", str(e))
+
+            # --- 19e. sync_all_from_vault batch ---
+            try:
+                # Create a second entity and export it
+                subj_c = f"{_PREFIX}VaultSync2_{tag}"
+                res_c = mem.save_memory("place", subj_c, f"{subj_c} is a sync batch test place")
+                _cleanup_entity_ids.append(res_c["id"])
+                eid_c = res_c["id"]
+                entity_c = kg.get_entity(eid_c)
+                md_path_c = wv.export_entity(entity_c)
+                assert md_path_c and md_path_c.exists()
+
+                # Edit both files
+                for p in [md_path, md_path_c]:
+                    txt = p.read_text(encoding="utf-8")
+                    p.write_text(txt + "\n<!-- batch edit -->\n", encoding="utf-8")
+                    os.utime(p, (_time.time() + 20, _time.time() + 20))
+
+                result = wv.sync_all_from_vault()
+                assert isinstance(result, dict)
+                assert "synced" in result and "failed" in result
+                assert result["synced"] >= 1, f"Expected ≥1 synced, got {result}"
+                record("PASS", f"v314: sync_all_from_vault batch — synced={result['synced']}")
+            except Exception as e:
+                record("FAIL", "v314: sync_all_from_vault batch", str(e))
+
+        finally:
+            wv._DATA_DIR = orig_data_dir
+            wv._CONFIG_PATH = orig_cfg_path
+
+    # --- 19f. Hybrid search via SQL LIKE (keyword fallback) ---
+    subj_kw = f"{_PREFIX}HybridKW_{tag}"
+    try:
+        res_kw = mem.save_memory("concept", subj_kw,
+                                 f"{subj_kw} tests the keyword fallback path")
+        _cleanup_entity_ids.append(res_kw["id"])
+        eid_kw = res_kw["id"]
+
+        # search_entities (SQL LIKE) should find it by substring
+        sql_hits = kg.search_entities(subj_kw[:20])
+        found_ids = [h["id"] for h in sql_hits]
+        assert eid_kw in found_ids, f"search_entities missed {eid_kw}"
+        record("PASS", "v314: search_entities (SQL LIKE) finds entity by substring")
+    except Exception as e:
+        record("FAIL", "v314: search_entities SQL LIKE", str(e))
+
+    # --- 19g. graph_enhanced_recall keyword fallback ---
+    try:
+        recall_hits = kg.graph_enhanced_recall(subj_kw, top_k=10, threshold=0.0)
+        found_recall = [h for h in recall_hits if h["id"] == eid_kw]
+        if found_recall:
+            kw_hits = [h for h in found_recall if h.get("via") == "keyword"]
+            record("PASS", f"v314: graph_enhanced_recall finds entity "
+                   f"(via={found_recall[0].get('via', '?')})")
+        else:
+            record("FAIL", "v314: graph_enhanced_recall did not find test entity")
+    except Exception as e:
+        record("FAIL", "v314: graph_enhanced_recall keyword fallback", str(e))
+
+    # --- 19h. _update_memory expanded fields ---
+    try:
+        from tools.memory_tool import _update_memory
+        upd_result = _update_memory(
+            eid_kw,
+            f"{subj_kw} content updated via tool",
+            subject=f"{subj_kw}_tooled",
+            entity_type="skill",
+            aliases="ToolAlias",
+            tags="tool_tag",
+        )
+        assert "updated successfully" in upd_result.lower() or "Memory updated" in upd_result
+        after = kg.get_entity(eid_kw)
+        assert after["subject"] == f"{subj_kw}_tooled"
+        assert after["entity_type"] == "skill"
+        assert "ToolAlias" in after.get("aliases", "")
+        assert "tool_tag" in after.get("tags", "")
+        record("PASS", "v314: _update_memory with subject/type/aliases/tags")
+    except Exception as e:
+        record("FAIL", "v314: _update_memory expanded fields", str(e))
+
+    # --- 19i. _search_memory returns structured results ---
+    try:
+        from tools.memory_tool import _search_memory
+        search_result = _search_memory(f"{subj_kw}_tooled")
+        assert "No memories found" not in search_result, f"search returned nothing"
+        parsed_results = json.loads(search_result)
+        assert isinstance(parsed_results, list) and len(parsed_results) >= 1
+        first = parsed_results[0]
+        assert "id" in first
+        assert "category" in first
+        assert "subject" in first
+        assert "content" in first
+        record("PASS", f"v314: _search_memory returns structured JSON ({len(parsed_results)} hits)")
+    except Exception as e:
+        record("FAIL", "v314: _search_memory structured results", str(e))
+
+    # --- 19j. Entity editor importable and callable ---
+    try:
+        from ui.entity_editor import open_entity_editor
+        import inspect
+        sig = inspect.signature(open_entity_editor)
+        assert "entity_id" in sig.parameters
+        assert "on_saved" in sig.parameters
+        record("PASS", "v314: entity_editor importable with correct signature")
+    except Exception as e:
+        record("FAIL", "v314: entity_editor import", str(e))
+
+    _cleanup_entities()
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2742,6 +2970,7 @@ def main():
         16: ("Skills Engine", section_16_skills),
         17: ("Wiki Vault", section_17_wiki_vault),
         18: ("Document Extraction", section_18_document_extraction),
+        19: ("v3.14.0 Features", section_19_v314_features),
     }
 
     # Section 1 is always required

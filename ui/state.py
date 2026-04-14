@@ -75,6 +75,7 @@ class GenerationState:
     pending_tools: dict = field(default_factory=dict)
     chart_data: list = field(default_factory=list)
     captured_images: list = field(default_factory=list)
+    captured_images_persist: list = field(default_factory=list)
     interrupt_data: Any = None
     status: str = "streaming"  # streaming | done | error | stopped
     error: str = ""
@@ -136,6 +137,10 @@ class P:
     # Terminal panel elements
     terminal_toggle_bar: Any = None
     terminal_panel: ui.column = None    # type: ignore[assignment]
-    terminal_scroll: Any = None
-    terminal_container: ui.column = None  # type: ignore[assignment]
+
     terminal_chevron: ui.button = None  # type: ignore[assignment]
+    # Command Center (right drawer)
+    command_center_col: ui.column = None  # type: ignore[assignment]
+    # Sidebar avatar
+    sidebar_avatar: Any = None
+    sidebar_avatar_label: Any = None

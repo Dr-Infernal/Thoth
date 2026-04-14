@@ -293,13 +293,25 @@ def check_tts() -> CheckResult:
 
 
 def check_wiki_vault() -> CheckResult:
-    """Check Wiki Vault status — enabled and article count."""
+    """Check Wiki Vault status — enabled, article count, and sync state."""
     try:
-        from wiki_vault import is_enabled, get_vault_stats
+        from wiki_vault import is_enabled, get_vault_stats, check_vault_sync
         if not is_enabled():
             return CheckResult("Wiki Vault", "inactive", "Disabled", settings_tab="Knowledge")
         stats = get_vault_stats()
         articles = stats.get("articles", 0)
+        # Check for out-of-sync vault files
+        try:
+            out_of_sync = check_vault_sync()
+        except Exception:
+            out_of_sync = []
+        if out_of_sync:
+            count = len(out_of_sync)
+            return CheckResult(
+                "Wiki Vault", "warn",
+                f"{articles} article{'s' if articles != 1 else ''} · {count} edited in vault",
+                settings_tab="Knowledge",
+            )
         return CheckResult(
             "Wiki Vault", "ok",
             f"{articles} article{'s' if articles != 1 else ''}",
@@ -336,6 +348,37 @@ def check_network() -> CheckResult:
         return CheckResult("Network", "error", str(exc))
 
 
+def check_logging() -> CheckResult:
+    """Check that file logging is active and today's log file exists."""
+    try:
+        from logging_config import get_log_stats
+        stats = get_log_stats()
+        if stats.get("today_file"):
+            size = stats.get("today_size_kb", 0)
+            return CheckResult(
+                "Logging", "ok",
+                f"Active — {size:.0f} KB today, {stats['total_files']} file(s)",
+                settings_tab="System",
+            )
+        return CheckResult("Logging", "warn", "No log file for today",
+                           settings_tab="System")
+    except Exception as exc:
+        return CheckResult("Logging", "error", str(exc), settings_tab="System")
+
+
+def check_tools() -> CheckResult:
+    """Check how many tools are enabled."""
+    try:
+        from tools import registry as _tool_reg
+        n_enabled = len(_tool_reg.get_enabled_tools())
+        n_total = len(_tool_reg.get_all_tools())
+        if n_enabled:
+            return CheckResult("Tools", "ok", f"{n_enabled} / {n_total} enabled", settings_tab="Tools")
+        return CheckResult("Tools", "error", f"0 / {n_total} enabled", settings_tab="Tools")
+    except Exception as exc:
+        return CheckResult("Tools", "error", str(exc), settings_tab="Tools")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # CHECK REGISTRY
 # ═════════════════════════════════════════════════════════════════════════════
@@ -353,11 +396,13 @@ ALL_CHECKS = [
     check_dream_cycle,
     check_tts,
     check_wiki_vault,
+    check_logging,
     check_disk_space,
     check_threads_db,
     check_faiss_index,
     check_document_store,
     check_network,
+    check_tools,
 ]
 
 # Lightweight checks (just reading Python booleans — near zero cost)
@@ -366,6 +411,7 @@ LIGHT_CHECKS = [
     check_telegram,
     check_task_scheduler,
     check_tts,
+    check_tools,
 ]
 
 # Heavier checks (I/O, network, OAuth token probing)
@@ -377,6 +423,7 @@ HEAVY_CHECKS = [
     check_memory_extraction,
     check_dream_cycle,
     check_wiki_vault,
+    check_logging,
     check_disk_space,
     check_threads_db,
     check_faiss_index,

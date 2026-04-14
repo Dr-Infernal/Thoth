@@ -1,5 +1,5 @@
 ; =============================================================================
-; Thoth v3.13.0 – Inno Setup Script
+; Thoth v3.14.0 – Inno Setup Script
 ; Self-contained installer: bundles embedded Python with all pip packages
 ; pre-installed.  No internet downloads at install time.
 ; =============================================================================
@@ -10,7 +10,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "3.13.0"
+#define MyAppVersion   "3.14.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -63,6 +63,9 @@ Source: "..\notifications.py";         DestDir: "{app}\app"; Flags: ignoreversio
 Source: "..\prompts.py";               DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\requirements.txt";         DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\thoth.ico";                DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\logging_config.py";         DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\terminal_bridge.py";        DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\terminal_pty.py";           DestDir: "{app}\app"; Flags: ignoreversion
 
 ; ── Static assets (JS libraries) ──────────────────────────────────────────────
 Source: "..\static\*";                 DestDir: "{app}\app\static"; Flags: ignoreversion
@@ -144,6 +147,9 @@ Source: "..\ui\status_bar.py";         DestDir: "{app}\app\ui"; Flags: ignorever
 Source: "..\ui\status_checks.py";      DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\streaming.py";          DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\task_dialog.py";        DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\command_center.py";     DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\entity_editor.py";      DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\terminal_widget.py";    DestDir: "{app}\app\ui"; Flags: ignoreversion
 ; ── Embedded Python (with all packages pre-installed) ────────────────────────
 Source: "build\python\*";              DestDir: "{app}\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 

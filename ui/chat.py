@@ -33,7 +33,6 @@ def build_chat(
     open_export: Callable,
     show_interrupt: Callable,
     add_chat_message: Callable,
-    add_terminal_entry: Callable,
     browse_file: Callable,
 ) -> None:
     """Render the full chat view for the current thread."""
@@ -49,7 +48,7 @@ def build_chat(
     )
     from tasks import get_running_tasks, stop_task
     from tools import registry as tool_registry
-    from ui.helpers import persist_thread_image_state
+    from ui.helpers import persist_thread_media_state
 
     # ── Header ───────────────────────────────────────────────────────
     running_wfs = get_running_tasks()
@@ -213,7 +212,7 @@ def build_chat(
     _is_active_cloud = is_cloud_model(_active_model)
     if _is_active_cloud:
         _prov = get_cloud_provider(_active_model) or "cloud"
-        _prov_label = "OpenAI" if _prov == "openai" else "OpenRouter" if _prov == "openrouter" else "cloud"
+        _prov_label = {"openai": "OpenAI", "openrouter": "OpenRouter", "anthropic": "Anthropic", "google": "Google AI"}.get(_prov, "cloud")
         with ui.row().classes("w-full items-center gap-2 q-px-sm q-py-xs").style(
             "background: rgba(255, 152, 0, 0.08); border-radius: 8px; border: 1px solid rgba(255, 152, 0, 0.25);"
         ):
@@ -233,6 +232,7 @@ def build_chat(
         else "background: rgba(76, 175, 80, 0.03);"
     )
     p.chat_scroll = ui.scroll_area().classes("w-full flex-grow").style(_scroll_bg)
+
     with p.chat_scroll:
         p.chat_container = ui.column().classes("w-full gap-2")
 
@@ -304,8 +304,12 @@ def build_chat(
                 a_msg["charts"] = _reattach_gen.chart_data
             if _reattach_gen.captured_images:
                 a_msg["images"] = _reattach_gen.captured_images
+                if _reattach_gen.captured_images_persist:
+                    a_msg["_media_persist_flags"] = list(_reattach_gen.captured_images_persist)
+                    if any(_reattach_gen.captured_images_persist):
+                        a_msg["_media_persist"] = True
             state.messages.append(a_msg)
-            persist_thread_image_state(state.thread_id, state.messages)
+            persist_thread_media_state(state.thread_id, state.messages)
             add_chat_message(a_msg)
         _active_generations.pop(state.thread_id, None)
 
@@ -341,72 +345,23 @@ def build_chat(
 
     if p.chat_scroll:
         p.chat_scroll.scroll_to(percent=1.0)
-
-    # ── Terminal toggle bar + panel ──────────────────────────────────
-    p.terminal_visible = False
-    p.terminal_toggle_bar = None
-
-    if tool_registry.is_enabled("shell"):
-        def _toggle_terminal():
-            p.terminal_visible = not getattr(p, "terminal_visible", False)
-            if p.terminal_panel is not None:
-                p.terminal_panel.set_visibility(p.terminal_visible)
-                if p.terminal_visible and p.terminal_scroll:
-                    p.terminal_scroll.scroll_to(percent=1.0)
-            if p.terminal_toggle_bar is not None:
-                _chevron = "expand_more" if p.terminal_visible else "expand_less"
-                p.terminal_chevron.props(f"icon={_chevron}")
-
-        p.terminal_toggle_bar = ui.row().classes(
-            "w-full items-center px-3 cursor-pointer"
-        ).style(
-            "height: 28px; background: #1a1a2e; border-top: 1px solid #333; gap: 6px;"
-        )
-        p.terminal_toggle_bar.on("click", lambda: _toggle_terminal())
-
-        def _clear_terminal():
-            from tools.shell_tool import clear_shell_history
-            if state.thread_id:
-                clear_shell_history(state.thread_id)
-            if p.terminal_container:
-                p.terminal_container.clear()
-
-        with p.terminal_toggle_bar:
-            ui.icon("terminal").classes("text-grey-5").style("font-size: 14px;")
-            ui.label("Terminal").classes("text-xs font-bold text-grey-5 flex-grow")
-            ui.button(icon="delete_sweep", on_click=_clear_terminal).props(
-                "flat round dense size=xs"
-            ).classes("text-grey-5").tooltip("Clear terminal history")
-            p.terminal_chevron = ui.button(icon="expand_less").props(
-                "flat round dense size=xs"
-            ).classes("text-grey-5")
-            p.terminal_chevron.on("click.stop", lambda: _toggle_terminal())
-
-    p.terminal_panel = ui.column().classes("w-full shrink-0").style("max-height: 250px;")
-    p.terminal_panel.set_visibility(False)
-    p.terminal_scroll = None
-    p.terminal_container = None
-
-    with p.terminal_panel:
-        p.terminal_scroll = ui.scroll_area().classes("w-full flex-grow").style(
-            "max-height: 230px; background: #0d1117;"
-        )
-        with p.terminal_scroll:
-            p.terminal_container = ui.column().classes("w-full gap-0 px-2 py-1")
-
-    # Render shell history
-    if state.thread_id:
-        from tools.shell_tool import get_shell_history
-        _history = get_shell_history(state.thread_id)
-        for entry in _history:
-            add_terminal_entry(entry)
-        if _history and p.terminal_panel is not None:
-            p.terminal_visible = True
-            p.terminal_panel.set_visibility(True)
-            if hasattr(p, "terminal_chevron") and p.terminal_chevron:
-                p.terminal_chevron.props("icon=expand_less")
-        if p.terminal_scroll:
-            p.terminal_scroll.scroll_to(percent=1.0)
+        # Client-side auto-scroll: a MutationObserver scrolls to the
+        # bottom whenever content changes, unless the user has scrolled up.
+        # Mirrors the pattern used by NiceGUI's own ui.log component.
+        _sid = p.chat_scroll.id
+        ui.run_javascript(f"""(function(){{
+            var el = getElement({_sid});
+            if (!el || !el.$el) return;
+            var c = el.$el.querySelector('.q-scrollarea__container');
+            if (!c) return;
+            el._tSS = true;
+            c.addEventListener('scroll', function() {{
+                el._tSS = (c.scrollHeight - c.scrollTop - c.clientHeight) < 50;
+            }});
+            new MutationObserver(function() {{
+                if (el._tSS) c.scrollTop = c.scrollHeight;
+            }}).observe(c, {{childList: true, subtree: true, characterData: true}});
+        }})()""")
 
     # ── File chips ───────────────────────────────────────────────────
     p.file_chips_row = ui.row().classes("w-full flex-wrap gap-1")
@@ -575,3 +530,7 @@ def build_chat(
                 state.voice_service.stop()
         p.voice_switch = ui.switch("🎤 Voice", value=state.voice_enabled, on_change=_toggle_voice)
         p.voice_status_label = ui.label("").classes("text-xs text-grey-6")
+        ui.space()  # push token counter to the right
+        with ui.column().classes("gap-0 items-end").style("min-width: 130px;"):
+            p.token_label = ui.label("Context: 0K / 32K (0%)").classes("text-xs text-grey-6")
+            p.token_bar = ui.linear_progress(value=0, show_value=False).style("height: 4px; width: 130px;")

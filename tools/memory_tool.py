@@ -2,7 +2,7 @@
 
 Exposes multiple LangChain sub-tools so the agent can manage a persistent
 personal knowledge graph across conversations.  Categories: person, preference,
-fact, event, place, project (and more).
+fact, event, place, project, organisation, concept, skill, media.
 
 v3.6+: Two new sub-tools — ``link_memories`` (create relations between
 entities) and ``explore_connections`` (traverse the knowledge graph).
@@ -27,7 +27,7 @@ class _SaveMemoryInput(BaseModel):
     category: str = Field(
         description=(
             "Memory category. Must be one of: person, preference, fact, "
-            "event, place, project."
+            "event, place, project, organisation, concept, skill, media."
         )
     )
     subject: str = Field(
@@ -48,7 +48,7 @@ class _SearchMemoryInput(BaseModel):
     )
     category: str = Field(
         default="",
-        description="Optional category filter (person, preference, fact, event, place, project). Leave empty to search all.",
+        description="Optional category filter (person, preference, fact, event, place, project, organisation, concept, skill, media). Leave empty to search all.",
     )
 
 
@@ -64,7 +64,23 @@ class _UpdateMemoryInput(BaseModel):
         description="The ID of the memory to update (from search or list output)."
     )
     content: str = Field(
-        description="New content to replace the existing content."
+        description="New content/description to replace the existing content."
+    )
+    subject: str | None = Field(
+        default=None,
+        description="New subject/name for the entity. Omit to keep unchanged.",
+    )
+    entity_type: str | None = Field(
+        default=None,
+        description="New entity type (person, preference, fact, event, place, project, organisation, concept, skill, media). Omit to keep unchanged.",
+    )
+    aliases: str | None = Field(
+        default=None,
+        description="Comma-separated aliases. Omit to keep unchanged.",
+    )
+    tags: str | None = Field(
+        default=None,
+        description="Comma-separated tags. Omit to keep unchanged.",
     )
 
 
@@ -210,24 +226,31 @@ def _save_memory(category: str, subject: str, content: str, tags: str = "") -> s
 
 
 def _search_memory(query: str, category: str = "") -> str:
-    """Search memories semantically."""
-    results = memory_db.semantic_search(query, top_k=10, threshold=0.3)
+    """Search memories using hybrid retrieval (FAISS + graph expansion + SQL LIKE)."""
+    results = kg.graph_enhanced_recall(query, top_k=10, threshold=0.3)
     if category:
         cat = category.lower().strip()
-        results = [m for m in results if m["category"] == cat]
+        results = [m for m in results
+                   if m.get("category", m.get("entity_type", "")) == cat]
     if not results:
         return "No memories found matching that query."
     entries = []
     for m in results:
-        entries.append({
+        entry = {
             "id": m["id"],
-            "category": m["category"],
+            "category": m.get("category", m.get("entity_type", "")),
             "subject": m["subject"],
-            "content": m["content"],
-            "tags": m["tags"],
+            "content": m.get("content", m.get("description", "")),
+            "tags": m.get("tags", ""),
             "relevance": m.get("score", ""),
-            "updated": m["updated_at"][:16],
-        })
+            "updated": m.get("updated_at", "")[:16],
+        }
+        # Include relationship context when available (from graph expansion)
+        if m.get("via") == "graph" and m.get("relations"):
+            rel_strs = [f"{r['from']} → {r['type']} → {r['to']}"
+                        for r in m["relations"]]
+            entry["connected_via"] = "; ".join(rel_strs)
+        entries.append(entry)
     return json.dumps(entries, indent=2)
 
 
@@ -250,15 +273,30 @@ def _list_memories(category: str = "") -> str:
     return json.dumps(entries, indent=2)
 
 
-def _update_memory(memory_id: str, content: str) -> str:
-    """Update an existing memory's content."""
-    result = memory_db.update_memory(memory_id, content)
+def _update_memory(
+    memory_id: str,
+    content: str,
+    subject: str | None = None,
+    entity_type: str | None = None,
+    aliases: str | None = None,
+    tags: str | None = None,
+) -> str:
+    """Update an existing memory's content and metadata."""
+    result = memory_db.update_memory(
+        memory_id,
+        content,
+        subject=subject,
+        category=entity_type,
+        aliases=aliases,
+        tags=tags,
+    )
     if result is None:
         return f"Memory '{memory_id}' not found. Use search_memory or list_memories to find the correct ID."
     return (
         f"Memory updated successfully.\n"
         f"ID: {result['id']}\n"
         f"Subject: {result['subject']}\n"
+        f"Type: {result.get('category', result.get('entity_type', ''))}\n"
         f"New content: {result['content']}"
     )
 

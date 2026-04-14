@@ -35,13 +35,11 @@ def build_home(
     """Render the home screen with Tasks / Knowledge Graph / Activity tabs."""
     from models import is_cloud_model, get_current_model
     from tools import registry as tool_registry
-    from threads import _save_thread_meta
     from tasks import (
         list_tasks, update_task, run_task_background,
         get_running_tasks, get_running_task_thread, stop_task,
-        get_next_fire_times, get_recent_runs,
+        _prepare_task_thread,
     )
-    from memory_extraction import get_extraction_status
 
     # ── Status bar (replaces old logo) ───────────────────────────────
     from ui.status_bar import build_status_bar
@@ -110,7 +108,11 @@ def build_home(
 
                 ui.separator()
                 with ui.row().classes("w-full items-center justify-between"):
-                    ui.label("⚡ Workflows").classes("text-h5")
+                    with ui.column().classes("gap-0"):
+                        ui.label("⚡ Workflows").classes("text-h5")
+                        ui.label("Background Agents").classes(
+                            "text-xs text-grey-6"
+                        ).style("margin-top: -2px; letter-spacing: 0.3px;")
                     ui.button("New Workflow", icon="add", on_click=lambda: show_task_dialog(
                         None, _refresh_home_tiles,
                     )).props("outline dense no-caps color=amber").style(
@@ -120,18 +122,32 @@ def build_home(
                 if home_tasks:
                     with ui.element("div").classes("w-full").style(
                         "display: grid;"
-                        "grid-template-columns: repeat(auto-fill, minmax(192px, 1fr));"
-                        "gap: 1rem;"
+                        "grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));"
+                        "gap: 0.75rem;"
                     ):
                         for tk in home_tasks:
                             _is_disabled = not tk.get("enabled", True)
                             card_style = "opacity: 0.45;" if _is_disabled else ""
-                            with ui.card().classes("h-full").style(card_style):
-                                ui.label(tk["icon"]).classes("text-h3 text-center w-full")
-                                ui.label(tk["name"]).classes("font-bold text-center w-full")
+                            with ui.card().classes("h-full").style(
+                                f"padding: 0.75rem; {card_style}"
+                            ):
+                                # Icon in a subtle circular badge
+                                with ui.element("div").classes("w-full flex justify-center q-mb-xs"):
+                                    ui.element("div").style(
+                                        "width: 40px; height: 40px; border-radius: 50%;"
+                                        "background: rgba(255,255,255,0.06);"
+                                        "display: flex; align-items: center; justify-content: center;"
+                                        "font-size: 1.25rem;"
+                                    ).props(f'innerHTML="{tk["icon"]}"')
+                                ui.label(tk["name"]).classes("font-bold text-center w-full").style(
+                                    "font-size: 0.85rem; line-height: 1.2;"
+                                )
                                 if tk.get("description"):
                                     ui.label(tk["description"]).classes(
                                         "text-xs text-grey-6 text-center w-full"
+                                    ).style(
+                                        "display: -webkit-box; -webkit-line-clamp: 2;"
+                                        "-webkit-box-orient: vertical; overflow: hidden;"
                                     )
                                 prompts = tk.get("prompts") or tk.get("steps") or []
                                 info = f"{len(prompts)} step{'s' if len(prompts) != 1 else ''}"
@@ -159,7 +175,9 @@ def build_home(
                                             info += " · 📅 Weekly"
                                 ui.label(info).classes("text-xs text-grey-6 text-center w-full")
 
-                                with ui.row().classes("w-full items-center justify-between mt-1"):
+                                with ui.row().classes("w-full items-center justify-between").style(
+                                    "margin-top: 4px;"
+                                ):
                                     def _toggle_enabled(e, t=tk):
                                         update_task(t["id"], enabled=e.value)
                                         _refresh_home_tiles()
@@ -213,15 +231,7 @@ def build_home(
                                     ).tooltip("Delete").style("color: #888;")
 
                                     def _run_tk(t=tk):
-                                        tid = uuid.uuid4().hex[:12]
-                                        t_name = (
-                                            f"⚡ {t['name']} — "
-                                            f"{datetime.now().strftime('%b %d, %I:%M %p')}"
-                                        )
-                                        _save_thread_meta(tid, t_name)
-                                        if t.get("model_override"):
-                                            from threads import _set_thread_model_override
-                                            _set_thread_model_override(tid, t["model_override"])
+                                        tid = _prepare_task_thread(t)
                                         bg_tools = [
                                             tl.name for tl in tool_registry.get_enabled_tools()
                                         ]
@@ -289,11 +299,12 @@ def build_home(
 # ══════════════════════════════════════════════════════════════════════
 
 def _build_activity_content(container) -> None:
-    """Render the Activity tab content inside *container*."""
-    from tasks import (
-        get_running_tasks, stop_task,
-        get_next_fire_times, get_recent_runs,
-    )
+    """Render the Activity tab content inside *container*.
+
+    Running tasks, approvals, upcoming schedule, and recent runs have
+    moved to the Command Center (right drawer).  This tab now shows
+    knowledge extraction and dream cycle status only.
+    """
     from memory_extraction import get_extraction_status
 
     with ui.scroll_area().classes("w-full h-full"):
@@ -309,162 +320,6 @@ def _build_activity_content(container) -> None:
                     "flat round size=sm"
                 ).tooltip("Refresh")
 
-            # Running Now
-            ui.separator().classes("q-my-sm")
-            ui.label("▶ Running Now").classes("text-subtitle1 font-bold")
-            running = get_running_tasks()
-            if running:
-                for _tid, info in running.items():
-                    with ui.card().classes("w-full q-my-xs").style("padding: 0.6rem 0.8rem;"):
-                        with ui.row().classes("w-full items-center no-wrap gap-2"):
-                            ui.spinner("dots", size="1.2em", color="amber")
-                            ui.label(info.get("name", "Task")).classes("font-bold")
-                            ui.space()
-                            step = info.get("step", 0)
-                            total = info.get("total", 0)
-                            if total > 0:
-                                ui.label(f"Step {step}/{total}").classes("text-xs text-grey-6")
-                                ui.linear_progress(value=step / total, show_value=False).classes("w-24").props("color=amber")
-                            def _stop_from_activity(tid=_tid):
-                                stop_task(tid)
-                                ui.notify("⏹️ Stop signal sent.", type="warning")
-                                container.clear()
-                                with container:
-                                    _build_activity_content(container)
-                            ui.button(icon="stop", on_click=_stop_from_activity).props(
-                                "round color=red size=xs"
-                            ).tooltip("Stop task")
-            else:
-                ui.label("No tasks currently running.").classes("text-grey-6 text-sm q-ml-sm")
-
-            # Pending Approvals
-            from tasks import get_pending_approvals, respond_to_approval
-            _approvals_container = ui.column().classes("w-full")
-
-            def _rebuild_approvals():
-                """Refresh the pending-approvals section (called by timer)."""
-                _approvals_container.clear()
-                pending = get_pending_approvals()
-                if not pending:
-                    return
-                with _approvals_container:
-                    ui.separator().classes("q-my-sm")
-                    ui.label("⏳ Pending Approvals").classes("text-subtitle1 font-bold")
-                    for appr in pending:
-                        with ui.card().classes("w-full q-my-xs").style(
-                            "padding: 0.6rem 0.8rem; border-left: 3px solid #f0c040;"
-                        ):
-                            with ui.column().classes("w-full gap-1"):
-                                with ui.row().classes("w-full items-center no-wrap gap-2"):
-                                    ui.label("🔔").classes("text-lg")
-                                    ui.label(appr.get("task_name", "Task")).classes("font-bold")
-                                    ui.space()
-                                    created = appr.get("created_at", "")
-                                    if created:
-                                        try:
-                                            cdt = datetime.fromisoformat(created)
-                                            ui.label(cdt.strftime("%b %d, %I:%M %p")).classes(
-                                                "text-xs text-grey-6"
-                                            )
-                                        except (ValueError, TypeError):
-                                            pass
-                                msg = appr.get("message", "")
-                                if msg:
-                                    display_msg = (msg[:200] + "…") if len(msg) > 200 else msg
-                                    ui.label(display_msg).classes("text-sm text-grey-5 q-ml-lg")
-                                step_desc = appr.get("step_summary", "")
-                                if step_desc:
-                                    ui.label(f"Step: {step_desc}").classes(
-                                        "text-xs text-grey-6 q-ml-lg"
-                                    )
-                                with ui.row().classes("q-ml-lg gap-2"):
-                                    async def _approve(tok=appr["resume_token"]):
-                                        from nicegui import run
-                                        result = await run.io_bound(respond_to_approval, tok, True)
-                                        if result:
-                                            ui.notify("✅ Approved", type="positive")
-                                        else:
-                                            ui.notify("ℹ️ Already handled", type="info")
-                                        _rebuild_approvals()
-
-                                    async def _deny(tok=appr["resume_token"]):
-                                        from nicegui import run
-                                        result = await run.io_bound(respond_to_approval, tok, False)
-                                        if result:
-                                            ui.notify("❌ Denied", type="warning")
-                                        else:
-                                            ui.notify("ℹ️ Already handled", type="info")
-                                        _rebuild_approvals()
-
-                                    ui.button(
-                                        "Approve", on_click=_approve,
-                                    ).props("unelevated dense no-caps size=sm").style(
-                                        "background: #2d8a4e; color: white;"
-                                    )
-                                    ui.button(
-                                        "Deny", on_click=_deny,
-                                    ).props("flat dense no-caps size=sm").style(
-                                        "color: #ff6b6b;"
-                                    )
-
-            _rebuild_approvals()
-            ui.timer(5.0, _rebuild_approvals)
-
-            # Upcoming
-            ui.separator().classes("q-my-sm")
-            ui.label("📅 Upcoming").classes("text-subtitle1 font-bold")
-            upcoming = get_next_fire_times(8)
-            if upcoming:
-                for item in upcoming:
-                    with ui.row().classes("w-full items-center no-wrap gap-2 q-py-xs"):
-                        ui.label(item["task_icon"]).classes("text-lg")
-                        ui.label(item["task_name"]).classes("font-bold")
-                        ui.space()
-                        try:
-                            dt = datetime.fromisoformat(item["next_run"])
-                            ui.label(dt.strftime("%b %d, %I:%M %p")).classes("text-xs text-grey-6")
-                        except (ValueError, TypeError):
-                            ui.label(item["next_run"]).classes("text-xs text-grey-6")
-            else:
-                ui.label("No upcoming scheduled tasks.").classes("text-grey-6 text-sm q-ml-sm")
-
-            # Recent Runs
-            ui.separator().classes("q-my-sm")
-            ui.label("🕐 Recent Runs").classes("text-subtitle1 font-bold")
-            recent = get_recent_runs(10)
-            if recent:
-                for r in recent:
-                    status = r.get("status", "unknown")
-                    if status == "completed":
-                        s_icon, s_color = "check_circle", "positive"
-                    elif status == "completed_delivery_failed":
-                        s_icon, s_color = "warning", "warning"
-                    elif status == "failed":
-                        s_icon, s_color = "error", "negative"
-                    elif status == "stopped":
-                        s_icon, s_color = "stop_circle", "orange"
-                    else:
-                        s_icon, s_color = "pending", "grey-6"
-                    with ui.column().classes("w-full gap-0 q-py-xs"):
-                        with ui.row().classes("w-full items-center no-wrap gap-2"):
-                            ui.label(r.get("task_icon", "⚡")).classes("text-lg")
-                            ui.label(r.get("task_name", "?")).classes("font-bold")
-                            ui.icon(s_icon).classes(f"text-{s_color}").props("size=xs")
-                            ui.space()
-                            started = r.get("started_at", "")
-                            if started:
-                                try:
-                                    dt = datetime.fromisoformat(started)
-                                    ui.label(dt.strftime("%b %d, %I:%M %p")).classes("text-xs text-grey-6")
-                                except (ValueError, TypeError):
-                                    pass
-                        status_msg = r.get("status_message", "")
-                        if status_msg:
-                            msg_color = "warning" if "failed" in status else "grey-6"
-                            ui.label(status_msg).classes(f"text-xs text-{msg_color} q-ml-lg")
-            else:
-                ui.label("No task runs yet.").classes("text-grey-6 text-sm q-ml-sm")
-
             # Knowledge Extraction
             ui.separator().classes("q-my-sm")
             ui.label("🧠 Knowledge Extraction").classes("text-subtitle1 font-bold")
@@ -479,14 +334,11 @@ def _build_activity_content(container) -> None:
                     ).classes("text-sm q-ml-sm")
                     threads_n = mem_status.get("threads_scanned", 0)
                     saved_n = mem_status.get("entities_saved", 0)
-                    islands_n = mem_status.get("islands_repaired", 0)
                     parts = []
                     if threads_n:
                         parts.append(f"{threads_n} thread(s) scanned")
                     if saved_n:
                         parts.append(f"{saved_n} entities saved")
-                    if islands_n:
-                        parts.append(f"{islands_n} island(s) repaired")
                     if parts:
                         ui.label(" · ".join(parts)).classes("text-xs text-grey-6 q-ml-sm")
                 except (ValueError, TypeError):
@@ -499,7 +351,7 @@ def _build_activity_content(container) -> None:
 
             def _show_extraction_journal():
                 _ext_entries = _get_ext_journal(limit=20)
-                with ui.dialog() as dlg, ui.card().classes("w-full max-w-2xl"):
+                with ui.dialog() as dlg, ui.card().classes("w-full max-w-2xl").style("user-select: text;"):
                     ui.label("🧠 Extraction Journal").classes("text-h6")
                     ui.separator()
                     with ui.scroll_area().classes("w-full").style("max-height: 60vh"):
@@ -515,6 +367,21 @@ def _build_activity_content(container) -> None:
                             with ui.expansion(
                                 f"{_efmt} — {_ej.get('summary', '')}",
                             ).classes("w-full"):
+                                # Summary stats
+                                _stats_parts = []
+                                _cb = _ej.get("contradictions_blocked", 0)
+                                if _cb:
+                                    _stats_parts.append(f"{_cb} contradiction(s) blocked")
+                                _lcs = _ej.get("low_confidence_skipped", 0)
+                                if _lcs:
+                                    _stats_parts.append(f"{_lcs} low-confidence skipped")
+                                _ir = _ej.get("islands_repaired", 0)
+                                if _ir:
+                                    _stats_parts.append(f"{_ir} island(s) repaired")
+                                if _stats_parts:
+                                    ui.label(" · ".join(_stats_parts)).classes(
+                                        "text-xs text-grey-5 q-mb-xs"
+                                    )
                                 _tdetails = _ej.get("thread_details", [])
                                 if _tdetails:
                                     for _td in _tdetails:
@@ -575,7 +442,7 @@ def _build_activity_content(container) -> None:
 
                     def _show_dream_journal():
                         _entries = get_journal(limit=20)
-                        with ui.dialog() as dlg, ui.card().classes("w-full max-w-2xl"):
+                        with ui.dialog() as dlg, ui.card().classes("w-full max-w-2xl").style("user-select: text;"):
                             ui.label("🌙 Dream Cycle Journal").classes("text-h6")
                             ui.separator()
                             with ui.scroll_area().classes("w-full").style("max-height: 60vh"):
@@ -662,3 +529,87 @@ def _build_activity_content(container) -> None:
                 ui.label(f"{dot} Telegram — {lbl}").classes("text-sm q-ml-sm")
             if not _any_channel:
                 ui.label("No channels configured.").classes("text-grey-6 text-sm q-ml-sm")
+
+            # Recent Logs
+            ui.separator().classes("q-my-sm")
+            ui.label("📝 Recent Logs").classes("text-subtitle1 font-bold")
+
+            from logging_config import read_recent_logs, get_current_log_path
+
+            _log_container = ui.column().classes("w-full")
+
+            def _render_logs():
+                _log_container.clear()
+                entries = read_recent_logs(15)
+                with _log_container:
+                    if not entries:
+                        ui.label("No log entries yet.").classes("text-grey-6 text-sm q-ml-sm")
+                        return
+                    for entry in entries:
+                        lvl = entry.get("level", "?")
+                        ts = entry.get("ts", "")
+                        msg = entry.get("msg", "")
+                        # Colour by level
+                        if lvl == "ERROR":
+                            color = "text-negative"
+                        elif lvl == "WARNING":
+                            color = "text-warning"
+                        elif lvl == "DEBUG":
+                            color = "text-grey-7"
+                        else:
+                            color = "text-grey-5"
+                        # Truncate long messages
+                        display_msg = (msg[:120] + "…") if len(msg) > 120 else msg
+                        ts_short = ts[11:19] if len(ts) >= 19 else ts
+                        ui.label(
+                            f"{ts_short} [{lvl}] {display_msg}"
+                        ).classes(f"text-xs {color}").style(
+                            "font-family: monospace; line-height: 1.4;"
+                            " user-select: text; cursor: text;"
+                        )
+
+            _render_logs()
+
+            with ui.row().classes("gap-2 q-ml-sm"):
+                ui.button(icon="refresh", on_click=_render_logs).props(
+                    "flat round size=xs"
+                ).tooltip("Refresh logs")
+
+                def _view_full_log():
+                    full = read_recent_logs(200)
+                    with ui.dialog() as dlg, ui.card().classes("w-full max-w-3xl").style(
+                        "user-select: text; min-height: 80vh;"
+                    ):
+                        ui.label("📝 Log Viewer").classes("text-h6")
+                        ui.separator()
+                        log_path = get_current_log_path()
+                        if log_path:
+                            ui.label(str(log_path)).classes("text-xs text-grey-6")
+                        with ui.scroll_area().classes("w-full flex-grow").style("min-height: 60vh;"):
+                            for entry in full:
+                                lvl = entry.get("level", "?")
+                                ts = entry.get("ts", "")
+                                msg = entry.get("msg", "")
+                                logger_name = entry.get("logger", "")
+                                if lvl == "ERROR":
+                                    color = "text-negative"
+                                elif lvl == "WARNING":
+                                    color = "text-warning"
+                                elif lvl == "DEBUG":
+                                    color = "text-grey-7"
+                                else:
+                                    color = "text-grey-5"
+                                line = f"{ts} [{lvl}] [{logger_name}] {msg}"
+                                exc = entry.get("exc", "")
+                                if exc:
+                                    line += f"\n  {exc}"
+                                ui.label(line).classes(
+                                    f"text-xs {color}"
+                                ).style("font-family: monospace; white-space: pre-wrap; line-height: 1.4;")
+                        with ui.row().classes("justify-end q-mt-sm"):
+                            ui.button("Close", on_click=dlg.close).props("flat")
+                    dlg.open()
+
+                ui.button("View Full Log", on_click=_view_full_log).props(
+                    "flat dense size=sm no-caps"
+                ).classes("text-xs")

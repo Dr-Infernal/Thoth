@@ -21,7 +21,7 @@ When the user asks you to **review your memories**, **check what you know**, **c
 
 ## Memory Audit (when explicitly requested)
 
-4. **Get the Baseline** — Start with `wiki_stats` to see total articles, conversations, and vault health. Then use `wiki_search` with broad terms to scan for coverage gaps that `search_memory` (semantic only) might miss.
+4. **Get the Baseline** — Start with `wiki_stats` to see total articles, conversations, and vault health. Then use `search_memory` with broad terms to scan for coverage gaps — it now includes semantic, keyword, and graph-expansion search in one call.
 5. **Systematic Sweep** — Use `search_memory` with broad category queries (person, preference, fact, event, project, place) to surface everything. Use `explore_connections` to visualise relationships and spot gaps. Review each category for:
    - **Duplicates** — Same fact stored under different wording
    - **Stale entries** — Jobs, addresses, or statuses that may have changed

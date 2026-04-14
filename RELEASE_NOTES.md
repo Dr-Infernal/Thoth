@@ -2,6 +2,155 @@
 
 ---
 
+## v3.14.0 — Multi-Provider Cloud, xAI Integration, Workflow Console & UI Polish
+
+Thoth becomes truly **multi-provider** — Anthropic (Claude), Google (Gemini), and xAI (Grok) join OpenAI and OpenRouter as first-class cloud providers with key validation, model fetching, and live model pickers. **Image generation** expands to xAI's Grok Imagine and Google's Imagen 4 / Nano Banana families. A new **media storage architecture** replaces in-memory base64 with file-on-disk persistence and two-tier cleanup, laying the foundation for video generation. A new **Workflow Console** replaces the right drawer with a professional operations panel. The **terminal architecture** is refactored into a modular PTY bridge. **Prompt-injection defences** add 5-layer scanning. The UI receives a polish pass — auto-scroll, inline image rendering fixes, and sidebar refinements. Ships with **172 new tests** across 4 sections, bringing the total to **1526 PASS**, 0 FAIL, 3 WARN.
+
+### ☁️ Multi-Provider Cloud Support
+
+Anthropic, Google AI, and xAI are now first-class cloud providers alongside OpenAI and OpenRouter.
+
+- **Anthropic (Claude)** — API key configuration, validation via `/v1/models`, paginated model fetching with `after_id`, context size from `max_input_tokens`, skip list for non-chat models (embed, tokenizer)
+- **Google (Gemini)** — API key configuration, validation via Generative Language API, model fetching with pagination, skip list for non-chat models (embed, aqa, imagen, veo, tts)
+- **xAI (Grok)** — API key configuration, validation via `/v1/language-models`, model fetching, Grok 4/3/2 context-size catalog (up to 2M tokens), non-chat model filtering (image/video generation models excluded from chat picker)
+- **Provider-aware UI** — cloud status banner shows provider name and emoji (⬡ OpenAI, 💎 Google, 𝕏 xAI); `is_cloud_model()` expanded to detect all providers; model picker refreshes all configured providers
+- **LLM instantiation** — `ChatAnthropic`, `ChatGoogleGenerativeAI`, and `ChatXAI` LangChain adapters with proper API key injection
+
+### 🎨 Image Generation — xAI & Google Expansion
+
+Image generation gains two new provider families and architectural improvements.
+
+- **xAI Grok Imagine** — `grok-imagine-image` model with aspect ratio and resolution mapping; quality-to-resolution conversion (`low` → 1k, `high` → 2k)
+- **Google Nano Banana** — `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview`, `gemini-2.5-flash-image` via `generate_content` API with `response_modalities=['IMAGE']`; supports both generation and editing
+- **Google Imagen 4** — `imagen-4.0-generate-001`, `imagen-4.0-fast-generate-001`, `imagen-4.0-ultra-generate-001` via dedicated `generate_images` API; generation only
+- **Per-provider model picker** — Settings → Models shows only models for providers with configured API keys
+- **Image cache preservation** — cached images now persist within the same thread across turns (no longer cleared on each message); only cleared on thread switch
+
+### 🖥️ Workflow Console
+
+The right drawer is redesigned as a professional operations panel.
+
+- **Workflow Console** — renamed from "Workflows Command Center"; heading with "Background Agents" subtitle
+- **5-section layout** — Running (with live progress bars and log), Approvals, Upcoming, Quick Launch (dropdown + Run / + New), Recent Runs
+- **Auto-refresh** — 3-second timer syncs the workflow dropdown with running state
+- **440px drawer width** — widened from 380px for comfortable content display
+
+### 🖥️ Terminal Architecture
+
+A modular terminal backend replacing inline shell rendering.
+
+- **`terminal_bridge.py`** — PTY communication bridge between the UI and system shell
+- **`terminal_pty.py`** — portable PTY backend with process lifecycle management
+- **`ui/terminal_widget.py`** — NiceGUI terminal widget with scroll area and command history
+- **Terminal panel removal** — the old inline terminal rendering block in `_handle_tool_done` is removed; shell output now shows in the standard tool expansion
+
+### 🛡️ Prompt-Injection Defence
+
+5-layer scanning protects against prompt injection attacks in tool outputs and user inputs.
+
+- **Layer 1: Instruction override detection** — catches "ignore previous instructions", "you are now", "new system prompt" patterns
+- **Layer 2: Role impersonation** — detects attempts to impersonate system, assistant, or admin roles
+- **Layer 3: Data exfiltration** — flags suspicious URLs with long query strings, base64 segments, or encoded credentials
+- **Layer 4: Encoding evasion** — detects base64-encoded instruction overrides and Unicode homoglyph substitution
+- **Layer 5: Social engineering** — catches urgency phrases, authority claims, and compliance pressure
+
+### 🔄 Auto-Scroll
+
+Chat window auto-scroll now works reliably using a client-side MutationObserver pattern.
+
+- **Default ON** — chat auto-scrolls to the bottom as tokens stream in
+- **User override** — scrolling up more than 50px from the bottom disables auto-scroll; it stays where you put it
+- **Auto-reset** — sending a new message or starting a new generation re-engages auto-scroll
+- **Client-side only** — no Python round-trips; MutationObserver watches DOM changes and scrolls via native `scrollTop`, matching the pattern used by NiceGUI's own `ui.log` component
+
+### � Media Storage Architecture
+
+A new file-on-disk media system replaces the old in-memory base64 approach, unifying image and future video storage with two-tier persistence.
+
+- **File-on-disk storage** — all media (generated images, captures, attachments) saved to `~/.thoth/media/{thread_id}/` with sequential filenames (`gen_001.png`, `cap_002.png`); sidecar `.media.json` tracks entries per message with type, path, and persist flag
+- **Sidecar format v2** — `{version: 2, entries: [{idx, role, sig, media: [{type, path, persist}]}]}` replaces old `.images.json`; clean cut with no backward-compatibility code
+- **Two-tier persistence** — Tier 1 (generated content: image gen, video gen, plugin output) survives thread deletion; Tier 2 (captures: vision, browser, filesystem, attachments) cleaned up with thread
+- **Thread deletion cleanup** — deletes sidecar + Tier 2 files; preserves Tier 1 files on disk; removes empty media directories
+- **6 image sources tagged** — Image Gen Tool (Tier 1), Vision Tool (Tier 2), Browser Tool (Tier 2), Filesystem Tool (Tier 2), Plugin `__IMAGE__` (Tier 1), User Attachments (Tier 2)
+- **Hydration on thread load** — `_hydrate_thread_media()` reads files from disk and converts to base64 for display; replaces old in-memory-only approach
+
+### 🐛 Bug Fixes
+
+- **Inline image rendering** — `_handle_tool_done` now extracts `raw_name` from tool-done events and uses it for all tool identity checks (`generate_image`, `edit_image`, `browser_*`, `workspace_read_file`, `analyze_image`); previously these compared display names against raw function names and never matched, so generated images, browser screenshots, vision captures, and filesystem images were never rendered inline
+- **Workflow "(paused)" label** — `_resume_pipeline()` and `_resume_graph_interrupted()` now strip the "(paused)" suffix from thread names on resume
+
+### 🔧 Other Changes
+
+- **Persistent logging** — `logging_config.py` with centralized configuration; Settings → Logging section with level picker and Open Folder button; Activity panel "Recent Logs" section
+- **Knowledge graph entity editor** — `ui/entity_editor.py` for inline entity editing in the graph panel
+- **Wiki vault expansion** — +213 lines of vault management improvements
+- **Dream cycle tuning** — additional quality fixes validated by new test section
+- **Sidebar polish** — wave hand icon shrunk (1.4 → 1.1rem), gear icon enlarged (1.25rem) and converted to icon-only round button; "Settings" text label removed
+- **"Workflows Running"** — sidebar avatar badge renamed from "Tasks Running"
+- **"No workflows running"** — empty-state placeholder renamed in Workflow Console
+- **Browser tool** — +36 lines of browser automation additions
+- **Memory tool** — +70 lines of memory operations
+- **Shell tool** — +39 lines of safety classification improvements
+- **Task tool** — persistent thread support in tool schemas
+- **Requirements** — 6 new dependencies (`langchain-anthropic`, `langchain-google-genai`, `langchain-xai`, and others)
+
+### 🧪 Tests
+
+- **172 new tests** across 4 sections (50–51, 52 expansion, 57), bringing the total to **1526 PASS**, 0 FAIL, 3 WARN
+- **Section 50: Prompt-Injection Defence** — 5-layer scanning: instruction override, role impersonation, data exfiltration, encoding evasion, social engineering; clean text passthrough; warning format validation
+- **Section 51: Persistent Logging** — logging config, level picker, file handler, Settings UI section, Activity panel Recent Logs section
+- **Section 52 expansion** — xAI provider, Google Imagen 4 + Nano Banana models, per-provider model registry, aspect ratio mapping, image cache thread preservation, key validation, model fetching
+- **Section 57: Dream Cycle Tuning** — quality fix validations
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`logging_config.py`** | **New** — Centralized logging configuration |
+| **`terminal_bridge.py`** | **New** — PTY communication bridge |
+| **`terminal_pty.py`** | **New** — Portable PTY backend |
+| **`ui/command_center.py`** | **New** — Workflow Console right drawer (5-section layout, auto-refresh, quick launch) |
+| **`ui/entity_editor.py`** | **New** — Knowledge graph entity editor |
+| **`ui/terminal_widget.py`** | **New** — Terminal widget component |
+| `models.py` | Anthropic, Google, xAI providers — key validation, model fetching, LLM instantiation, context-size catalog |
+| `api_keys.py` | New API key entries for Anthropic, Google, xAI |
+| `tools/image_gen_tool.py` | xAI Grok Imagine, Google Imagen 4 + Nano Banana, per-provider model registry, image cache preservation |
+| `ui/streaming.py` | Removed `_smart_scroll()`, terminal panel block; added `raw_tool_name` for tool identity checks; media persist tiers |
+| `ui/chat.py` | MutationObserver auto-scroll injection; media persistence updates |
+| `ui/sidebar.py` | "Workflows Running" badge; icon sizing polish; Settings button icon-only |
+| `ui/home.py` | "Background Agents" subtitle; log viewer sizing; Recent Logs section |
+| `ui/settings.py` | Anthropic/Google/xAI key sections; image-gen model picker; logging section |
+| `ui/state.py` | `command_center_col` field; `_auto_scroll` removed |
+| `ui/render.py` | Filename→base64 resolution; `__IMAGE__` marker rendering |
+| `ui/helpers.py` | `persist_thread_media_state` rename; media persist flags |
+| `ui/status_bar.py` | Status bar restructuring |
+| `ui/status_checks.py` | OAuth health check improvements |
+| `ui/graph_panel.py` | Entity editor integration |
+| `ui/setup_wizard.py` | Wizard updates |
+| `ui/task_dialog.py` | Task dialog additions |
+| `agent.py` | `raw_name` in `tool_done` events; `_resolve_tool_display_name` mapping |
+| `tasks.py` | "(paused)" label cleanup on resume; `_prepare_task_thread` refactor |
+| `prompts.py` | Prompt-injection defence layers; prompt refinements |
+| `threads.py` | `_MEDIA_DIR`, `save_thread_media()`, `load_thread_media()`, `save_media_file()`, `load_media_file()`, two-tier `_delete_thread` cleanup; thread summary fields |
+| `knowledge_graph.py` | Graph refactoring |
+| `memory_extraction.py` | Extraction updates |
+| `dream_cycle.py` | Dream cycle tuning |
+| `wiki_vault.py` | Vault expansion |
+| `channels/telegram.py` | Channel updates |
+| `tools/base.py` | Base tool changes |
+| `tools/browser_tool.py` | Browser automation additions |
+| `tools/memory_tool.py` | Memory operations |
+| `tools/shell_tool.py` | Safety classification |
+| `tools/task_tool.py` | Persistent thread in schemas |
+| `tools/wiki_tool.py` | Wiki tool cleanup |
+| `requirements.txt` | 6 new dependencies |
+| `bundled_skills/*.md` | Skill description tweaks |
+| `test_suite.py` | 172 new tests in sections 50–51, 52 expansion, 57 |
+| `integration_tests.py` | New integration tests |
+| `test_memory_e2e.py` | Memory e2e updates |
+
+---
+
 ## v3.13.0 — Advanced Workflows, Approval Gates & Memory Overhaul
 
 Tasks evolve into **advanced workflows** with step-based pipelines, conditional branching, and approval gates. The **dream cycle** gets a comprehensive quality overhaul — hub diversity caps, batch rotation, rejection caching, confidence decay, and Ollama busy checks. **Memory extraction** gains vague-type banning, relation pre-normalisation, and cross-source merge protection. **Document extraction** is hardened with entity caps, description quality gates, self-loop rejection, and a curated relation vocabulary that eliminates 96% of unknown-type warnings. Ships with **221 new tests** across 3 sections, bringing the total to **1354 PASS**, 0 FAIL, 1 WARN.

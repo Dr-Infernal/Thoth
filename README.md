@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/tests-All%20Pass-brightgreen?style=flat" alt="Tests">
 </p>
 
-Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 25 integrated tools (70 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, image generation, long-term memory with a personal knowledge graph, **advanced workflows** with conditional branching and approval gates, habit tracking, and more — plus a **plugin system** with a built-in marketplace and a **multi-channel messaging framework** (Telegram with full media support; more channels coming). Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models (GPT, Claude, Gemini, and more) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
+Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 25 integrated tools (69 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, image generation, long-term memory with a personal knowledge graph, **advanced workflows** with conditional branching and approval gates, habit tracking, and more — plus a **plugin system** with a built-in marketplace and a **multi-channel messaging framework** (Telegram with full media support; more channels coming). Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models from **OpenAI**, **Anthropic** (Claude), **Google AI** (Gemini), **xAI** (Grok), and **OpenRouter** (100+ models) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
 
 > **Local models are already amazing.** You'll be surprised what a 14B+ local model can do. If you start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
 
@@ -42,19 +42,19 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ### 🤖 ReAct Agent Architecture
 
-LangGraph-based autonomous agent with **25 tools / 70 sub-operations** — the agent decides which tools to call, how many times, and in what order. Real-time token streaming with thinking model support (DeepSeek-R1, Qwen3, QwQ — collapsible reasoning bubbles). Smart context management via tiktoken: auto-summarization at 80% capacity, proportional tool-output shrinking, and dynamic tool budgets that adapt to available headroom. Destructive actions require explicit confirmation; orphaned tool calls are auto-repaired; recursive loops are caught with a wind-down warning at 75%.
+LangGraph-based autonomous agent with **25 tools / 69 sub-operations** — the agent decides which tools to call, how many times, and in what order. Real-time token streaming with thinking model support (DeepSeek-R1, Qwen3, QwQ — collapsible reasoning bubbles). Smart context management via tiktoken: auto-summarization at 80% capacity, proportional tool-output shrinking, and dynamic tool budgets that adapt to available headroom. Destructive actions require explicit confirmation; orphaned tool calls are auto-repaired; recursive loops are caught with a wind-down warning at 75%.
 
 [Details →](docs/ARCHITECTURE.md#react-agent-architecture)
 
 ### 🧠 Long-Term Memory & Knowledge Graph
 
-Thoth builds a **personal knowledge graph** — entities (person, place, event, preference, fact, project, organisation, concept, skill, media) linked by 67 typed directional relations with 60+ aliases (`Dad --[father_of]--> User`), with alias resolution, auto-linking on save, memory decay, and background orphan repair. Vague relation types (`related_to`, `associated_with`, etc.) are automatically rejected; relation pre-normalisation ensures consistent naming. The agent can save, search, link, and explore memories through natural conversation. Graph-enhanced auto-recall retrieves semantically similar entities via FAISS and expands 1 hop in the NetworkX graph before every LLM call. An interactive **Knowledge tab** visualizes the full graph with search, entity-type filters, ego-graph toggle, and clickable detail cards. Background extraction produces structured triples with deterministic cross-category dedup.
+Thoth builds a **personal knowledge graph** — entities (person, place, event, preference, fact, project, organisation, concept, skill, media) linked by 67 typed directional relations with 60+ aliases (`Dad --[father_of]--> User`), with alias resolution, auto-linking on save, memory decay, and background orphan repair. Vague relation types (`related_to`, `associated_with`, etc.) are automatically rejected; relation pre-normalisation ensures consistent naming. The agent can save, search, link, and explore memories through natural conversation. Graph-enhanced auto-recall retrieves semantically similar entities via FAISS and expands 1 hop in the NetworkX graph before every LLM call. An interactive **Knowledge tab** visualizes the full graph with search, entity-type filters, ego-graph toggle, and clickable detail cards. Background extraction produces structured triples with deterministic cross-category dedup; conservative extraction filters skip workflow threads, truncate assistant messages, and apply an 0.80 confidence floor to prevent junk entities.
 
 [Details →](docs/ARCHITECTURE.md#long-term-memory--knowledge-graph)
 
 ### 📚 Wiki Vault (Obsidian Export)
 
-Export the entire knowledge graph as an **Obsidian-compatible markdown vault** — one `.md` file per entity with YAML frontmatter, `[[wiki-links]]`, and per-type indexes. Entities grouped by type (`wiki/person/`, `wiki/project/`, …); sparse entities roll up into index files. Live export on save/delete, full-text search, and conversation export. The agent has 5 sub-tools (`wiki_search`, `wiki_read`, `wiki_rebuild`, `wiki_stats`, `wiki_export_conversation`) to interact with the vault directly.
+Export the entire knowledge graph as an **Obsidian-compatible markdown vault** — one `.md` file per entity with YAML frontmatter, `[[wiki-links]]`, and per-type indexes. Entities grouped by type (`wiki/person/`, `wiki/project/`, …); sparse entities roll up into index files. Live export on save/delete, full-text search, and conversation export. The agent has 4 sub-tools (`wiki_read`, `wiki_rebuild`, `wiki_stats`, `wiki_export_conversation`) to interact with the vault directly.
 
 [Details →](docs/ARCHITECTURE.md#wiki-vault)
 
@@ -72,7 +72,7 @@ Uploaded documents are processed through a **map-reduce LLM pipeline** that extr
 
 ### 🤖 Brain Model & Cloud Models
 
-Run **fully local** via Ollama (39 curated tool-calling models) or connect **OpenAI / OpenRouter** for 100+ cloud models (GPT, Claude, Gemini) — switchable per-thread and per-task from the GUI. First-launch wizard offers Local or Cloud paths; star favorites for quick access; cloud vision models are auto-detected. Privacy controls disable memory extraction and auto-recall for cloud threads. Smart context trimming reduces token usage and cloud API costs.
+Run **fully local** via Ollama (39 curated tool-calling models) or connect cloud providers — **OpenAI**, **Anthropic** (Claude), **Google AI** (Gemini), **xAI** (Grok), and **OpenRouter** (100+ models) — switchable per-thread and per-task from the GUI. First-launch wizard offers Local or Cloud paths; star favorites for quick access; cloud vision models are auto-detected. Privacy controls disable memory extraction and auto-recall for cloud threads. Smart context trimming reduces token usage and cloud API costs.
 
 [Details →](docs/ARCHITECTURE.md#brain-model--cloud-models)
 
@@ -114,7 +114,7 @@ A generic **Channel ABC** lets any messaging platform plug into Thoth — channe
 
 ### 🖼️ Image Generation
 
-Generate and edit images via **OpenAI/OpenRouter** — rendered inline in chat and delivered to Telegram. Supports `gpt-image-1`, `gpt-image-1.5`, and `gpt-image-1-mini` with configurable size and quality. Edit existing images by referencing the last generation, a pasted attachment, or a file path. Model selector in Settings → Models.
+Generate and edit images via **OpenAI**, **xAI** (Grok Imagine), and **Google** (Imagen 4, Nano Banana) — rendered inline in chat and delivered to Telegram. Supports OpenAI (`gpt-image-1`, `gpt-image-1.5`, `gpt-image-1-mini`), xAI (`grok-imagine-image`), and Google (`imagen-4.0-generate-001`, Gemini image models) with configurable size and quality. Edit existing images by referencing the last generation, a pasted attachment, or a file path. Per-provider model picker in Settings → Models.
 
 [Details →](docs/ARCHITECTURE.md#image-generation)
 
@@ -138,7 +138,7 @@ Native window via **pywebview** with system tray, splash screen, right-click con
 
 ### 💬 Chat & Conversations
 
-Multi-turn threads with LangGraph checkpointer, auto-naming, per-thread model switching, and export (Markdown, text, PDF via Playwright). Attach images, PDFs, CSV, Excel, JSON — plus clipboard paste and drag-and-drop. Images persist across reloads via sidecar files. Inline rendering: **Plotly charts**, **Mermaid diagrams** (flowchart, sequence, state, ER, Gantt, mindmap), **YouTube embeds**, and syntax-highlighted code. **Status monitor panel** with animated avatar, 17 health-check pills, OAuth token monitoring, and one-click diagnosis. Streaming robustness improvements replace silent failures with debug logging.
+Multi-turn threads with LangGraph checkpointer, auto-naming, per-thread model switching, and export (Markdown, text, PDF via Playwright). Attach images, PDFs, CSV, Excel, JSON — plus clipboard paste and drag-and-drop. **File-on-disk media storage** with two-tier persistence — generated content survives thread deletion, transient captures cleaned up automatically. **Auto-scroll** follows streaming output with user-override (scroll up to pause, new message re-engages). Inline rendering: **Plotly charts**, **Mermaid diagrams** (flowchart, sequence, state, ER, Gantt, mindmap), **YouTube embeds**, and syntax-highlighted code. **Status monitor panel** with animated avatar, 17 health-check pills, OAuth token monitoring, and one-click diagnosis. Streaming robustness improvements replace silent failures with debug logging.
 
 [Details →](docs/ARCHITECTURE.md#chat--conversations)
 
@@ -183,7 +183,7 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 | **Wiki vault** | **Obsidian-compatible export** — one `.md` per entity with `[[wiki-links]]`, YAML frontmatter, and per-type indexes | Not available |
 | **Voice** | **Fully local** — faster-whisper STT + Kokoro TTS with 10 voices. Audio never leaves your machine | ElevenLabs (cloud TTS) + system fallback. Voice Wake on macOS/iOS |
 | **Health tracking** | **Built-in tracker** — medications, symptoms, exercise, mood, sleep, periods. Streak analysis, CSV export, Plotly charts | Not available |
-| **Tools** | 25 tools / 70 sub-operations — Gmail, Calendar, Arxiv, YouTube, Wolfram Alpha, Plotly charts, wiki vault, habit tracker, image generation | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
+| **Tools** | 25 tools / 69 sub-operations — Gmail, Calendar, Arxiv, YouTube, Wolfram Alpha, Plotly charts, wiki vault, habit tracker, image generation | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
 | **Messaging channels** | Telegram (voice, photo, documents, reactions, buttons) + Gmail. *Slack, Discord, WhatsApp, Teams coming soon* | **23+ channels** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, and many more |
 | **Autonomous agents** | **Advanced workflows** — step-based pipelines with conditions, approval gates, webhook triggers, concurrency groups, and per-workflow safety mode. Multiple run in parallel with their own persistent threads | Multi-agent routing with isolated sessions per sender/channel |
 | **Desktop app** | Native window (pywebview) + system tray on **Windows & macOS**. One-click installers for both | macOS menu bar app. No native Windows app (WSL2 required). iOS & Android companion apps |
@@ -198,9 +198,9 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 
 ---
 
-## 🔧 Tools (25 Tools / 70 Sub-tools)
+## 🔧 Tools (25 Tools / 69 Sub-tools)
 
-Thoth's agent has access to 25 tools that expose 70 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
+Thoth's agent has access to 25 tools that expose 69 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
 
 ### Search & Knowledge
 
@@ -227,7 +227,7 @@ Thoth's agent has access to 25 tools that expose 70 individual operations to the
 | **📋 Workflows** | Create, list, update, delete, and run advanced workflows — step-based pipelines with conditions, approvals, triggers, 7 schedule types (daily, weekly, weekdays, weekends, interval, cron, delay), channel delivery, per-task model override | None |
 | **📋 Tracker** | Habit/health tracker — log meds, symptoms, exercise, periods; streak, adherence, trend analysis; CSV export | None |
 | **📬 Telegram** | Send messages, photos, and documents to any Telegram chat; receive voice, photo, and document messages with transcription, analysis, and text extraction | Bot API token |
-| **🖼️ Image Generation** | Generate images from text prompts and edit existing images via OpenAI/OpenRouter; rendered inline in chat and deliverable to channels | Cloud API key |
+| **🖼️ Image Generation** | Generate images from text prompts and edit existing images via OpenAI, xAI (Grok Imagine), and Google (Imagen 4, Nano Banana); rendered inline in chat and deliverable to channels | Cloud API key |
 
 ### Computation & Analysis
 
@@ -250,6 +250,7 @@ Thoth's agent has access to 25 tools that expose 70 individual operations to the
 - **Browser tabs are isolated per thread**: each chat or background task gets its own browser tab; tabs are cleaned up on task completion or thread deletion
 - **Background task permissions are configurable per-task**: shell command prefixes and email recipients can be allowlisted in the task editor
 - **Gmail/Calendar operations are tiered**: read, compose/write, and destructive tiers can be toggled independently
+- **Prompt-injection defence** — 5-layer scanning protects against injection attacks in tool outputs and user inputs: instruction override detection, role impersonation, data exfiltration, encoding evasion, and social engineering patterns
 - **Tools can be individually disabled** from Settings to reduce model decision complexity
 
 ---
@@ -281,7 +282,7 @@ Thoth's agent has access to 25 tools that expose 70 individual operations to the
 │   Graph-enhanced auto-recall (semantic + 1-hop expansion)           │
 │   Per-thread model override (local or cloud)                        │
 │                                                                      │
-│   70 LangChain sub-tools from 25 registered tool modules            │
+│   69 LangChain sub-tools from 25 registered tool modules            │
 │   + plugin tools + auto-generated channel tools                     │
 └───────┬──────────┬──────────┬──────────┬──────────┬─────────────────┘
         │          │          │          │          │
@@ -324,7 +325,7 @@ Thoth's agent has access to 25 tools that expose 70 individual operations to the
 | **GPU** | Not needed |
 | **Internet** | Required (LLM inference happens on the provider's servers) |
 
-> You still need an API key from [OpenAI](https://platform.openai.com/) or [OpenRouter](https://openrouter.ai/). Cloud models are billed per-token by the provider — typically pennies per conversation.
+> You still need an API key from [OpenAI](https://platform.openai.com/), [Anthropic](https://console.anthropic.com/), [Google AI](https://aistudio.google.com/), [xAI](https://console.x.ai/), or [OpenRouter](https://openrouter.ai/). Cloud models are billed per-token by the provider — typically pennies per conversation.
 
 ---
 
@@ -332,13 +333,13 @@ Thoth's agent has access to 25 tools that expose 70 individual operations to the
 
 ### Windows
 
-1. Download **[ThothSetup_3.13.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.14.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.13.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.14.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Open the DMG and drag **Thoth.app** into the **Applications** folder
 3. Launch **Thoth** from Applications or Launchpad
    - First run may prompt "Thoth is an app downloaded from the internet" → click **Open**
@@ -393,7 +394,7 @@ Thoth's agent has access to 25 tools that expose 70 individual operations to the
    python app.py
    ```
 
-> **First launch:** A setup wizard lets you choose between **Local** (Ollama) and **Cloud** (API key) setup paths. For local, the default brain model (`qwen3:14b`, ~9 GB) is recommended. For cloud, enter your OpenAI or OpenRouter API key and pick a default model.
+> **First launch:** A setup wizard lets you choose between **Local** (Ollama) and **Cloud** (API key) setup paths. For local, the default brain model (`qwen3:14b`, ~9 GB) is recommended. For cloud, enter your API key (OpenAI, Anthropic, Google AI, xAI, or OpenRouter) and pick a default model.
 
 ---
 
@@ -406,6 +407,9 @@ Most tools work without any API keys. For cloud models and enhanced functionalit
 | Service | Key | Purpose | How to Get |
 |---------|-----|---------|------------|
 | **OpenAI** | `OPENAI_API_KEY` | GPT and other OpenAI models | [platform.openai.com](https://platform.openai.com/) |
+| **Anthropic** | `ANTHROPIC_API_KEY` | Claude models (direct API) | [console.anthropic.com](https://console.anthropic.com/) |
+| **Google AI** | `GOOGLE_API_KEY` | Gemini models (direct API) | [aistudio.google.com](https://aistudio.google.com/) |
+| **xAI** | `XAI_API_KEY` | Grok models (direct API) | [console.x.ai](https://console.x.ai/) |
 | **OpenRouter** | `OPENROUTER_API_KEY` | 100+ models from all major providers (Claude, Gemini, Llama, etc.) | [openrouter.ai](https://openrouter.ai/) |
 
 Configure cloud keys in **⚙️ Settings → ☁️ Cloud** tab. Keys are stored locally in `~/.thoth/cloud_config.json` — never sent to Thoth's servers (there are none).
@@ -446,7 +450,7 @@ For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credent
 ### Cloud Models (No GPU? Start Here)
 
 1. **Launch Thoth** → on the setup wizard, choose **☁️ Cloud**
-2. **Enter your API key** (OpenAI or OpenRouter) → Thoth validates and fetches available models
+2. **Enter your API key** (OpenAI, Anthropic, Google AI, xAI, or OpenRouter) → Thoth validates and fetches available models
 3. **Pick a default model** (e.g. GPT) and start chatting — no downloads, no GPU needed
 4. Switch models per conversation anytime from the chat header dropdown
 
@@ -456,7 +460,7 @@ For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credent
 
 **Local models (default):** All LLM inference runs on your machine via Ollama. Documents, memories, and conversations stored locally in `~/.thoth/`. External network calls only when using online tools (web search, Gmail, Calendar) — each individually disableable. No telemetry, no tracking.
 
-**Cloud models (opt-in):** Only the current conversation is sent to the LLM provider (OpenAI/OpenRouter). Memories, knowledge graph, documents, files, and other conversations never leave your machine. Your API key connects directly to the provider — Thoth has no servers and no middleman.
+**Cloud models (opt-in):** Only the current conversation is sent to the LLM provider (OpenAI, Anthropic, Google AI, xAI, or OpenRouter). Memories, knowledge graph, documents, files, and other conversations never leave your machine. Your API key connects directly to the provider — Thoth has no servers and no middleman.
 
 **Always:** API keys stored locally; no Thoth account required; no sign-up; no server to phone home to. Tools can be individually disabled to control what the agent can access.
 

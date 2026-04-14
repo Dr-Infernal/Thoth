@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 # ── Cloud provider URLs ─────────────────────────────────────────────────────
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+GOOGLE_GENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+XAI_BASE_URL = "https://api.x.ai/v1"
 
 # ── Context-size heuristics (prefix-match, checked top-to-bottom) ───────────
 # Used when the provider API doesn't expose context_length (e.g. OpenAI) and
@@ -54,6 +57,11 @@ _CONTEXT_HEURISTICS: list[tuple[str, int]] = [
     ("gemini-1.5",     1_048_576),  # Gemini 1.5 Flash        — 1M
     ("gemini-1.0",        32_768),  # Legacy Gemini 1.0       — 32K
     ("gemini",         1_048_576),  # Catch-all Gemini        — 1M
+    # ── xAI (Grok) ─────────────────────────────────────────────────────
+    ("grok-4",         2_000_000),  # Grok 4 / 4.20           — 2M
+    ("grok-3",           131_072),  # Grok 3 & 3-mini         — 131K
+    ("grok-2",           131_072),  # Grok 2 family           — 131K
+    ("grok",             131_072),  # Catch-all Grok          — 131K
 ]
 
 _CLOUD_CONTEXT_FALLBACK = 256_000   # safe default for totally unknown models
@@ -484,17 +492,18 @@ def is_cloud_model(model_name: str) -> bool:
 
 
 def get_cloud_provider(model_name: str) -> str | None:
-    """Return ``'openai'``, ``'openrouter'``, or ``None``."""
+    """Return ``'openai'``, ``'openrouter'``, ``'anthropic'``, ``'google'``, or ``None``."""
     info = _cloud_model_cache.get(model_name)
     return info["provider"] if info else None
 
 
 # ── Provider emoji mapping ───────────────────────────────────────────────────
 _PROVIDER_EMOJI: dict[str | None, str] = {
-    "openai": "🟢",
+    "openai": "⬡",
     "openrouter": "🌐",
     "anthropic": "🔶",
     "google": "💎",
+    "xai": "𝕏",
     None: "☁️",  # fallback for unknown cloud
 }
 
@@ -513,7 +522,13 @@ def get_provider_emoji(model_name: str) -> str:
 def is_cloud_available() -> bool:
     """Return True if any cloud API key is configured."""
     from api_keys import get_key
-    return bool(get_key("OPENAI_API_KEY") or get_key("OPENROUTER_API_KEY"))
+    return bool(
+        get_key("OPENAI_API_KEY")
+        or get_key("OPENROUTER_API_KEY")
+        or get_key("ANTHROPIC_API_KEY")
+        or get_key("GOOGLE_API_KEY")
+        or get_key("XAI_API_KEY")
+    )
 
 
 def is_openai_available() -> bool:
@@ -526,6 +541,24 @@ def is_openrouter_available() -> bool:
     """Return True if an OpenRouter API key is configured."""
     from api_keys import get_key
     return bool(get_key("OPENROUTER_API_KEY"))
+
+
+def is_anthropic_available() -> bool:
+    """Return True if an Anthropic API key is configured."""
+    from api_keys import get_key
+    return bool(get_key("ANTHROPIC_API_KEY"))
+
+
+def is_google_available() -> bool:
+    """Return True if a Google AI API key is configured."""
+    from api_keys import get_key
+    return bool(get_key("GOOGLE_API_KEY"))
+
+
+def is_xai_available() -> bool:
+    """Return True if an xAI API key is configured."""
+    from api_keys import get_key
+    return bool(get_key("XAI_API_KEY"))
 
 
 def list_cloud_models(provider: str | None = None) -> list[str]:
@@ -609,6 +642,26 @@ def _get_cloud_llm(model_name: str):
         if not api_key:
             raise ValueError("OpenAI API key not configured. Set it in Settings → Cloud.")
         _override_llm_cache[key] = ChatOpenAI(model=model_name, api_key=api_key)
+    elif provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+        api_key = get_key("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("Anthropic API key not configured. Set it in Settings → Cloud.")
+        _override_llm_cache[key] = ChatAnthropic(model=model_name, api_key=api_key)
+    elif provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        api_key = get_key("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("Google AI API key not configured. Set it in Settings → Cloud.")
+        _override_llm_cache[key] = ChatGoogleGenerativeAI(
+            model=model_name, google_api_key=api_key,
+        )
+    elif provider == "xai":
+        from langchain_xai import ChatXAI
+        api_key = get_key("XAI_API_KEY")
+        if not api_key:
+            raise ValueError("xAI API key not configured. Set it in Settings → Cloud.")
+        _override_llm_cache[key] = ChatXAI(model=model_name, api_key=api_key)
     else:
         from langchain_openrouter import ChatOpenRouter
         api_key = get_key("OPENROUTER_API_KEY")
@@ -673,6 +726,70 @@ def validate_openrouter_key(api_key: str) -> bool:
         return False
 
 
+def validate_anthropic_key(api_key: str) -> bool:
+    """Validate an Anthropic API key by listing models.
+
+    Returns True if the key is accepted, False otherwise.
+    """
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"{ANTHROPIC_BASE_URL}/models",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            params={"limit": 1},
+            timeout=10,
+        )
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def validate_google_key(api_key: str) -> bool:
+    """Validate a Google AI API key by listing models.
+
+    Returns True if the key is accepted, False otherwise.
+    """
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"{GOOGLE_GENAI_BASE_URL}/models",
+            params={"key": api_key, "pageSize": 1},
+            timeout=10,
+        )
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def validate_xai_key(api_key: str) -> bool:
+    """Validate an xAI API key by attempting to list models.
+
+    Returns True if the key is accepted, False otherwise.
+    Uses the same ``_fetch_xai_models`` path to validate: if at least one
+    model can be fetched, the key is valid.
+    """
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"{XAI_BASE_URL}/language-models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return True
+        logger.warning("xAI key validation: %d — %s", resp.status_code, resp.text[:200])
+        return False
+    except Exception as exc:
+        logger.warning("xAI key validation error: %s", exc)
+        return False
+
+
 def _catalog_or_heuristic(model_id: str) -> int:
     """Resolve context size for any model via catalog → heuristic → fallback.
 
@@ -691,11 +808,19 @@ def _catalog_or_heuristic(model_id: str) -> int:
     return _estimate_context_heuristic(model_id)
 
 
-def fetch_cloud_models(provider: str) -> int:
-    """Fetch available models from *provider* ('openai' or 'openrouter').
+# Anthropic model ID substrings to skip (non-chat or internal models)
+_ANTHROPIC_SKIP_SUBSTRINGS = ("embed", "tokenizer")
 
-    Populates ``_cloud_model_cache``.  Returns the number of models found.
-    Safe to call from background threads.
+# Google model substrings to skip
+_GOOGLE_SKIP_SUBSTRINGS = ("embed", "aqa", "imagen", "veo", "tts")
+
+
+def fetch_cloud_models(provider: str) -> int:
+    """Fetch available models from *provider*.
+
+    Supported providers: ``'openai'``, ``'openrouter'``, ``'anthropic'``,
+    ``'google'``.  Populates ``_cloud_model_cache``.  Returns the number
+    of models found.  Safe to call from background threads.
     """
     import httpx
     from api_keys import get_key
@@ -712,6 +837,21 @@ def fetch_cloud_models(provider: str) -> int:
             return 0
         url = f"{OPENROUTER_BASE_URL}/models"
         headers = {"Authorization": f"Bearer {api_key}"}
+    elif provider == "anthropic":
+        api_key = get_key("ANTHROPIC_API_KEY")
+        if not api_key:
+            return 0
+        return _fetch_anthropic_models(api_key)
+    elif provider == "google":
+        api_key = get_key("GOOGLE_API_KEY")
+        if not api_key:
+            return 0
+        return _fetch_google_models(api_key)
+    elif provider == "xai":
+        api_key = get_key("XAI_API_KEY")
+        if not api_key:
+            return 0
+        return _fetch_xai_models(api_key)
     else:
         return 0
 
@@ -758,6 +898,171 @@ def fetch_cloud_models(provider: str) -> int:
     return count
 
 
+def _fetch_anthropic_models(api_key: str) -> int:
+    """Fetch models from the Anthropic ``/v1/models`` endpoint.
+
+    Handles pagination via ``after_id``.  Uses ``max_input_tokens`` for
+    context size when available, falling back to ``_catalog_or_heuristic``.
+    """
+    import httpx
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+    }
+    count = 0
+    after_id: str | None = None
+
+    try:
+        while True:
+            params: dict[str, str | int] = {"limit": 100}
+            if after_id:
+                params["after_id"] = after_id
+            resp = httpx.get(
+                f"{ANTHROPIC_BASE_URL}/models",
+                headers=headers, params=params, timeout=15,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            models = body.get("data", [])
+
+            with _cloud_cache_lock:
+                for m in models:
+                    mid = m.get("id", "")
+                    if not mid:
+                        continue
+                    if any(s in mid for s in _ANTHROPIC_SKIP_SUBSTRINGS):
+                        continue
+                    display = m.get("display_name", mid)
+                    # Use API context size if available; fall back to catalog/heuristic
+                    api_ctx = m.get("max_input_tokens", 0)
+                    ctx = api_ctx if api_ctx and api_ctx > 0 else _catalog_or_heuristic(mid)
+                    # Vision from capabilities
+                    caps = m.get("capabilities", {})
+                    has_vision = bool(
+                        caps.get("image_input", {}).get("supported")
+                    )
+                    _cloud_model_cache[mid] = {
+                        "label": display, "ctx": ctx,
+                        "provider": "anthropic", "vision": has_vision,
+                    }
+                    count += 1
+
+            if not body.get("has_more"):
+                break
+            after_id = body.get("last_id")
+            if not after_id:
+                break
+    except Exception as exc:
+        logger.warning("Failed to fetch anthropic models: %s", exc)
+
+    logger.info("Fetched %d anthropic models", count)
+    return count
+
+
+def _fetch_google_models(api_key: str) -> int:
+    """Fetch models from the Google Generative AI ``models.list`` endpoint.
+
+    Only includes models that support ``generateContent``.
+    Uses ``inputTokenLimit`` for context size.
+    """
+    import httpx
+
+    count = 0
+    page_token: str | None = None
+
+    try:
+        while True:
+            params: dict[str, str | int] = {"key": api_key, "pageSize": 100}
+            if page_token:
+                params["pageToken"] = page_token
+            resp = httpx.get(
+                f"{GOOGLE_GENAI_BASE_URL}/models",
+                params=params, timeout=15,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            models = body.get("models", [])
+
+            with _cloud_cache_lock:
+                for m in models:
+                    name = m.get("name", "")        # e.g. "models/gemini-2.5-flash"
+                    mid = name.removeprefix("models/")  # → "gemini-2.5-flash"
+                    if not mid:
+                        continue
+                    # Only chat-capable models
+                    methods = m.get("supportedGenerationMethods", [])
+                    if "generateContent" not in methods:
+                        continue
+                    if any(s in mid for s in _GOOGLE_SKIP_SUBSTRINGS):
+                        continue
+                    display = m.get("displayName", mid)
+                    ctx = m.get("inputTokenLimit", 0)
+                    if not ctx or ctx <= 0:
+                        ctx = _catalog_or_heuristic(mid)
+                    _cloud_model_cache[mid] = {
+                        "label": display, "ctx": ctx,
+                        "provider": "google", "vision": True,
+                    }
+                    count += 1
+
+            page_token = body.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception as exc:
+        logger.warning("Failed to fetch google models: %s", exc)
+
+    logger.info("Fetched %d google models", count)
+    return count
+
+
+# Substrings that mark non-chat xAI models (image/video generation).
+_XAI_SKIP_SUBSTRINGS = ("grok-imagine",)
+
+
+def _fetch_xai_models(api_key: str) -> int:
+    """Fetch language models from the xAI ``/v1/language-models`` endpoint.
+
+    Uses ``input_modalities`` for vision detection.  Context size is resolved
+    via the OpenRouter catalog / prefix heuristic (the xAI API does not expose
+    context window sizes).
+    """
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"{XAI_BASE_URL}/language-models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        models = body.get("models", [])
+    except Exception as exc:
+        logger.warning("Failed to fetch xai models: %s", exc)
+        return 0
+
+    count = 0
+    with _cloud_cache_lock:
+        for m in models:
+            mid = m.get("id", "")
+            if not mid:
+                continue
+            if any(s in mid for s in _XAI_SKIP_SUBSTRINGS):
+                continue
+            display = mid  # xAI doesn't return a display name
+            ctx = _catalog_or_heuristic(mid)
+            has_vision = "image" in m.get("input_modalities", [])
+            _cloud_model_cache[mid] = {
+                "label": display, "ctx": ctx,
+                "provider": "xai", "vision": has_vision,
+            }
+            count += 1
+
+    logger.info("Fetched %d xai models", count)
+    return count
+
+
 def refresh_cloud_models() -> int:
     """Clear cache and re-fetch from all configured providers.
 
@@ -777,6 +1082,9 @@ def refresh_cloud_models() -> int:
     total = 0
     total += fetch_cloud_models("openai")
     total += fetch_cloud_models("openrouter")
+    total += fetch_cloud_models("anthropic")
+    total += fetch_cloud_models("google")
+    total += fetch_cloud_models("xai")
     _save_cloud_cache()
 
     # If the default was a cloud model that's now gone, fall back gracefully

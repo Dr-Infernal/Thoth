@@ -35,7 +35,7 @@ from telegram.ext import (
 
 import agent as agent_mod
 from channels.base import Channel, ChannelCapabilities, ConfigField
-from threads import _save_thread_meta, _list_threads
+from threads import _save_thread_meta, _list_threads, _thread_exists
 from tools import registry as tool_registry
 
 log = logging.getLogger("thoth.telegram")
@@ -126,11 +126,11 @@ def _is_authorised(update: Update) -> bool:
 # ──────────────────────────────────────────────────────────────────────
 def _get_or_create_thread(chat_id: int) -> dict:
     """Get or create a LangGraph thread for a Telegram chat."""
-    thread_id = f"tg_{chat_id}"
+    prefix = f"tg_{chat_id}"
 
     existing = _list_threads()
     for tid, name, _, _, *rest in existing:
-        if tid == thread_id:
+        if tid == prefix or tid.startswith(prefix + "_"):
             _save_thread_meta(tid, name)  # bump updated_at
             mo = rest[0] if rest else ""
             cfg = {"configurable": {"thread_id": tid}}
@@ -138,6 +138,9 @@ def _get_or_create_thread(chat_id: int) -> dict:
                 cfg["configurable"]["model_override"] = mo
             return cfg
 
+    import uuid
+    suffix = uuid.uuid4().hex[:6]
+    thread_id = f"tg_{chat_id}_{suffix}"
     name = f"✈️ Telegram – {chat_id}"
     _save_thread_meta(thread_id, name)
     return {"configurable": {"thread_id": thread_id}}
@@ -637,8 +640,13 @@ async def _run_agent_for_message(
         )
         return
 
-    # Get or create thread config
+    # Get or create thread config (validate cache against DB)
     config = context.chat_data.get("thread_config")
+    if config is not None:
+        cached_tid = (config.get("configurable") or {}).get("thread_id", "")
+        if not cached_tid or not _thread_exists(cached_tid):
+            config = None
+            context.chat_data.pop("thread_config", None)
     if config is None:
         config = _get_or_create_thread(chat_id)
         context.chat_data["thread_config"] = config

@@ -17,7 +17,6 @@ import asyncio
 import base64 as _b64
 import logging
 import queue
-import re
 import threading
 import uuid
 from datetime import datetime
@@ -27,6 +26,7 @@ from nicegui import run, ui
 
 from ui.state import AppState, GenerationState, P, _active_generations
 from ui.constants import (
+
     SENTENCE_SPLIT,
     MAX_STREAM_SENTENCES,
     YT_URL_PATTERN,
@@ -66,7 +66,6 @@ class _Callbacks:
         "show_interrupt",
         "update_token_counter",
         "add_chat_message",
-        "add_terminal_entry",
         "render_text_with_embeds",
     )
 
@@ -96,7 +95,7 @@ async def consume_generation(
     """
     from agent import get_agent_graph, repair_orphaned_tool_calls
     from langchain_core.messages import AIMessage
-    from ui.helpers import persist_thread_image_state
+    from ui.helpers import persist_thread_media_state
 
     _stopped_shown = False
     _drain_deadline = 0.0
@@ -245,8 +244,6 @@ async def consume_generation(
                             )
                     if gen.thinking_md:
                         gen.thinking_md.set_content(gen.thinking_text)
-                    if p.chat_scroll:
-                        p.chat_scroll.scroll_to(percent=1.0)
                 except Exception:
                     logger.debug("Thinking-token rendering failed", exc_info=True)
 
@@ -255,8 +252,6 @@ async def consume_generation(
             if not gen.detached and gen.assistant_md:
                 try:
                     gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
-                    if p.chat_scroll:
-                        p.chat_scroll.scroll_to(percent=1.0)
                 except Exception:
                     logger.debug("Token content update failed", exc_info=True)
 
@@ -365,9 +360,13 @@ async def consume_generation(
             a_msg["charts"] = gen.chart_data
         if gen.captured_images:
             a_msg["images"] = gen.captured_images
+            if gen.captured_images_persist:
+                a_msg["_media_persist_flags"] = list(gen.captured_images_persist)
+                if any(gen.captured_images_persist):
+                    a_msg["_media_persist"] = True
         if state.thread_id == gen.thread_id:
             state.messages.append(a_msg)
-            persist_thread_image_state(state.thread_id, state.messages)
+            persist_thread_media_state(state.thread_id, state.messages)
 
     # Cleanup
     _active_generations.pop(gen.thread_id, None)
@@ -379,8 +378,6 @@ async def consume_generation(
             p.stop_btn.disable()
         if state.voice_enabled and not (state.tts_service and state.tts_service.enabled):
             state.voice_service.unmute()
-        if p.chat_scroll:
-            p.chat_scroll.scroll_to(percent=1.0)
         if gen.interrupt_data:
             state.pending_interrupt = gen.interrupt_data
             cb.show_interrupt(gen.interrupt_data)
@@ -399,6 +396,7 @@ def _handle_tool_done(
     cb: _Callbacks,
 ) -> None:
     tool_name = payload["name"] if isinstance(payload, dict) else payload
+    raw_tool_name = payload.get("raw_name", tool_name) if isinstance(payload, dict) else tool_name
     tool_content = payload.get("content", "") if isinstance(payload, dict) else ""
 
     # Chart detection
@@ -431,6 +429,7 @@ def _handle_tool_done(
             _img_b64 = tool_content[10:marker_end]
             display_text = tool_content[marker_end + 2:]
         gen.captured_images.append(_img_b64)
+        gen.captured_images_persist.append(True)  # Tier 1: plugin-generated
         if not gen.detached and gen.tool_col:
             try:
                 with gen.tool_col:
@@ -483,49 +482,13 @@ def _handle_tool_done(
 
     gen.tool_results.append({"name": tool_name, "content": tool_content})
 
-    # Shell command -> render in terminal panel
-    raw_tool_name = payload.get("raw_name", "") if isinstance(payload, dict) else ""
-    if not gen.detached and raw_tool_name == "run_command" and p.terminal_container is not None:
-        try:
-            _lines = (tool_content or "").split("\n")
-            _cmd_line = _lines[0][2:] if _lines and _lines[0].startswith("$ ") else ""
-            _info_line = _lines[-1] if _lines else ""
-            _e_code = 0
-            _dur = 0.0
-            _cwd = ""
-            _info_m = re.search(
-                r"Exit code:\s*(-?\d+)\s*\|\s*Duration:\s*([\d.]+)s\s*\|\s*cwd:\s*(.*)",
-                _info_line,
-            )
-            if _info_m:
-                _e_code = int(_info_m.group(1))
-                _dur = float(_info_m.group(2))
-                _cwd = _info_m.group(3).strip()
-            _output_lines = _lines[1:-1] if len(_lines) > 2 else []
-            cb.add_terminal_entry({
-                "command": _cmd_line,
-                "output": "\n".join(_output_lines),
-                "exit_code": _e_code,
-                "duration": _dur,
-                "cwd": _cwd,
-            })
-            if not getattr(p, "terminal_visible", False):
-                p.terminal_visible = True
-                if p.terminal_panel is not None:
-                    p.terminal_panel.set_visibility(True)
-                if hasattr(p, "terminal_chevron") and p.terminal_chevron:
-                    p.terminal_chevron.props("icon=expand_more")
-            if p.terminal_scroll:
-                p.terminal_scroll.scroll_to(percent=1.0)
-        except Exception:
-            logger.debug("Terminal panel rendering failed", exc_info=True)
-
     # Vision capture
-    if tool_name in ("\U0001f441\ufe0f Vision", "analyze_image"):
+    if raw_tool_name in ("analyze_image",) or tool_name == "\U0001f441\ufe0f Vision":
         vsvc = state.vision_service
         if vsvc and vsvc.last_capture:
             b64_img = _b64.b64encode(vsvc.last_capture).decode("ascii")
             gen.captured_images.append(b64_img)
+            gen.captured_images_persist.append(False)  # Tier 2: vision capture
             if not gen.detached and gen.tool_col:
                 try:
                     with gen.tool_col:
@@ -545,6 +508,7 @@ def _handle_tool_done(
                 if _screenshot_bytes:
                     _b64_ss = _b64.b64encode(_screenshot_bytes).decode("ascii")
                     gen.captured_images.append(_b64_ss)
+                    gen.captured_images_persist.append(False)  # Tier 2: browser capture
                     if gen.tool_col:
                         with gen.tool_col:
                             render_image_with_save(
@@ -555,12 +519,13 @@ def _handle_tool_done(
             logger.debug("Browser screenshot rendering failed", exc_info=True)
 
     # Filesystem image display (workspace_read_file on image files)
-    if tool_name in ("workspace_read_file",):
+    if raw_tool_name in ("workspace_read_file",):
         try:
             from tools.filesystem_tool import get_and_clear_displayed_image
             _fs_img = get_and_clear_displayed_image()
             if _fs_img:
                 gen.captured_images.append(_fs_img["b64"])
+                gen.captured_images_persist.append(False)  # Tier 2: filesystem display
                 if not gen.detached and gen.tool_col:
                     with gen.tool_col:
                         render_image_with_save(_fs_img["b64"])
@@ -574,6 +539,7 @@ def _handle_tool_done(
             _gen_img = get_and_clear_last_image()
             if _gen_img:
                 gen.captured_images.append(_gen_img)
+                gen.captured_images_persist.append(True)  # Tier 1: generated image
                 if not gen.detached and gen.tool_col:
                     with gen.tool_col:
                         render_image_with_save(_gen_img)
@@ -597,7 +563,7 @@ async def send_message(
     from agent import stream_agent, repair_orphaned_tool_calls, RECURSION_LIMIT_CHAT
     from threads import _save_thread_meta
     from tools import registry as tool_registry
-    from ui.helpers import process_attached_files, persist_thread_image_state
+    from ui.helpers import process_attached_files, persist_thread_media_state
 
     if not text.strip() and not p.pending_files:
         return
@@ -644,7 +610,7 @@ async def send_message(
     if user_images:
         user_msg["images"] = user_images
     state.messages.append(user_msg)
-    persist_thread_image_state(state.thread_id, state.messages)
+    persist_thread_media_state(state.thread_id, state.messages)
     cb.add_chat_message(user_msg)
 
     # ── Process attached files (slow — vision analysis etc.) ─────────
@@ -714,13 +680,13 @@ async def send_message(
     # Sync pasted/attached images to image gen tool for edit_image
     from tools.image_gen_tool import _image_cache as _img_cache
     import tools.image_gen_tool as _igt_mod
-    # Preserve __last_generated__ only within the same thread
+    # Preserve all cached images within the same thread (so images from
+    # earlier turns stay available); clear on thread switch.
     _same_thread = (_igt_mod._image_cache_thread_id == gen_thread_id)
-    _last_gen_backup = _img_cache.get("__last_generated__") if _same_thread else None
-    _img_cache.clear()
-    if _last_gen_backup:
-        _img_cache["__last_generated__"] = _last_gen_backup
+    if not _same_thread:
+        _img_cache.clear()
     _igt_mod._image_cache_thread_id = gen_thread_id
+    # Layer new attachments on top (overwrite if same filename re-attached)
     for f in _files_snapshot:
         if _plib.Path(f["name"]).suffix.lower() in IMAGE_EXTENSIONS:
             _img_cache[f["name"]] = f["data"]

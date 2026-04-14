@@ -495,7 +495,9 @@ def delete_task(task_id: str) -> None:
     _remove_job(task_id)
     conn = _get_conn()
     conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    # Clean up any associated pipeline state and approval requests
+    # Clean up associated pipeline state and approval requests.
+    # Task runs are preserved for audit history (get_recent_runs
+    # handles orphaned runs via COALESCE to "(deleted)").
     conn.execute("DELETE FROM pipeline_state WHERE task_id = ?", (task_id,))
     conn.execute(
         "UPDATE approval_requests SET status = 'cancelled', responded_at = ? "
@@ -653,8 +655,7 @@ def _fire_completion_triggers(completed_task_id: str) -> None:
             "Completion trigger: task '%s' completed → firing '%s'",
             completed_task_id, t["name"],
         )
-        from threads import _new_thread_id
-        thread_id = _new_thread_id()
+        thread_id = _prepare_task_thread(t)
         run_task_background(t["id"], thread_id, enabled_tools)
 
 
@@ -735,10 +736,19 @@ _active_lock = threading.Lock()
 
 
 def get_running_tasks() -> dict[str, dict]:
-    """Return ``{thread_id: {task_id, run_id, step, total, name}}``
-    for all in-flight task executions."""
+    """Return ``{thread_id: {task_id, run_id, step, total, name, icon,
+    started_at, step_label, log}}`` for all in-flight task executions."""
     with _active_lock:
         return dict(_active_runs)
+
+
+def get_task_logs(thread_id: str, last_n: int = 15) -> list[str]:
+    """Return the last *last_n* log lines for a running task."""
+    with _active_lock:
+        info = _active_runs.get(thread_id)
+        if info:
+            return list(info.get("log", [])[-last_n:])
+    return []
 
 
 def stop_task(thread_id: str) -> bool:
@@ -1024,6 +1034,9 @@ def run_task_background(
     if not task:
         return
 
+    logger.info("run_task_background: starting '%s' (id=%s, step=%d)",
+                task.get("name", "?"), task_id[:8], start_step)
+
     # ── Notify-only tasks (timer replacement) ────────────────────────
     if task.get("notify_only"):
         label = task.get("notify_label") or task["name"]
@@ -1094,6 +1107,13 @@ def run_task_background(
 
         _stop_event = threading.Event()
 
+        def _task_log(msg: str) -> None:
+            """Append a log line visible to the Command Center UI."""
+            with _active_lock:
+                entry = _active_runs.get(thread_id)
+                if entry and "log" in entry:
+                    entry["log"].append(msg)
+
         with _active_lock:
             _active_runs[thread_id] = {
                 "task_id": task_id,
@@ -1101,6 +1121,10 @@ def run_task_background(
                 "step": start_step,
                 "total": total,
                 "name": task["name"],
+                "icon": task.get("icon", "⚡"),
+                "started_at": datetime.now().isoformat(),
+                "step_label": "",
+                "log": [],
                 "stop_event": _stop_event,
             }
 
@@ -1128,9 +1152,10 @@ def run_task_background(
             )
 
         try:
-            from agent import _background_workflow_var, _safety_mode_var
+            from agent import _background_workflow_var, _safety_mode_var, _persistent_thread_var
             _background_workflow_var.set(True)
             _safety_mode_var.set(safety_mode)
+            _persistent_thread_var.set(bool(task.get("persistent_thread_id")))
 
             from agent import RECURSION_LIMIT_TASK
             config = {
@@ -1170,6 +1195,12 @@ def run_task_background(
                 # ── Dispatch by step type ────────────────────────────
                 if step_type == "prompt":
                     prompt = step.get("prompt", "")
+                    _step_label = (prompt[:60] + "…") if len(prompt) > 60 else prompt
+                    with _active_lock:
+                        _ar = _active_runs.get(thread_id)
+                        if _ar:
+                            _ar["step_label"] = _step_label
+                    _task_log(f"▸ Step {step_index + 1}/{total}: {_step_label}")
                     # Apply per-step model override if present
                     step_model = step.get("model_override")
                     if step_model:
@@ -1199,6 +1230,7 @@ def run_task_background(
                                 task["name"], step_index + 1,
                                 step_attempt, step_max_retries, step_retry_delay,
                             )
+                            _task_log(f"↻ Step {step_index + 1}: retry {step_attempt}/{step_max_retries}")
                             _time.sleep(step_retry_delay)
                             if _stop_event.is_set():
                                 stopped = True
@@ -1299,6 +1331,7 @@ def run_task_background(
                                     "Task '%s' paused at step %d/%d — tool interrupt: %s",
                                     task["name"], step_index + 1, total, approval_msg,
                                 )
+                                _task_log(f"⏸ Step {step_index + 1}: Paused for approval")
                                 _push_approval_to_channels(
                                     task, approval_req_id, resume_token, approval_msg,
                                 )
@@ -1315,13 +1348,16 @@ def run_task_background(
                                 last_response = result
                                 step_outputs[step_id] = result
                             step_succeeded = True
+                            _task_log(f"✓ Step {step_index + 1} complete")
                             break  # success — exit retry loop
                         except TaskStoppedError:
                             stopped = True
+                            _task_log(f"⏹ Step {step_index + 1}: Stopped")
                             logger.info("Task '%s' stopped during step %d/%d",
                                         task["name"], step_index + 1, total)
                             break
                         except Exception as exc:
+                            _task_log(f"✗ Step {step_index + 1} error: {str(exc)[:80]}")
                             err_str = str(exc).lower()
                             # Model-fallback retry (existing logic)
                             if (config["configurable"].get("model_override")
@@ -1508,6 +1544,7 @@ def run_task_background(
                     )
                     step_outputs[step_id] = approval_msg
                     paused = True
+                    _task_log(f"⏸ Step {step_index + 1}: Waiting for approval")
                     logger.info(
                         "Task '%s' paused at step %d/%d for approval (token=%s…)",
                         task["name"], step_index + 1, total, resume_token[:8],
@@ -1689,6 +1726,8 @@ def run_task_background(
                             else "completed")
             _finish_run(run_id, final_status, status_message=delivery_detail)
             update_task(task_id, last_run=datetime.now().isoformat())
+            logger.info("run_task_background: '%s' finished with status=%s",
+                        task.get("name", "?"), final_status)
 
             # Fire any tasks triggered by this task's completion
             if final_status.startswith("completed"):
@@ -1910,6 +1949,28 @@ def _job_id(task_id: str) -> str:
     return f"task_{task_id}"
 
 
+def _prepare_task_thread(task: dict) -> str:
+    """Canonical thread setup for firing a task.
+
+    Returns the thread_id to use.  Handles:
+    - persistent_thread_id (reuse) vs fresh UUID
+    - thread_meta creation
+    - model_override propagation
+    """
+    from threads import _save_thread_meta, _set_thread_model_override
+
+    thread_id = task.get("persistent_thread_id") or uuid.uuid4().hex[:12]
+    if not task.get("notify_only"):
+        thread_name = (
+            f"\u26a1 {task['name']} \u2014 "
+            f"{datetime.now().strftime('%b %d, %I:%M %p')}"
+        )
+        _save_thread_meta(thread_id, thread_name)
+    if task.get("model_override"):
+        _set_thread_model_override(thread_id, task["model_override"])
+    return thread_id
+
+
 def _on_task_fire(task_id: str) -> None:
     """Callback invoked by APScheduler when a task's trigger fires."""
     from tools import registry as tool_registry
@@ -1923,27 +1984,8 @@ def _on_task_fire(task_id: str) -> None:
     logger.info("Scheduler firing task: %s", task["name"])
     update_task(task_id, last_run=datetime.now().isoformat())
 
-    thread_id = task.get("persistent_thread_id") or uuid.uuid4().hex[:12]
+    thread_id = _prepare_task_thread(task)
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
-
-    # Create thread_meta row BEFORE starting the background run so
-    # (a) the thread appears in the sidebar immediately, and
-    # (b) _thread_exists() returns True at completion, allowing the
-    #     final rename/save.  Mirrors the manual-run handler in
-    #     app.py.
-    # Skip thread creation for notify-only tasks — they fire a
-    # notification and return immediately with no conversation.
-    if not task.get("notify_only"):
-        from threads import _save_thread_meta
-        thread_name = (
-            f"\u26a1 {task['name']} — "
-            f"{datetime.now().strftime('%b %d, %I:%M %p')}"
-        )
-        _save_thread_meta(thread_id, thread_name)
-
-    if task.get("model_override"):
-        from threads import _set_thread_model_override
-        _set_thread_model_override(thread_id, task["model_override"])
 
     run_task_background(task_id, thread_id, enabled, notification=True)
 
@@ -2040,7 +2082,7 @@ def handle_webhook(task_id: str, secret: str | None = None,
 
     from tools import registry as tool_registry
 
-    thread_id = task.get("persistent_thread_id") or uuid.uuid4().hex[:12]
+    thread_id = _prepare_task_thread(task)
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
 
     run_task_background(task_id, thread_id, enabled)
@@ -2537,7 +2579,7 @@ def _resume_graph_interrupted(
     """
     from agent import (
         resume_invoke_agent, TaskStoppedError,
-        _background_workflow_var, _safety_mode_var,
+        _background_workflow_var, _safety_mode_var, _persistent_thread_var,
     )
 
     run_id = state["run_id"]
@@ -2551,9 +2593,16 @@ def _resume_graph_interrupted(
     safety_mode = get_task_safety_mode(task)
     effective_tool_names = enabled_tool_names
 
+    # Clear the "(paused)" suffix from the thread name
+    from threads import _save_thread_meta, _list_threads as _lt
+    if any(t[0] == thread_id for t in _lt()):
+        _ts = datetime.now().strftime('%b %d, %I:%M %p')
+        _save_thread_meta(thread_id, f"⚡ {task['name']} — {_ts}")
+
     def _run():
         _background_workflow_var.set(True)
         _safety_mode_var.set(safety_mode)
+        _persistent_thread_var.set(bool(task.get("persistent_thread_id")))
 
         _stop_event = threading.Event()
         try:
@@ -2818,6 +2867,12 @@ def _resume_pipeline(resume_token: str, approved: bool = True) -> None:
         _finish_run(state["run_id"], "completed",
                     status_message="Completed after approval")
         return
+
+    # Clear the "(paused)" suffix from the thread name
+    from threads import _save_thread_meta, _list_threads
+    if any(t[0] == thread_id for t in _list_threads()):
+        _ts = datetime.now().strftime('%b %d, %I:%M %p')
+        _save_thread_meta(thread_id, f"⚡ {task['name']} — {_ts}")
 
     # Use step_outputs if set by approval branch, otherwise from state
     run_task_background(

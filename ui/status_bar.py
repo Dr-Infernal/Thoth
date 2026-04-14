@@ -119,22 +119,9 @@ def _force_refresh() -> list[CheckResult]:
 # STATUS BAR UI
 # ═════════════════════════════════════════════════════════════════════════════
 
-# CSS for the animated avatar ring
+# CSS for the status panel (avatar removed — now in sidebar)
 _AVATAR_CSS = """
 <style>
-@keyframes thoth-avatar-pulse {
-    0%   { box-shadow: 0 0 4px 1px var(--avatar-color); transform: rotate(0deg); }
-    42%  { box-shadow: 0 0 4px 1px var(--avatar-color); transform: rotate(-1.2deg); }
-    46%  { box-shadow: 0 0 20px 6px var(--avatar-color); transform: rotate(0.8deg); }
-    52%  { box-shadow: 0 0 6px 2px var(--avatar-color); transform: rotate(-0.5deg); }
-    56%  { box-shadow: 0 0 12px 3px var(--avatar-color); transform: rotate(0.3deg); }
-    62%  { box-shadow: 0 0 4px 1px var(--avatar-color); transform: rotate(0deg); }
-    100% { box-shadow: 0 0 4px 1px var(--avatar-color); transform: rotate(0.6deg); }
-}
-@keyframes thoth-ring-spin {
-    0%   { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
 @keyframes thoth-wave-scroll {
     0%   { transform: translateX(0) translateY(-50%); }
     100% { transform: translateX(-50%) translateY(-50%); }
@@ -164,39 +151,6 @@ _AVATAR_CSS = """
     background-size: 50% 100%;
     animation: thoth-wave-scroll 14s linear infinite;
 }
-.thoth-avatar {
-    width: 58px; height: 58px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.8rem;
-    border: 2px solid transparent;
-    animation: thoth-avatar-pulse 3s ease-in-out infinite;
-    cursor: pointer;
-    user-select: none;
-    background: rgba(0,0,0,0.35);
-    flex-shrink: 0;
-    position: relative;
-}
-.thoth-avatar::after {
-    content: "";
-    position: absolute;
-    inset: -3px;
-    border-radius: 50%;
-    padding: 2px;
-    background: conic-gradient(
-        from 0deg,
-        transparent 0%,
-        var(--avatar-color) 25%,
-        transparent 50%,
-        var(--avatar-color) 75%,
-        transparent 100%
-    );
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #fff calc(100% - 2px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #fff calc(100% - 2px));
-    animation: thoth-ring-spin 4s linear infinite;
-    opacity: 0.7;
-}
-.thoth-avatar:hover { transform: scale(1.1); }
 .status-pills-row {
     display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
     justify-content: center;
@@ -219,6 +173,24 @@ _AVATAR_CSS = """
     flex-shrink: 0;
 }
 .status-pill.inactive { opacity: 0.4; font-size: 0.75rem; }
+.thoth-gear-btn {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    border: 1px solid rgba(160, 200, 220, 0.30);
+    background: rgba(160, 200, 220, 0.08);
+    color: #b0cfe0;
+    font-size: 1.3rem;
+    transition: background 0.2s, transform 0.2s, box-shadow 0.3s;
+    flex-shrink: 0;
+    box-shadow: 0 0 6px rgba(160, 200, 220, 0.20);
+}
+.thoth-gear-btn:hover {
+    background: rgba(160, 200, 220, 0.18);
+    transform: scale(1.08);
+    box-shadow: 0 0 12px rgba(160, 200, 220, 0.35);
+}
 .thoth-diag-btn {
     width: 44px; height: 44px;
     border-radius: 50%;
@@ -265,74 +237,16 @@ def build_status_bar(
 
     with ui.element("div").classes("thoth-status-panel w-full"):
       with ui.row().classes("w-full items-center no-wrap gap-3").style(
-          "min-height: 60px;"
+          "min-height: 50px;"
       ):
 
-        # ── LEFT: Avatar ──────────────────────────────────────────
-        avatar_cfg = _load_avatar_config()
-        emoji = avatar_cfg.get("emoji", _DEFAULT_EMOJI)
-        color = avatar_cfg.get("color", _DEFAULT_COLOR)
-
-        avatar_el = ui.html(
-            f'<div class="thoth-avatar" style="--avatar-color: {color};">' 
-            f'{emoji}</div>',
+        # ── LEFT: Settings gear icon ─────────────────────────────
+        _gear_el = ui.html(
+            '<div class="thoth-gear-btn" title="Settings">'
+            '<span class="material-icons" style="font-size:1.3rem;">settings</span>'
+            '</div>',
             sanitize=False,
-        )
-
-        def _show_avatar_picker():
-            """Open a small dialog to pick avatar emoji and color."""
-            with ui.dialog() as dlg, ui.card().style("min-width: 280px;"):
-                ui.label("Choose Avatar").classes("text-subtitle1 font-bold")
-                ui.separator()
-
-                current = _load_avatar_config()
-                cur_emoji = current.get("emoji", _DEFAULT_EMOJI)
-                cur_color = current.get("color", _DEFAULT_COLOR)
-
-                # Emoji grid
-                ui.label("Emoji").classes("text-xs text-grey-5 q-mt-sm")
-                emoji_state = {"selected": cur_emoji}
-                with ui.element("div").style(
-                    "display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px;"
-                ):
-                    for e in _AVATAR_EMOJIS:
-                        def _pick_emoji(ev, em=e):
-                            emoji_state["selected"] = em
-                        btn = ui.button(e, on_click=_pick_emoji).props(
-                            "flat dense padding=4px"
-                        ).style("font-size: 1.2rem; min-width: 36px;")
-
-                # Color picker
-                ui.label("Ring Color").classes("text-xs text-grey-5 q-mt-sm")
-                color_state = {"selected": cur_color}
-                with ui.row().classes("gap-1 flex-wrap"):
-                    for c in _RING_COLORS:
-                        def _pick_color(ev, cl=c):
-                            color_state["selected"] = cl
-                        ui.button(on_click=_pick_color).style(
-                            f"background: {c}; width: 28px; height: 28px; "
-                            f"min-width: 28px; border-radius: 50%; padding: 0;"
-                        ).props("flat dense")
-
-                ui.separator()
-                with ui.row().classes("w-full justify-end gap-2"):
-                    ui.button("Cancel", on_click=dlg.close).props("flat dense")
-
-                    def _save_and_close():
-                        _save_avatar_config({
-                            "emoji": emoji_state["selected"],
-                            "color": color_state["selected"],
-                        })
-                        dlg.close()
-                        avatar_el.set_content(
-                            f'<div class="thoth-avatar" style="--avatar-color: {color_state["selected"]};">' 
-                            f'{emoji_state["selected"]}</div>'
-                        )
-                    ui.button("Save", on_click=_save_and_close).props("dense color=amber")
-
-            dlg.open()
-
-        avatar_el.on("click", lambda: _show_avatar_picker())
+        ).on("click", lambda: open_settings(""))
 
         # ── CENTER: Status pills (two rows) ──────────────────────
         pills_container = ui.column().classes("flex-grow gap-1 items-center").style(

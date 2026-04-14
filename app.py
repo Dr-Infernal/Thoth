@@ -89,11 +89,12 @@ from ui.helpers import (
 )
 from ui.head_html import inject_head_html
 from ui.setup_wizard import show_setup_wizard
-from ui.render import render_text_with_embeds, add_chat_message, add_terminal_entry
+from ui.render import render_text_with_embeds, add_chat_message
 from ui.export import open_export
 from ui.graph_panel import build_graph_panel
 from ui.task_dialog import show_task_dialog
 from ui.sidebar import build_sidebar
+from ui.command_center import build_command_center
 from ui.settings import open_settings
 from ui.streaming import Callbacks, send_message, build_interrupt_dialog
 from ui.home import build_home
@@ -184,7 +185,13 @@ def _periodic_oauth_check():
 
 @app.on_startup
 async def on_startup():
+    # Attach persistent file logging (daily JSONL to ~/.thoth/logs/)
+    from logging_config import setup_file_logging
+    setup_file_logging()
+
     import ui.state as _st
+
+    logger.info("Thoth startup initiated")
 
     def _set(msg: str):
         _st.startup_status = msg
@@ -276,8 +283,15 @@ async def on_startup():
     except Exception as exc:
         logger.warning("Could not schedule periodic OAuth check: %s", exc)
 
+    # PTY bridge is started lazily when the user first opens the
+    # terminal panel (ui/terminal_widget._wire_pty).  This ensures the
+    # initial shell prompt flows through the registered xterm.js
+    # callback instead of being consumed before the UI connects.
+    print("[startup] 💻 Terminal bridge deferred to first panel open")
+
     _set("✅ Ready")
     _st.startup_ready = True
+    logger.info("Thoth startup complete")
 
 
 # ── Webhook API Route ────────────────────────────────────────────────────────
@@ -318,6 +332,13 @@ async def on_shutdown():
         print("[shutdown] Shell sessions closed")
     except Exception as exc:
         print(f"[shutdown] Shell cleanup error: {exc}")
+    try:
+        from terminal_bridge import TerminalBridge
+        if TerminalBridge.has_instance():
+            TerminalBridge.destroy()
+            print("[shutdown] Terminal bridge destroyed")
+    except Exception as exc:
+        print(f"[shutdown] Terminal bridge cleanup error: {exc}")
     print("[shutdown] Done")
 
 
@@ -425,10 +446,27 @@ async def index():
     )
 
     # ── Main content column ──────────────────────────────────────────────
-    p.main_col = ui.column().classes("w-full max-w-7xl mx-auto px-4 no-wrap").style(
+    from ui.terminal_widget import build_terminal_panel
+    from tools import registry as _tool_registry
+
+    _outer = ui.column().classes("w-full max-w-7xl mx-auto px-4 no-wrap").style(
         "height: calc(100vh - 16px); overflow: hidden;"
     )
+    with _outer:
+        p.main_col = ui.column().classes("w-full no-wrap flex-grow").style(
+            "overflow: hidden;"
+        )
+        # Terminal panel — inline, pushes chat content up when expanded
+        build_terminal_panel(p, state, _tool_registry)
 
+    # ── Command Center (right drawer) ───────────────────────────────
+    build_command_center(
+        state, p,
+        rebuild_main=lambda: _rebuild_main(),
+        rebuild_thread_list=rebuild_thread_list,
+        show_task_dialog=_show_task_dialog,
+        load_thread_messages=load_thread_messages,
+    )
     def _rebuild_main() -> None:
         if p.main_col is None:
             return
@@ -455,8 +493,7 @@ async def index():
                     open_settings=_open_settings,
                     open_export=_open_export,
                     show_interrupt=cb.show_interrupt,
-                    add_chat_message=lambda msg: add_chat_message(msg, p),
-                    add_terminal_entry=lambda entry: add_terminal_entry(entry, p),
+                    add_chat_message=lambda msg: add_chat_message(msg, p, state.thread_id),
                     browse_file=browse_file,
                 )
 
@@ -468,8 +505,7 @@ async def index():
     cb.rebuild_thread_list = rebuild_thread_list
     cb.show_interrupt = show_interrupt
     cb.update_token_counter = lambda: _update_token_counter()
-    cb.add_chat_message = lambda msg: add_chat_message(msg, p)
-    cb.add_terminal_entry = lambda entry: add_terminal_entry(entry, p)
+    cb.add_chat_message = lambda msg: add_chat_message(msg, p, state.thread_id)
     cb.render_text_with_embeds = render_text_with_embeds
 
     # ── Timers ───────────────────────────────────────────────────────────

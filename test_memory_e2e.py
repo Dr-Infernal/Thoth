@@ -1710,32 +1710,28 @@ def section_12():
 
     t = _tag()
 
-    # 12a. repair_graph_islands on live data
-    try:
-        repaired = kg.repair_graph_islands()
-        record("PASS", f"12a: repair_graph_islands — bridged {repaired or 0} clusters")
-    except Exception as e:
-        record("FAIL", "12a: repair_graph_islands", str(e))
+    # 12a. repair_graph_islands removed (no longer auto-bridges)
+    if not callable(getattr(kg, "repair_graph_islands", None)):
+        record("PASS", "12a: repair_graph_islands correctly removed")
+    else:
+        record("FAIL", "12a: repair_graph_islands should be removed")
 
-    # 12b. Create an orphan and verify repair connects it
+    # 12b. Verify vague relation types are rejected by add_relation
     try:
         orphan = kg.save_entity("fact", f"{PREFIX}Orphan_{t}", "Isolated test fact", source="test")
         _cleanup_ids.append(orphan["id"])
 
-        rels_before = kg.get_relations(orphan["id"])
+        # Create a second entity to test vague relation rejection
+        target = kg.save_entity("fact", f"{PREFIX}Target_{t}", "Target test fact", source="test")
+        _cleanup_ids.append(target["id"])
 
-        # Run repair
-        repaired = kg.repair_graph_islands()
-
-        rels_after = kg.get_relations(orphan["id"])
-        if len(rels_after) > len(rels_before):
-            record("PASS", f"12b: orphan repair — gained {len(rels_after) - len(rels_before)} relation(s)")
-        elif len(rels_after) > 0:
-            record("PASS", f"12b: orphan has {len(rels_after)} relation(s) (connected to main graph)")
+        vague_result = kg.add_relation(orphan["id"], target["id"], "related_to", source="test")
+        if vague_result is None:
+            record("PASS", "12b: vague relation type 'related_to' correctly rejected")
         else:
-            record("WARN", "12b: orphan not connected after repair (may need more entities)")
+            record("FAIL", "12b: vague relation type 'related_to' should be rejected")
     except Exception as e:
-        record("FAIL", "12b: orphan repair", str(e))
+        record("FAIL", "12b: vague relation rejection", str(e))
 
     # 12c. get_connected_components
     try:

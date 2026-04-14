@@ -124,7 +124,10 @@ class BaseTool(ABC):
 
         def _run(query: str) -> str:
             try:
-                return tool_instance.execute(query)
+                result = tool_instance.execute(query)
+                logger.debug("Tool '%s' completed, result_len=%d",
+                             tool_instance.name, len(result) if result else 0)
+                return result
             except Exception as exc:
                 logger.error("Tool '%s' execute error: %s", tool_instance.name, exc, exc_info=True)
                 return f"Error in {tool_instance.display_name}: {exc}"

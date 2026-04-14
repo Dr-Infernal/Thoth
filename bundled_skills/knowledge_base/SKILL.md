@@ -30,9 +30,10 @@ The user's knowledge exists in three layers that you manage together:
 
 ## When to Use Wiki Tools
 
-- **wiki_search** — When the user asks "what's in my wiki about X", "search my
-  knowledge base for Y", or when you need broader context than auto-recall provides.
-- **wiki_read** — When you need the full article for a specific entity, including
+- **search_memory** — Hybrid search across the knowledge graph (semantic + keyword
+  + graph expansion). Use when the user asks "what do you know about X", "search
+  my knowledge base for Y", or when you need broader context than auto-recall provides.
+- **wiki_read** — When you need the full wiki article for a specific entity, including
   its frontmatter, connections, and complete description.
 - **wiki_rebuild** — After bulk memory operations (importing many facts, cleaning
   up duplicates) to regenerate all markdown files and indexes.

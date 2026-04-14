@@ -33,6 +33,21 @@ OPENAI_KEY_DEFINITIONS = {
     "OpenAI API Key": "OPENAI_API_KEY",
 }
 
+# Anthropic (Claude) API credentials – managed in the Cloud settings tab.
+ANTHROPIC_KEY_DEFINITIONS = {
+    "Anthropic API Key": "ANTHROPIC_API_KEY",
+}
+
+# Google AI (Gemini) API credentials – managed in the Cloud settings tab.
+GOOGLE_KEY_DEFINITIONS = {
+    "Google AI API Key": "GOOGLE_API_KEY",
+}
+
+# xAI (Grok) API credentials – managed in the Cloud settings tab.
+XAI_KEY_DEFINITIONS = {
+    "xAI API Key": "XAI_API_KEY",
+}
+
 # ── Cloud provider configuration ────────────────────────────────────────────
 _CLOUD_CONFIG_PATH = DATA_DIR / "cloud_config.json"
 

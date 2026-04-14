@@ -48,7 +48,7 @@ _DEFAULT_CONFIG = {
     "window_end": 5,         # 5 AM local time
     "merge_threshold": 0.93,
     "enrich_min_chars": 80,
-    "infer_confidence": 0.7,
+    "infer_confidence": 0.80,
     "min_entities": 20,
     "batch_size": 50,
 }
@@ -138,7 +138,23 @@ def get_dream_status() -> dict:
 
 
 # ── Rejection cache ─────────────────────────────────────────────────────────
-_REJECTION_CACHE_DAYS = 7  # Skip re-evaluating rejected pairs for 7 days
+
+def _rejection_cache_ttl_days() -> int:
+    """Return rejection cache TTL scaled by graph size.
+
+    Small graphs cycle through pairs faster so stale rejections should
+    expire sooner, giving the LLM another chance as context evolves.
+    """
+    try:
+        import knowledge_graph as _kg
+        count = _kg.count_entities()
+    except Exception:
+        count = 0
+    if count < 200:
+        return 3
+    if count < 500:
+        return 5
+    return 7
 
 def _load_rejection_cache() -> dict[str, str]:
     """Load pair rejection cache: {pair_key: iso_timestamp}."""
@@ -160,7 +176,8 @@ def _record_rejection(entity_a_id: str, entity_b_id: str) -> None:
     pair_key = "|".join(sorted([entity_a_id, entity_b_id]))
     cache[pair_key] = datetime.now().isoformat()
     # Prune expired entries while we're here
-    cutoff = (datetime.now() - timedelta(days=_REJECTION_CACHE_DAYS)).isoformat()
+    ttl = _rejection_cache_ttl_days()
+    cutoff = (datetime.now() - timedelta(days=ttl)).isoformat()
     cache = {k: v for k, v in cache.items() if v > cutoff}
     _save_rejection_cache(cache)
 
@@ -172,7 +189,8 @@ def _is_pair_recently_rejected(entity_a_id: str, entity_b_id: str) -> bool:
     ts = cache.get(pair_key)
     if not ts:
         return False
-    cutoff = (datetime.now() - timedelta(days=_REJECTION_CACHE_DAYS)).isoformat()
+    ttl = _rejection_cache_ttl_days()
+    cutoff = (datetime.now() - timedelta(days=ttl)).isoformat()
     return ts > cutoff
 
 
@@ -616,6 +634,14 @@ def _enrich_entity(
     if len(enriched) < len(old_desc):
         return None
 
+    # Identity check: reject if the LLM returned the exact same text
+    if enriched.strip() == old_desc.strip():
+        logger.info(
+            "Dream enrich skipped identity (no change): '%s' (%d chars)",
+            entity.get("subject", ""), len(old_desc),
+        )
+        return None
+
     # Layer 2: Cross-entity contamination check (deterministic)
     if other_subjects is not None:
         if not _validate_enrichment(enriched, entity, other_subjects):
@@ -787,18 +813,21 @@ def _find_cooccurring_pairs(batch: list[dict]) -> list[tuple[dict, dict, str, in
             continue
 
         # Pre-flight merge check: if A's description mentions B's subject
-        # (or vice versa), these are likely duplicates — skip inference
+        # (or vice versa) AND they share the same entity_type, these are
+        # likely duplicates — skip inference.  Cross-type mentions are
+        # normal (e.g. a project description mentioning a skill).
         _desc_a = (ea.get("description", "") or "").lower()
         _desc_b = (eb.get("description", "") or "").lower()
         _subj_a = (ea.get("subject", "") or "").strip().lower()
         _subj_b = (eb.get("subject", "") or "").strip().lower()
-        if _subj_b and len(_subj_b) > 2 and _re.search(r"\b" + _re.escape(_subj_b) + r"\b", _desc_a):
+        _same_type = ea.get("entity_type") == eb.get("entity_type")
+        if _same_type and _subj_b and len(_subj_b) > 2 and _re.search(r"\b" + _re.escape(_subj_b) + r"\b", _desc_a):
             logger.info(
                 "Dream skip infer (probable duplicate): '%s' description mentions '%s'",
                 ea.get("subject", ""), eb.get("subject", ""),
             )
             continue
-        if _subj_a and len(_subj_a) > 2 and _re.search(r"\b" + _re.escape(_subj_a) + r"\b", _desc_b):
+        if _same_type and _subj_a and len(_subj_a) > 2 and _re.search(r"\b" + _re.escape(_subj_a) + r"\b", _desc_b):
             logger.info(
                 "Dream skip infer (probable duplicate): '%s' description mentions '%s'",
                 eb.get("subject", ""), ea.get("subject", ""),
@@ -839,7 +868,7 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
     """Ask the LLM if two entities are related, given conversation evidence.
 
     The LLM returns confidence, evidence quote, and directionality.
-    Vague relation types are rejected.  Confidence below 0.6 is rejected.
+    Vague relation types are rejected.  Confidence below 0.75 is rejected.
     """
     import knowledge_graph as kg
     from prompts import DREAM_INFER_PROMPT
@@ -890,6 +919,17 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
         )
         return None
 
+    # ── Tautology guard: reject if one subject is a substring of the other ──
+    _subj_a_low = (entity_a.get("subject", "") or "").strip().lower()
+    _subj_b_low = (entity_b.get("subject", "") or "").strip().lower()
+    if _subj_a_low and _subj_b_low and len(_subj_a_low) > 2 and len(_subj_b_low) > 2:
+        if _subj_a_low in _subj_b_low or _subj_b_low in _subj_a_low:
+            logger.info(
+                "Dream infer rejected tautology: '%s' ↔ '%s' (substring match)",
+                entity_a.get("subject", ""), entity_b.get("subject", ""),
+            )
+            return None
+
     # ── Dynamic confidence from LLM ──────────────────────────────────
     llm_confidence = result.get("confidence")
     if isinstance(llm_confidence, (int, float)):
@@ -898,7 +938,7 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
         final_confidence = confidence  # Fallback to config default
 
     # Reject low-confidence inferences
-    if final_confidence < 0.5:
+    if final_confidence < 0.80:
         logger.info(
             "Dream infer rejected low confidence (%.2f) for %s → %s",
             final_confidence, entity_a.get("subject", ""), entity_b.get("subject", ""),

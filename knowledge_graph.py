@@ -52,8 +52,7 @@ _faiss_lock = threading.Lock()
 # Lock protecting the in-memory NetworkX graph.  Multiple threads
 # (live saves, extraction timer, dream daemon) mutate the graph
 # concurrently.  RLock is used because nested calls exist (e.g.
-# _dedup_and_save → save_memory → save_entity → _auto_link_to_user
-# → add_relation).
+# _dedup_and_save → save_memory → save_entity → add_relation).
 _graph_lock = threading.RLock()
 
 # When True, save_entity / update_entity / delete_entity skip the
@@ -272,19 +271,7 @@ def normalize_relation_type(relation_type: str) -> str:
     return rt
 
 
-# Category → default relation type when auto-linking a new entity to User.
-_CATEGORY_RELATION_MAP: dict[str, str] = {
-    "person":       "knows",
-    "preference":   "prefers",
-    "fact":         "related_to",
-    "event":        "has_event",
-    "place":        "associated_with",
-    "project":      "works_on",
-    "organisation": "member_of",
-    "skill":        "has_skill",
-    "concept":      "related_to",
-    "media":        "related_to",
-}
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -845,10 +832,6 @@ def save_entity(
     # Update FAISS (skipped during batch extraction)
     if not _skip_reindex:
         _upsert_index(entity_id)
-        # Auto-link new entity to the User entity (skip for User itself
-        # and during batch extraction, which handles relations in Pass 2).
-        if _normalize_subject(subject) != "user":
-            _auto_link_to_user(entity_id, entity_type)
 
     # Wiki vault export (non-blocking, fire-and-forget)
     _wiki_export_entity(entity)
@@ -1136,23 +1119,6 @@ def _ensure_user_entity() -> str:
     return entity["id"]
 
 
-def _auto_link_to_user(entity_id: str, entity_type: str) -> None:
-    """Create a User → entity relation using the category heuristic.
-
-    Called automatically from ``save_entity`` for live saves.  Silently
-    does nothing if the relation already exists or the entity type has
-    no mapping.
-    """
-    rel_type = _CATEGORY_RELATION_MAP.get(entity_type)
-    if not rel_type:
-        return
-    try:
-        user_id = _ensure_user_entity()
-        if user_id == entity_id:
-            return
-        add_relation(user_id, entity_id, rel_type, source="auto")
-    except Exception as exc:
-        logger.debug("Auto-link to User failed: %s", exc)
 
 
 def semantic_search(
@@ -1261,6 +1227,19 @@ def add_relation(
     # Block self-loops (entity pointing to itself)
     if source_id == target_id:
         logger.debug("Rejected self-loop relation: %s --[%s]--> %s", source_id, relation_type, target_id)
+        return None
+
+    # Block vague/meaningless relation types
+    _BANNED_RELATION_TYPES = {
+        "related_to", "associated_with", "connected_to", "linked_to",
+        "has_relation", "involves", "correlates_with",
+    }
+    _norm_check = normalize_relation_type(relation_type)
+    if _norm_check in _BANNED_RELATION_TYPES:
+        logger.debug(
+            "Rejected vague relation type '%s': %s → %s",
+            relation_type, source_id, target_id,
+        )
         return None
 
     # Validate both endpoints exist
@@ -1964,28 +1943,22 @@ def graph_enhanced_recall(
             nbr["relations"] = connecting_rels
             result.append(nbr)
 
-    # ── Wiki vault full-text fallback ───────────────────────────────
-    # If FAISS returned few semantic hits, try keyword search across the
-    # wiki markdown files.  Catches exact names, dates, and coded terms
-    # that embedding models struggle with.
-    if len(seeds) < 3:
-        try:
-            import wiki_vault
-            if wiki_vault.is_enabled():
-                wiki_hits = wiki_vault.search_vault(query, max_results=3)
-                for hit in wiki_hits:
-                    eid = hit.get("entity_id", "")
-                    if not eid or eid in seen_ids:
-                        continue
-                    entity = get_entity(eid)
-                    if entity:
-                        seen_ids.add(eid)
-                        entity["score"] = 0.15  # low but present
-                        entity["via"] = "wiki"
-                        entity["relations"] = []
-                        result.append(entity)
-        except Exception:
-            pass  # wiki fallback is non-critical
+    # ── SQL LIKE fallback ──────────────────────────────────────────
+    # Always run a keyword search alongside FAISS to catch exact names,
+    # aliases, tags, and coded terms that embedding models miss.
+    # Negligible cost (~<1 ms on ~200 rows).
+    try:
+        sql_hits = search_entities(query, limit=10)
+        for entity in sql_hits:
+            if entity["id"] in seen_ids:
+                continue
+            seen_ids.add(entity["id"])
+            entity["score"] = 0.10  # low but present
+            entity["via"] = "keyword"
+            entity["relations"] = []
+            result.append(entity)
+    except Exception:
+        pass  # keyword fallback is non-critical
 
     # ── Cap total results to control token usage ────────────────────
     result.sort(key=lambda m: m["score"], reverse=True)
@@ -2153,128 +2126,7 @@ def consolidate_duplicates(threshold: float = 0.90) -> int:
     return removed
 
 
-def repair_orphan_entities() -> int:
-    """Alias kept for backward compatibility — delegates to
-    :func:`repair_graph_islands`."""
-    return repair_graph_islands()
 
-
-# Entity-type priority for choosing the bridge node in an island.
-# Lower number = higher priority (people & projects are the most
-# meaningful bridge point; generic concepts are the fallback).
-_BRIDGE_PRIORITY: dict[str, int] = {
-    "person":       0,
-    "project":      1,
-    "organisation": 2,
-    "event":        3,
-    "place":        4,
-    "skill":        5,
-    "media":        6,
-    "preference":   7,
-    "concept":      8,
-    "fact":         9,
-}
-
-
-def repair_graph_islands() -> int:
-    """Ensure every entity is reachable from the User node.
-
-    Works in two passes:
-
-    1. **True orphans** — entities with zero relations get a direct
-       ``User → entity`` edge (same as the old ``repair_orphan_entities``).
-    2. **Disconnected islands** — connected components that have internal
-       relations but no path to User.  One *bridge entity* is chosen per
-       island (highest-priority type, then highest internal degree) and a
-       single ``User → bridge`` relation is created.  The island's own
-       internal structure is preserved — the bridge is the only new edge.
-
-    Uses ``networkx.connected_components`` on the **undirected** view of the
-    graph — O(V + E) on the in-memory NetworkX mirror, no DB or LLM calls.
-
-    Returns the total number of new relations created.
-    """
-    g = _ensure_graph()
-    if g.number_of_nodes() == 0:
-        return 0
-
-    user_id = _ensure_user_entity()
-    linked = 0
-
-    # ── Pass 1: true orphans (zero relations) ────────────────────────
-    conn = _get_conn()
-    orphans = conn.execute("""
-        SELECT e.* FROM entities e
-        WHERE e.id NOT IN (
-            SELECT source_id FROM relations
-            UNION
-            SELECT target_id FROM relations
-        )
-    """).fetchall()
-    conn.close()
-
-    for row in orphans:
-        row = dict(row)
-        eid = row["id"]
-        if eid == user_id:
-            continue
-        entity_type = row.get("entity_type", "")
-        rel_type = _CATEGORY_RELATION_MAP.get(entity_type, "related_to")
-        try:
-            result = add_relation(user_id, eid, rel_type, source="auto_repair")
-            if result:
-                linked += 1
-                logger.debug(
-                    "Orphan repair: User --[%s]--> %s",
-                    rel_type, row.get("subject", "?"),
-                )
-        except Exception:
-            pass
-
-    # ── Pass 2: disconnected islands ─────────────────────────────────
-    # Re-read the graph (Pass 1 may have added edges).
-    g = _ensure_graph()
-    undirected = g.to_undirected(as_view=True)
-
-    for component in nx.connected_components(undirected):
-        if user_id in component:
-            continue  # This is the main cluster — nothing to do.
-
-        # Pick the best bridge entity for this island.
-        best_id: str | None = None
-        best_priority = 999
-        best_degree = -1
-
-        for node_id in component:
-            data = g.nodes.get(node_id, {})
-            etype = data.get("entity_type", "")
-            priority = _BRIDGE_PRIORITY.get(etype, 99)
-            degree = g.degree(node_id)
-            if (priority, -degree) < (best_priority, -best_degree):
-                best_priority = priority
-                best_degree = degree
-                best_id = node_id
-
-        if best_id is None:
-            continue
-
-        etype = g.nodes.get(best_id, {}).get("entity_type", "")
-        rel_type = _CATEGORY_RELATION_MAP.get(etype, "related_to")
-        try:
-            result = add_relation(user_id, best_id, rel_type, source="auto_bridge")
-            if result:
-                linked += 1
-                subj = g.nodes.get(best_id, {}).get("subject", "?")
-                logger.debug(
-                    "Island bridge: User --[%s]--> %s (island of %d)",
-                    rel_type, subj, len(component),
-                )
-        except Exception:
-            pass
-
-    if linked:
-        logger.info("Graph repair: created %d bridge/orphan links", linked)
-    return linked
 
 
 # ═════════════════════════════════════════════════════════════════════════════

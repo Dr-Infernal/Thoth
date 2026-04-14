@@ -533,6 +533,7 @@ class ShellTool(BaseTool):
         except ImportError:
             thread_id = "default"
 
+        # Always use subprocess — reliable, cross-platform, no PTY contention
         working_dir = self._get_workspace_root()
         session = _session_manager.get_session(thread_id, working_dir)
         result = session.run_command(command)
@@ -555,7 +556,7 @@ class ShellTool(BaseTool):
         return "\n".join(parts)
 
     def as_langchain_tools(self) -> list:
-        """Return the ``run_command`` tool."""
+        """Return ``run_command`` and ``read_terminal`` tools."""
         tool_instance = self
 
         def run_command(command: str) -> str:
@@ -580,6 +581,29 @@ class ShellTool(BaseTool):
                 logger.error("Shell tool error: %s", exc, exc_info=True)
                 return f"Error executing command: {exc}"
 
+        def read_terminal(lines: int = 50) -> str:
+            """Read recent output from the user's interactive terminal.
+
+            This reads the scrollback buffer of the user's xterm.js
+            terminal — both user-typed commands and replayed agent
+            command results.  Use when the user says "look at my
+            terminal" or "what does the terminal show".
+
+            Args:
+                lines: Number of recent lines to return (default 50,
+                       max 500).  Increase for verbose output.
+            """
+            try:
+                from terminal_bridge import TerminalBridge
+                bridge = TerminalBridge.get_instance()
+                output = bridge.read_output(lines=lines)
+                if not output.strip():
+                    return "(Terminal is empty — no recent output)"
+                return output
+            except Exception as exc:
+                logger.debug("read_terminal error: %s", exc)
+                return f"Could not read terminal: {exc}"
+
         return [
             StructuredTool.from_function(
                 func=run_command,
@@ -591,7 +615,18 @@ class ShellTool(BaseTool):
                     "run automatically; other commands require user approval. "
                     "Returns the command output and exit code."
                 ),
-            )
+            ),
+            StructuredTool.from_function(
+                func=read_terminal,
+                name="read_terminal",
+                description=(
+                    "Read recent output from the user's terminal. Returns "
+                    "the last N lines of plain text visible in the terminal. "
+                    "Use when the user references terminal content or you "
+                    "need to inspect what a previous command produced. "
+                    "Default 50 lines, max 500."
+                ),
+            ),
         ]
 
 

@@ -144,12 +144,26 @@ def _get_thread_messages(thread_id: str) -> list[dict]:
         return []
 
 
+_ASSISTANT_TRUNCATE = 200  # chars — enough context, not enough to extract from
+
+
 def _format_conversation(messages: list[dict]) -> str:
-    """Format messages into a readable conversation string."""
+    """Format messages into a readable conversation string.
+
+    User messages are included in full (they contain the facts we want).
+    Assistant messages are truncated to ``_ASSISTANT_TRUNCATE`` chars to
+    prevent the LLM from extracting facts from its own output — search
+    results, file listings, generated stories, workflow reports, etc.
+    """
     lines = []
     for m in messages:
-        prefix = "User" if m["role"] == "user" else "Assistant"
-        lines.append(f"{prefix}: {m['content']}")
+        if m["role"] == "user":
+            lines.append(f"User: {m['content']}")
+        else:
+            text = m["content"]
+            if len(text) > _ASSISTANT_TRUNCATE:
+                text = text[:_ASSISTANT_TRUNCATE] + " [...]"
+            lines.append(f"Assistant: {text}")
     return "\n".join(lines)
 
 
@@ -414,8 +428,8 @@ def _dedup_and_save(extracted: list[dict], source: str = "extraction") -> int:
                 )
                 continue
 
-            # Reject low-confidence relations (<0.6)
-            if isinstance(rel_confidence, (int, float)) and rel_confidence < 0.6:
+            # Reject low-confidence relations (<0.80)
+            if isinstance(rel_confidence, (int, float)) and rel_confidence < 0.80:
                 logger.info(
                     "Extraction skipped low-confidence relation (%.2f): %s --[%s]--> %s",
                     rel_confidence, rel.get("source_subject", "?"),
@@ -517,9 +531,13 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
         return 0
 
     # Find threads updated since last extraction, excluding active ones
+    # and background workflow threads (⚡ prefix) which contain only
+    # AI-generated content with no user-stated facts.
     new_threads = []
     for tid, name, created, updated, *rest in threads:
         if tid in exclude:
+            continue
+        if name and name.startswith("⚡"):
             continue
         if updated and updated > last_run:
             new_threads.append((tid, name))
@@ -535,6 +553,7 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
         on_status(f"Scanning {len(new_threads)} conversation(s) for memories…")
 
     total_saved = 0
+    islands_repaired = 0
     journal_entry = {
         "timestamp": datetime.now().isoformat(),
         "threads_scanned": len(new_threads),
@@ -598,21 +617,9 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
         except Exception as exc:
             logger.debug("Post-extraction wiki rebuild skipped: %s", exc)
 
-    # Repair disconnected graph islands — bridge any clusters that have
-    # internal relations but no path to the User node.
-    islands_repaired = 0
-    try:
-        import knowledge_graph as _kg_repair
-        islands_repaired = _kg_repair.repair_graph_islands() or 0
-        if islands_repaired and on_status:
-            on_status(f"Bridged {islands_repaired} disconnected memory cluster(s)")
-    except Exception as exc:
-        logger.debug("Orphan repair failed (non-fatal): %s", exc)
-
     state["last_extraction"] = datetime.now().isoformat()
     state["threads_scanned"] = len(new_threads)
     state["entities_saved"] = total_saved
-    state["islands_repaired"] = islands_repaired
     _save_state(state)
 
     # Append journal entry
@@ -623,6 +630,7 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
         f"{islands_repaired} island(s) repaired"
     )
     _append_extraction_journal(journal_entry)
+    logger.info("Memory extraction complete: %s", journal_entry["summary"])
 
     if on_status:
         if total_saved:

@@ -270,6 +270,16 @@ def show_task_dialog(
                     "Only tool-compatible models are listed."
                 )
 
+                # Persistent thread toggle
+                _has_persistent = bool(task.get("persistent_thread_id")) if task else False
+                persistent_toggle = ui.switch(
+                    "Keep conversation history across runs",
+                    value=_has_persistent,
+                ).tooltip(
+                    "When enabled, all runs share one thread so the agent "
+                    "can see prior outputs. Useful for monitoring/polling tasks."
+                )
+
                 ui.separator()
 
                 # ── Mode toggle: Simple ↔ Advanced ──
@@ -1706,6 +1716,10 @@ def show_task_dialog(
                 try:
                     if is_new:
                         _notify_only = len(clean_prompts) == 0 and not cur_steps
+                        _p_thread_id = None
+                        if persistent_toggle.value:
+                            import uuid as _uuid
+                            _p_thread_id = f"pt_{_uuid.uuid4().hex[:10]}"
                         create_task(
                             name=cur_name,
                             prompts=clean_prompts,
@@ -1716,6 +1730,7 @@ def show_task_dialog(
                             delivery_channel=cur_del_ch,
                             delivery_target=cur_del_tgt,
                             model_override=cur_model_ov,
+                            persistent_thread_id=_p_thread_id,
                             skills_override=cur_skills_override,
                             steps=cur_steps if cur_steps else None,
                             safety_mode=cur_safety,
@@ -1764,6 +1779,15 @@ def show_task_dialog(
                             updates["tools_override"] = cur_tools_override
                         if cur_channels != task.get("channels"):
                             updates["channels"] = cur_channels
+                        # Persistent thread toggle
+                        _want_persistent = persistent_toggle.value
+                        _had_persistent = bool(task.get("persistent_thread_id"))
+                        if _want_persistent != _had_persistent:
+                            if _want_persistent:
+                                import uuid as _uuid
+                                updates["persistent_thread_id"] = f"pt_{_uuid.uuid4().hex[:10]}"
+                            else:
+                                updates["persistent_thread_id"] = None
 
                         if updates:
                             update_task(task["id"], **updates)

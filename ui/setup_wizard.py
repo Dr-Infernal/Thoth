@@ -37,6 +37,9 @@ async def show_setup_wizard(
         POPULAR_MODELS,
         DEFAULT_MODEL,
         validate_openrouter_key,
+        validate_anthropic_key,
+        validate_google_key,
+        validate_xai_key,
         refresh_cloud_models,
         list_cloud_models,
         get_provider_emoji,
@@ -111,11 +114,25 @@ async def show_setup_wizard(
             with _cloud_section:
                 ui.label(
                     "Enter at least one API key. OpenAI gives direct access to GPT models. "
-                    "OpenRouter gives access to Claude, Gemini, Llama, and 100+ more."
+                    "Anthropic gives direct access to Claude. Google AI gives direct access to Gemini. "
+                    "xAI gives direct access to Grok. "
+                    "OpenRouter gives access to 100+ models from all providers."
                 ).classes("text-grey-6 text-sm")
 
                 setup_openai_key = ui.input(
                     "OpenAI API Key (optional)",
+                    password=True, password_toggle_button=True,
+                ).classes("w-full")
+                setup_anth_key = ui.input(
+                    "Anthropic API Key (optional)",
+                    password=True, password_toggle_button=True,
+                ).classes("w-full")
+                setup_goog_key = ui.input(
+                    "Google AI API Key (optional)",
+                    password=True, password_toggle_button=True,
+                ).classes("w-full")
+                setup_xai_key = ui.input(
+                    "xAI API Key (optional)",
                     password=True, password_toggle_button=True,
                 ).classes("w-full")
                 setup_or_key = ui.input(
@@ -139,8 +156,11 @@ async def show_setup_wizard(
 
                 async def _validate_cloud_keys():
                     oai_val = setup_openai_key.value.strip()
+                    anth_val = setup_anth_key.value.strip()
+                    goog_val = setup_goog_key.value.strip()
+                    xai_val = setup_xai_key.value.strip()
                     or_val = setup_or_key.value.strip()
-                    if not oai_val and not or_val:
+                    if not oai_val and not anth_val and not goog_val and not xai_val and not or_val:
                         ui.notify("Enter at least one API key", type="warning")
                         return
                     cloud_status.text = "⏳ Validating key(s)…"
@@ -153,6 +173,30 @@ async def show_setup_wizard(
                             _update_finish()
                             return
                         set_key("OPENROUTER_API_KEY", or_val)
+                    if anth_val:
+                        anth_valid = await run.io_bound(validate_anthropic_key, anth_val)
+                        if not anth_valid:
+                            cloud_status.text = "❌ Invalid Anthropic API key."
+                            cloud_done["value"] = False
+                            _update_finish()
+                            return
+                        set_key("ANTHROPIC_API_KEY", anth_val)
+                    if goog_val:
+                        goog_valid = await run.io_bound(validate_google_key, goog_val)
+                        if not goog_valid:
+                            cloud_status.text = "❌ Invalid Google AI API key."
+                            cloud_done["value"] = False
+                            _update_finish()
+                            return
+                        set_key("GOOGLE_API_KEY", goog_val)
+                    if xai_val:
+                        xai_valid = await run.io_bound(validate_xai_key, xai_val)
+                        if not xai_valid:
+                            cloud_status.text = "❌ Invalid xAI API key."
+                            cloud_done["value"] = False
+                            _update_finish()
+                            return
+                        set_key("XAI_API_KEY", xai_val)
                     if oai_val:
                         set_key("OPENAI_API_KEY", oai_val)
                     cloud_status.text = "⏳ Fetching available models…"

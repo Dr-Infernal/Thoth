@@ -62,7 +62,7 @@ There are three task types:
 ## Advanced Features
 
 11. **Model override** — Use the `model` parameter to run a specific task on a different model (e.g. a heavier model for complex research, a lighter one for quick checks).
-12. **Persistent threads** — By default each run gets a fresh thread. For tasks that should maintain ongoing context across runs (e.g. a project status tracker that remembers prior updates), use `persistent_thread_id`.
+12. **Persistent threads** — By default each run gets a fresh thread (`persistent_thread=false`). Set `persistent_thread=true` when the task needs to see results from prior runs — e.g. monitoring/polling tasks that compare against previous values, project trackers that build on earlier summaries, or any task where cross-run context matters. The system auto-generates and manages the thread ID.
 13. **Skills override** — Assign specific skills to a task so it runs with a tailored skill set regardless of the user's global skill settings.
 
 ## Pipeline Mode (Advanced Steps)
@@ -154,7 +154,7 @@ When the user wants to **monitor a condition** and be notified when it changes (
     - If the condition IS met → report the finding and self-disable with `task_update(task_id='{{task_id}}', enabled=false)`
     - If the condition is NOT met → say so briefly (this keeps the persistent thread informed without wasting tokens)
 
-19. **Always use `persistent_thread_id`** — This lets the agent see prior checks across runs. Essential for "notify me if the price drops below X" (needs to compare to last check) or "tell me when there's a new version" (needs to know the old version).
+19. **Always set `persistent_thread=true`** — This lets the agent see prior checks across runs. Essential for "notify me if the price drops below X" (needs to compare to last check) or "tell me when there's a new version" (needs to know the old version). The system auto-generates the thread ID — just pass the boolean flag.
 
 20. **Template: polling prompt pattern** —
     ```

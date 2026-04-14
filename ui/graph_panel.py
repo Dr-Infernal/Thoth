@@ -70,9 +70,9 @@ def build_graph_panel() -> None:
             sanitize=False,
         )
         ui.html(
-            '<label style="display:flex; align-items:center; gap:4px; font-size:0.8rem; color:#ccc; cursor:pointer;" title="Hide entities only connected to User">'
-            '<input type="checkbox" id="graph-unlinked-toggle" '
-            'style="accent-color:#FF8A65;" /> Hide unlinked</label>',
+            '<label style="display:flex; align-items:center; gap:4px; font-size:0.8rem; color:#ccc; cursor:pointer;" title="Hide entities with zero connections">'
+            '<input type="checkbox" id="graph-orphan-toggle" '
+            'style="accent-color:#FF8A65;" /> Hide orphans</label>',
             sanitize=False,
         )
         ui.html(
@@ -122,6 +122,20 @@ def build_graph_panel() -> None:
             "font-size:0.75rem; color:#CE93D8; border:1px solid #CE93D8; "
             "border-radius:4px; padding:2px 8px;"
         ).tooltip("Run dream cycle now (merge, enrich, infer)")
+
+        # ── Hidden edit trigger (clicked from JS detail card) ────────
+        async def _on_edit_click():
+            eid = await ui.run_javascript(
+                "window._thothGraph ? window._thothGraph._editEntityId : null"
+            )
+            if eid:
+                from ui.entity_editor import open_entity_editor
+
+                open_entity_editor(eid)
+
+        _edit_btn = ui.button("edit", on_click=_on_edit_click)
+        _edit_btn.props('id="graph-edit-trigger"')
+        _edit_btn.style("display:none;")
 
     # ── vis-network canvas + overlay detail card ─────────────────────
     ui.html(
@@ -276,6 +290,7 @@ def build_graph_panel() -> None:
         '        + "<div style=\\"margin-top:4px; font-size:0.75rem; color:#777;\\">"'
         '        + "Source: " + srcLabel'
         '        + (agoText ? " \u00b7 Updated: " + agoText : "")'
+        '        + " \\u00b7 <a href=\\"#\\" data-eid=\\"" + nid + "\\" onclick=\\"event.preventDefault(); var G=window._thothGraph; G._editEntityId=this.dataset.eid; document.getElementById(\\x27graph-edit-trigger\\x27).click();\\" style=\\"color:#90CAF9; text-decoration:none; cursor:pointer;\\">\\u270F\\uFE0F Edit</a>"'
         '        + "</div>";'
         '      detail.style.display = "block";'
         '    });'
@@ -340,18 +355,22 @@ def build_graph_panel() -> None:
         '    var hasTypeFilter = G.activeFilters.size > 0;'
         '    var hasSourceFilter = G.activeSourceFilters.size > 0;'
         '    var hasSearch = searchVal.length > 0;'
-        '    var hasAny = hasTypeFilter || hasSourceFilter || hasSearch || !G.showUserHub || G.hideUnlinked;'
+        '    var hasAny = hasTypeFilter || hasSourceFilter || hasSearch || !G.showUserHub || G.hideOrphans;'
         '    var ds = G.network.body.data.nodes;'
         '    var eds = G.network.body.data.edges;'
         '    if (!hasAny) {'
+        '      var nBatch = [];'
         '      G.allNodes.forEach(function(n) {'
         '        if (ds.get(n.id) === null) return;'
-        '        ds.update({id: n.id, opacity: 1.0, color: n.color, font: {color: "#ccc", size: 12}});'
+        '        nBatch.push({id: n.id, opacity: 1.0, color: n.color, font: {color: "#ccc", size: 12}});'
         '      });'
+        '      if (nBatch.length) ds.update(nBatch);'
+        '      var eBatch = [];'
         '      G.allEdges.forEach(function(e) {'
         '        if (eds.get(e.id) === null) return;'
-        '        eds.update({id: e.id, color: {opacity: 1.0}});'
+        '        eBatch.push({id: e.id, color: {opacity: 1.0}});'
         '      });'
+        '      if (eBatch.length) eds.update(eBatch);'
         '      G.updateStatsLabel(G.allNodes.length, G.allEdges.length);'
         '      return;'
         '    }'
@@ -362,15 +381,13 @@ def build_graph_panel() -> None:
         '        if (e.from === G.userNodeId || e.to === G.userNodeId) userEdges.add(e.id);'
         '      });'
         '    }'
-        # Count non-User connections per node (for "unlinked" detection)
-        '    var nonUserDeg = {};'
-        '    if (G.hideUnlinked) {'
-        '      G.allNodes.forEach(function(n) { nonUserDeg[n.id] = 0; });'
+        # Count total connections per node (for orphan detection)
+        '    var totalDeg = {};'
+        '    if (G.hideOrphans) {'
+        '      G.allNodes.forEach(function(n) { totalDeg[n.id] = 0; });'
         '      G.allEdges.forEach(function(e) {'
-        '        if (e.from !== G.userNodeId && e.to !== G.userNodeId) {'
-        '          nonUserDeg[e.from] = (nonUserDeg[e.from] || 0) + 1;'
-        '          nonUserDeg[e.to] = (nonUserDeg[e.to] || 0) + 1;'
-        '        }'
+        '        totalDeg[e.from] = (totalDeg[e.from] || 0) + 1;'
+        '        totalDeg[e.to] = (totalDeg[e.to] || 0) + 1;'
         '      });'
         '    }'
         '    var matchSet = new Set();'
@@ -392,24 +409,28 @@ def build_graph_panel() -> None:
         '        || (n._tags || "").toLowerCase().indexOf(searchVal) >= 0;'
         # User hub filter: hide User node itself
         '      var userOk = G.showUserHub || n.id !== G.userNodeId;'
-        # Unlinked filter: hide nodes with 0 non-User connections
-        '      var linkedOk = !G.hideUnlinked || n.id === G.userNodeId || (nonUserDeg[n.id] || 0) > 0;'
+        # Orphan filter: hide nodes with 0 total connections
+        '      var linkedOk = !G.hideOrphans || (totalDeg[n.id] || 0) > 0;'
         '      if (typeOk && srcOk && searchOk && userOk && linkedOk) matchSet.add(n.id);'
         '    });'
+        '    var nBatch = [];'
         '    G.allNodes.forEach(function(n) {'
         '      if (ds.get(n.id) === null) return;'
         '      if (matchSet.has(n.id)) {'
-        '        ds.update({id: n.id, opacity: 1.0, color: n.color, font: {color: "#ccc", size: 12}});'
+        '        nBatch.push({id: n.id, opacity: 1.0, color: n.color, font: {color: "#ccc", size: 12}});'
         '      } else {'
-        '        ds.update({id: n.id, opacity: 0.12, color: "#555", font: {color: "transparent", size: 0}});'
+        '        nBatch.push({id: n.id, opacity: 0.12, color: "#555", font: {color: "transparent", size: 0}});'
         '      }'
         '    });'
+        '    if (nBatch.length) ds.update(nBatch);'
+        '    var eBatch = [];'
         '    G.allEdges.forEach(function(e) {'
         '      if (eds.get(e.id) === null) return;'
         '      var both = matchSet.has(e.from) && matchSet.has(e.to);'
         '      var hiddenUserEdge = !G.showUserHub && userEdges.has(e.id);'
-        '      eds.update({id: e.id, color: {opacity: (both && !hiddenUserEdge) ? 1.0 : 0.06}});'
+        '      eBatch.push({id: e.id, color: {opacity: (both && !hiddenUserEdge) ? 1.0 : 0.06}});'
         '    });'
+        '    if (eBatch.length) eds.update(eBatch);'
         '    var visibleEdges = G.allEdges.filter(function(e) { return matchSet.has(e.from) && matchSet.has(e.to) && (G.showUserHub || !userEdges.has(e.id)); });'
         '    G.updateStatsLabel(matchSet.size, visibleEdges.length);'
         '  };'
@@ -453,12 +474,12 @@ def build_graph_panel() -> None:
         '        G.applyFilters();'
         '      };'
         '    }'
-        # Hide unlinked toggle
-        '    var unlinkedToggle = document.getElementById("graph-unlinked-toggle");'
-        '    if (unlinkedToggle) {'
-        '      unlinkedToggle.checked = G.hideUnlinked;'
-        '      unlinkedToggle.onchange = function() {'
-        '        G.hideUnlinked = unlinkedToggle.checked;'
+        # Hide orphans toggle
+        '    var orphanToggle = document.getElementById("graph-orphan-toggle");'
+        '    if (orphanToggle) {'
+        '      orphanToggle.checked = G.hideOrphans;'
+        '      orphanToggle.onchange = function() {'
+        '        G.hideOrphans = orphanToggle.checked;'
         '        G.applyFilters();'
         '      };'
         '    }'

@@ -42,6 +42,7 @@ import queue
 import re
 import signal
 import subprocess
+from urllib.parse import urlparse
 import threading
 import time
 from datetime import datetime
@@ -335,6 +336,36 @@ def _type_ref(page, ref: int, text: str, submit: bool = False) -> str:
                 continue
             return f"Type failed: {exc}"
     return f"Error: element ref [{ref}] could not be resolved after retry."
+
+
+# ── Prompt‑injection defence: URL exfiltration check ─────────────────────
+_B64_SEGMENT_RE = re.compile(r"[A-Za-z0-9+/=]{100,}")
+
+
+def _check_exfiltration_url(url: str) -> str:
+    """Soft check for data‑exfiltration via URL query parameters.
+
+    Returns a warning string if the URL looks suspicious, empty string
+    otherwise.  Does NOT block navigation — only appends a warning.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return ""
+    qs = parsed.query + (parsed.fragment or "")
+    if len(qs) > 500:
+        return (
+            "(⚠ Security warning: this URL has an unusually long query string "
+            f"({len(qs)} chars) which may be an attempt to exfiltrate data. "
+            "Proceed with caution.)"
+        )
+    if _B64_SEGMENT_RE.search(qs):
+        return (
+            "(⚠ Security warning: this URL contains a large base64‑like "
+            "segment in its query parameters, which may be an attempt to "
+            "exfiltrate data via URL encoding. Proceed with caution.)"
+        )
+    return ""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1072,6 +1103,9 @@ class BrowserTool(BaseTool):
             if not url.strip().lower().startswith(("http://", "https://")):
                 url = "https://" + url
 
+            # Security: detect potential data-exfiltration URLs
+            _exfil_warning = _check_exfiltration_url(url)
+
             thread_id = _get_thread_id()
             session = _session_manager.get_session(thread_id)
             result = session.navigate(url, thread_id)
@@ -1082,6 +1116,8 @@ class BrowserTool(BaseTool):
                 "url": url,
                 "timestamp": datetime.now().isoformat(),
             })
+            if _exfil_warning:
+                result += f"\n{_exfil_warning}"
             return result
 
         # ── Click ────────────────────────────────────────────────────────
