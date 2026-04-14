@@ -44,7 +44,7 @@
         "license": "https://www.apache.org/licenses/LICENSE-2.0",
         "url": "https://siddsachar.github.io/Thoth/",
         "downloadUrl": "https://github.com/siddsachar/Thoth/releases",
-        "softwareVersion": "3.13.0",
+        "softwareVersion": "3.14.0",
         "author": {
             "@type": "Person",
             "name": "siddsachar",
@@ -914,8 +914,8 @@
             <a href="#tools">Tools</a>
             <a href="#comparison">Compare</a>
             <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/ThothSetup_3.13.0.exe" class="nav-dl">Windows</a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/Thoth-3.13.0-macOS-arm64.dmg" class="nav-dl">macOS</a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.14.0/ThothSetup_3.14.0.exe" class="nav-dl">Windows</a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.14.0/Thoth-3.14.0-macOS-arm64.dmg" class="nav-dl">macOS</a>
         </div>
     </nav>
 
@@ -930,8 +930,8 @@
             Either way, nothing leaves your machine.
         </p>
         <div class="hero-actions">
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/ThothSetup_3.13.0.exe" class="btn btn--primary">Download for Windows <span class="btn-hint">.exe</span></a>
-            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/Thoth-3.13.0-macOS-arm64.dmg" class="btn btn--primary">Download for macOS <span class="btn-hint">.dmg</span></a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.14.0/ThothSetup_3.14.0.exe" class="btn btn--primary">Download for Windows <span class="btn-hint">.exe</span></a>
+            <a href="https://github.com/siddsachar/Thoth/releases/download/v3.14.0/Thoth-3.14.0-macOS-arm64.dmg" class="btn btn--primary">Download for macOS <span class="btn-hint">.dmg</span></a>
             <a href="https://github.com/siddsachar/Thoth" class="btn btn--ghost" target="_blank">View on GitHub</a>
         </div>
         <div class="hero-meta">
@@ -987,7 +987,7 @@
                     <h3>Frontier reasoning on demand</h3>
                     <p>No GPU required. Only the current conversation is sent - memories, files, and history never leave.</p>
                     <ul class="path-list">
-                        <li>OpenAI (GPT) + OpenRouter (100+ models)</li>
+                        <li>OpenAI, Anthropic (Claude), Google (Gemini), xAI (Grok) + OpenRouter</li>
                         <li>Per-thread &amp; per-task model switching - mix freely</li>
                         <li>Pay-per-token - pennies per conversation</li>
                         <li>Star favourite models for quick access</li>
@@ -1068,8 +1068,8 @@
                 <div class="feature-item">
                     <span class="feature-icon">&#x29D6;</span>
                     <h3>Workflows &amp; Scheduling</h3>
-                    <p>Step-based pipelines with conditional branching, approval gates, and 7 schedule types. 5 step types - Prompt, Condition, Approval, Subtask, Notify - with variable passing between steps. Webhook and task-completion triggers, concurrency groups, per-workflow safety mode, and channel delivery to Telegram.</p>
-                    <span class="feature-tag">Upgraded in 3.13</span>
+                    <p>Step-based pipelines with conditional branching, approval gates, and 7 schedule types. 5 step types - Prompt, Condition, Approval, Subtask, Notify - with variable passing between steps. Workflow Console with live progress, approvals, quick launch, and recent runs. Webhook triggers, concurrency groups, per-workflow safety mode, and channel delivery.</p>
+                    <span class="feature-tag">Upgraded in 3.14</span>
                 </div>
                 <div class="feature-item">
                     <span class="feature-icon">&#x2261;</span>
@@ -1109,8 +1109,8 @@
                 <div class="feature-item">
                     <span class="feature-icon">&#x25A1;</span>
                     <h3>Image Generation</h3>
-                    <p>Generate and edit images through conversation via OpenAI models. Describe what you want, the agent renders it inline. Paste or attach an existing image to edit - the agent caches attachments so you can reference them by name.</p>
-                    <span class="feature-tag">New in 3.12</span>
+                    <p>Generate and edit images through conversation via OpenAI, xAI (Grok Imagine), and Google (Imagen 4, Gemini). Describe what you want, the agent renders it inline. Paste or attach an existing image to edit - per-provider model picker shows only models for configured providers.</p>
+                    <span class="feature-tag">Upgraded in 3.14</span>
                 </div>
                 <div class="feature-item">
                     <span class="feature-icon">&#x2B22;</span>
@@ -1165,7 +1165,7 @@
                 <div class="feature-item feature-item--wide">
                     <span class="feature-icon">&#x2B29;</span>
                     <h3>Flexible Model Selection</h3>
-                    <p>39 curated local models plus cloud models from OpenAI and OpenRouter. Full reasoning model support - thinking tokens in a collapsible bubble with persistence across reloads. Per-thread and per-workflow model switching, star your favourites. Configurable context windows up to 256K tokens.</p>
+                    <p>39 curated local models plus cloud models from OpenAI, Anthropic, Google, xAI, and OpenRouter. Full reasoning model support - thinking tokens in a collapsible bubble with persistence across reloads. Per-thread and per-workflow model switching, star your favourites. Configurable context windows up to 256K tokens.</p>
                 </div>
             </div>
         </div>
@@ -1381,6 +1381,7 @@
                 <span class="privacy-fact">&#x25EF; Local voice</span>
                 <span class="privacy-fact">&#x2715; No telemetry</span>
                 <span class="privacy-fact">&#x2192; Opt-in APIs</span>
+                <span class="privacy-fact">&#x25CA; 5-layer injection defence</span>
                 <span class="privacy-fact">&#x2696; Apache 2.0</span>
             </div>
         </div>
@@ -1393,8 +1394,8 @@
             <h2>Take back your <em>AI sovereignty</em></h2>
             <p>Free, open source, and yours to keep. No accounts. No subscriptions. No data harvesting.</p>
             <div class="cta-buttons">
-                <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/ThothSetup_3.13.0.exe" class="btn btn--primary">Download for Windows <span class="btn-hint">.exe</span></a>
-                <a href="https://github.com/siddsachar/Thoth/releases/download/v3.13.0/Thoth-3.13.0-macOS-arm64.dmg" class="btn btn--primary">Download for macOS <span class="btn-hint">.dmg</span></a>
+                <a href="https://github.com/siddsachar/Thoth/releases/download/v3.14.0/ThothSetup_3.14.0.exe" class="btn btn--primary">Download for Windows <span class="btn-hint">.exe</span></a>
+                <a href="https://github.com/siddsachar/Thoth/releases/download/v3.14.0/Thoth-3.14.0-macOS-arm64.dmg" class="btn btn--primary">Download for macOS <span class="btn-hint">.dmg</span></a>
                 <a href="https://github.com/siddsachar/Thoth" class="btn btn--ghost" target="_blank">Star on GitHub</a>
             </div>
         </div>
@@ -1411,7 +1412,7 @@
 
     <footer>
         <p>
-            &#x1305F; Thoth &middot; v3.13.0 &middot; Apache 2.0 &middot;
+            &#x1305F; Thoth &middot; v3.14.0 &middot; Apache 2.0 &middot;
             <a href="https://github.com/siddsachar/Thoth" target="_blank">GitHub</a>
         </p>
     </footer>
