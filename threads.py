@@ -158,8 +158,12 @@ def _delete_thread(thread_id: str):
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM thread_meta WHERE thread_id = ?", (thread_id,))
     # Purge LangGraph checkpoint data to prevent zombie threads
-    conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
-    conn.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
+    # Tables are created by LangGraph at runtime — may not exist yet
+    try:
+        conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
+        conn.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
     # Clear any cached summary for this thread
