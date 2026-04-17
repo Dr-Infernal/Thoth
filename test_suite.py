@@ -13164,7 +13164,13 @@ try:
     assert hasattr(_xtool68, "name")
     assert _xtool68.name == "x"
     assert hasattr(_xtool68, "as_langchain_tools")
-    _xlc68 = _xtool68.as_langchain_tools()
+    # as_langchain_tools() returns [] without live X credentials;
+    # patch the three guards so we can verify tool generation in CI.
+    import unittest.mock as _mock68
+    with (_mock68.patch.object(_xtool68, "has_credentials", return_value=True),
+          _mock68.patch.object(_xtool68, "is_authenticated", return_value=True),
+          _mock68.patch.object(_xtool68, "check_token_health", return_value=("valid", "mocked"))):
+        _xlc68 = _xtool68.as_langchain_tools()
     _xnames68 = sorted([t.name for t in _xlc68])
     assert len(_xnames68) >= 3, f"Expected ≥3 sub-tools, got {_xnames68}"
     record("PASS", f"68f: XTool has {len(_xnames68)} sub-tools: {_xnames68}")
