@@ -362,6 +362,22 @@ class _JsApi:
         if isinstance(url, str) and url.lower().startswith(("https://", "http://")):
             webbrowser.open(url)
 
+    def get_clipboard(self):
+        import subprocess as _sp, sys as _sys
+        try:
+            if _sys.platform == "darwin":
+                return _sp.check_output(["pbpaste"], timeout=2).decode("utf-8", errors="replace")
+            elif _sys.platform == "win32":
+                r = _sp.check_output(
+                    ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+                    timeout=2,
+                )
+                return r.decode("utf-8", errors="replace").rstrip("\r\n")
+            else:
+                return _sp.check_output(["xclip", "-selection", "clipboard", "-o"], timeout=2).decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
 def _on_loaded(window):
     try:
         window.evaluate_js("""
@@ -387,6 +403,162 @@ w, h = int(sys.argv[3]), int(sys.argv[4])
 webview.create_window(title, url, width=w, height=h, js_api=_JsApi())
 webview.start(func=_on_loaded)
 '''
+
+
+def _load_window_mode() -> str:
+    """Read the preferred window mode from app_config.json.
+
+    Returns ``'ask'`` (default / first launch), ``'native'``, or ``'browser'``.
+    """
+    config_path = Path(
+        os.environ.get("THOTH_DATA_DIR", Path.home() / ".thoth")
+    ) / "app_config.json"
+    try:
+        import json
+        cfg = json.loads(config_path.read_text())
+        mode = cfg.get("window_mode", "ask")
+        if mode in ("ask", "native", "browser"):
+            return mode
+    except Exception:
+        pass
+    return "ask"
+
+
+# Tkinter chooser dialog — shown when window_mode is "ask".
+_CHOOSER_TK = r'''
+import os, sys
+
+py_dir = os.path.dirname(sys.executable)
+os.environ['PATH'] = py_dir + os.pathsep + os.environ.get('PATH', '')
+if os.name == 'nt':
+    if hasattr(os, 'add_dll_directory'):
+        os.add_dll_directory(py_dir)
+    for d in ('tcl/tcl8.6', 'tcl/tk8.6'):
+        p = os.path.join(py_dir, d)
+        if os.path.isdir(p):
+            os.environ['TCL_LIBRARY' if 'tcl8' in d else 'TK_LIBRARY'] = p
+    import ctypes
+    for dll in ('tcl86t.dll', 'tk86t.dll'):
+        p = os.path.join(py_dir, dll)
+        if os.path.exists(p):
+            try: ctypes.CDLL(p, winmode=0)
+            except OSError: pass
+import tkinter as tk
+
+BG, GOLD, GREY = "#1e1e1e", "#FFD700", "#aaaaaa"
+choice = ["native"]
+
+def pick(mode):
+    choice[0] = mode
+    root.destroy()
+
+root = tk.Tk()
+root.title("Thoth")
+root.configure(bg=BG)
+root.resizable(False, False)
+sx, sy = root.winfo_screenwidth(), root.winfo_screenheight()
+root.geometry(f"420x280+{(sx-420)//2}+{(sy-280)//2}")
+root.attributes("-topmost", True)
+
+tk.Label(root, text="\U0001305F", font=("Segoe UI Emoji", 48), fg=GOLD, bg=BG).pack(pady=(24,0))
+tk.Label(root, text="How would you like to open Thoth?",
+         font=("Segoe UI", 14), fg="#ffffff", bg=BG).pack(pady=(10,16))
+
+btn_frame = tk.Frame(root, bg=BG)
+btn_frame.pack()
+
+btn_cfg = dict(font=("Segoe UI", 12), width=18, cursor="hand2",
+               relief="flat", bd=0, pady=8)
+tk.Button(btn_frame, text="\U0001f5d4  Native Window", bg="#2a2a3e", fg="#ffffff",
+          activebackground="#3a3a5e", activeforeground="#ffffff",
+          command=lambda: pick("native"), **btn_cfg).pack(side="left", padx=8)
+tk.Button(btn_frame, text="\U0001f310  System Browser", bg="#2a2a3e", fg="#ffffff",
+          activebackground="#3a3a5e", activeforeground="#ffffff",
+          command=lambda: pick("browser"), **btn_cfg).pack(side="left", padx=8)
+
+tk.Label(root, text="To set a default, go to Settings \u2192 System.",
+         font=("Segoe UI", 10), fg=GREY, bg=BG).pack(pady=(16,0))
+
+root.protocol("WM_DELETE_WINDOW", lambda: pick("native"))
+root.mainloop()
+print(choice[0])
+'''
+
+# Console fallback chooser — used when tkinter is unavailable.
+_CHOOSER_CONSOLE = r'''
+import sys, os
+if os.name == 'nt':
+    os.system('title Thoth')
+print()
+print("  \U0001305F Thoth")
+print("  " + "-" * 36)
+print()
+print("  How would you like to open Thoth?")
+print()
+print("  1) Native Window")
+print("  2) System Browser")
+print()
+print("  To set a default, go to")
+print("  Settings \u2192 System.")
+print()
+while True:
+    try:
+        c = input("  Enter 1 or 2: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        c = "1"
+        break
+    if c in ("1", "2"):
+        break
+    print("  Please enter 1 or 2.")
+print("native" if c == "1" else "browser")
+'''
+
+
+def _ask_window_mode() -> str:
+    """Show a tkinter chooser dialog and return ``'native'`` or ``'browser'``.
+
+    Falls back to a console prompt if tkinter is unavailable,
+    and to ``'native'`` if both fail.
+    """
+    # --- Attempt 1: tkinter GUI chooser ---
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _CHOOSER_TK],
+            capture_output=True, text=True, timeout=120,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            result = proc.stdout.strip().splitlines()[-1]
+            if result in ("native", "browser"):
+                logger.info("User chose window mode: %s (GUI)", result)
+                return result
+    except Exception:
+        pass
+    logger.debug("Tkinter chooser unavailable, using console fallback")
+
+    # --- Attempt 2: console chooser ---
+    try:
+        flags = 0
+        if sys.platform == "win32":
+            flags = subprocess.CREATE_NEW_CONSOLE
+        proc = subprocess.run(
+            [sys.executable, "-c", _CHOOSER_CONSOLE],
+            capture_output=True, text=True, timeout=120,
+            creationflags=flags,
+        )
+        if proc.stdout.strip():
+            result = proc.stdout.strip().splitlines()[-1]
+            if result in ("native", "browser"):
+                logger.info("User chose window mode: %s (console)", result)
+                return result
+    except Exception as exc:
+        logger.warning("Window mode chooser failed: %s — defaulting to native", exc)
+    return "native"
+
+
+def _open_in_browser() -> None:
+    """Open the Thoth UI in the default system browser."""
+    webbrowser.open(_URL)
+    logger.info("Opened Thoth in system browser")
 
 
 def _open_window() -> subprocess.Popen | None:
@@ -435,6 +607,7 @@ class ThothTray:
 
         menu = pystray.Menu(
             pystray.MenuItem("Open Thoth", self._on_open, default=True),
+            pystray.MenuItem("Open in Browser", self._on_open_browser),
             pystray.MenuItem("Quit", self._on_quit),
         )
         self._icon = pystray.Icon(
@@ -524,6 +697,25 @@ class ThothTray:
         logger.info("Opening Thoth window")
         self._window_proc = _open_window()
 
+    def _on_open_browser(self, icon=None, item=None) -> None:   # noqa: ARG002
+        """Open the Thoth UI in the default system browser."""
+        if _is_port_in_use(_PORT):
+            _open_in_browser()
+        elif self._owns_server:
+            logger.info("Server not running — restarting before opening browser")
+            self._server.stop()
+            for _ in range(10):
+                if not _is_port_in_use(_PORT):
+                    break
+                time.sleep(0.5)
+            self._server.start()
+            if _wait_for_server():
+                _open_in_browser()
+            else:
+                logger.warning("Server did not restart — cannot open browser")
+        else:
+            _open_in_browser()
+
     def _on_quit(self, icon=None, item=None) -> None:    # noqa: ARG002
         logger.info("Quit requested")
         self._stop_event.set()
@@ -604,9 +796,15 @@ class ThothTray:
         poller = threading.Thread(target=self._poll_loop, daemon=True, name="tray-poll")
         poller.start()
 
-        # Wait for server to be ready, then open a native window
+        # Wait for server to be ready, then open UI in the preferred mode
         if _wait_for_server():
-            self._window_proc = _open_window()
+            mode = _load_window_mode()
+            if mode == "ask":
+                mode = _ask_window_mode()
+            if mode == "browser":
+                _open_in_browser()
+            else:
+                self._window_proc = _open_window()
         else:
             logger.warning("Server did not start in time — opening browser as fallback")
             webbrowser.open(_URL)

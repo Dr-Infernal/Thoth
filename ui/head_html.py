@@ -172,14 +172,31 @@ document.addEventListener('click', function(e) {
                 var cmd = btn.dataset.cmd;
                 if (cmd === 'paste') {
                     if (_ctxTarget) _ctxTarget.focus();
-                    navigator.clipboard.readText().then(function(t) {
+                    function _doInsert(t) {
                         var el = _ctxTarget || document.activeElement;
                         if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
                             document.execCommand('insertText', false, t);
                         }
-                    }).catch(function() {
-                        document.execCommand('paste');
-                    });
+                    }
+                    // Prefer pywebview bridge (works reliably on macOS WKWebView)
+                    if (window.pywebview && window.pywebview.api && window.pywebview.api.get_clipboard) {
+                        window.pywebview.api.get_clipboard().then(function(t) {
+                            if (t != null) { _doInsert(t); }
+                            else {
+                                navigator.clipboard.readText().then(_doInsert).catch(function() {
+                                    document.execCommand('paste');
+                                });
+                            }
+                        }).catch(function() {
+                            navigator.clipboard.readText().then(_doInsert).catch(function() {
+                                document.execCommand('paste');
+                            });
+                        });
+                    } else {
+                        navigator.clipboard.readText().then(_doInsert).catch(function() {
+                            document.execCommand('paste');
+                        });
+                    }
                 } else {
                     document.execCommand(cmd);
                 }

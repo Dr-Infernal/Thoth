@@ -1234,6 +1234,35 @@ def open_settings(
             "flat dense no-caps"
         )
 
+        # ── Window Mode ──────────────────────────────────────────────
+        ui.separator()
+        ui.label("🪟 Window Mode").classes("text-subtitle1 font-bold")
+        ui.label(
+            "Choose how Thoth opens on launch. "
+            "\"Native Window\" provides a dedicated app window. "
+            "\"System Browser\" opens in your default browser "
+            "(avoids macOS WebView issues)."
+        ).classes("text-grey-6 text-xs")
+
+        from ui.helpers import load_app_config, save_app_config
+
+        _wm_cfg = load_app_config()
+        _current_mode = _wm_cfg.get("window_mode", "ask")
+
+        def _on_window_mode_change(e):
+            cfg = load_app_config()
+            cfg["window_mode"] = e.value
+            save_app_config(cfg)
+
+        ui.select(
+            {"ask": "Ask on Launch", "native": "Native Window", "browser": "System Browser"},
+            value=_current_mode,
+            label="Window mode",
+            on_change=_on_window_mode_change,
+        ).classes("w-64").tooltip("Takes effect on next launch")
+
+        ui.label("Takes effect on next launch.").classes("text-grey-7 text-xs q-mt-xs")
+
     # ── Google Account Tab (unified Gmail + Calendar) ──────────────
 
     def _build_google_account_panel() -> None:
