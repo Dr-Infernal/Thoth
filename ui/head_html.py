@@ -171,10 +171,20 @@ document.addEventListener('click', function(e) {
                 e.preventDefault();
                 var cmd = btn.dataset.cmd;
                 if (cmd === 'paste') {
-                    if (_ctxTarget) _ctxTarget.focus();
                     function _doInsert(t) {
+                        // Re-focus right before insertion — focus drifts during async clipboard read
                         var el = _ctxTarget || document.activeElement;
-                        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+                        if (!el) return;
+                        el.focus();
+                        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                            if (!document.execCommand('insertText', false, t)) {
+                                // execCommand failed — manipulate value directly
+                                var s = el.selectionStart || 0, end = el.selectionEnd || 0;
+                                el.value = el.value.substring(0, s) + t + el.value.substring(end);
+                                el.selectionStart = el.selectionEnd = s + t.length;
+                                el.dispatchEvent(new Event('input', {bubbles: true}));
+                            }
+                        } else if (el.isContentEditable) {
                             document.execCommand('insertText', false, t);
                         }
                     }
@@ -210,7 +220,9 @@ document.addEventListener('click', function(e) {
 
         document.addEventListener('contextmenu', function(e) {
             e.preventDefault();
-            _ctxTarget = document.activeElement;
+            // Use the actual right-clicked element — on macOS WKWebView,
+            // right-click does NOT move document.activeElement.
+            _ctxTarget = e.target.closest('input, textarea, [contenteditable]') || document.activeElement;
             var sel = window.getSelection().toString();
             var el = e.target.closest('input, textarea, [contenteditable]');
             menu.querySelectorAll('[data-cmd]').forEach(function(b) {
