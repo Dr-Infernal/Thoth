@@ -10,6 +10,7 @@ channels/whatsapp_bridge/package-lock.json
 
 # Secrets
 api_keys.json
+.env
 
 # Installer build artifacts
 installer/build/
