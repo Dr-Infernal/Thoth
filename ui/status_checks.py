@@ -115,6 +115,50 @@ def check_telegram() -> CheckResult:
         return CheckResult("Telegram", "error", str(exc), settings_tab="Channels")
 
 
+def check_channels() -> list[CheckResult]:
+    """Dynamic health checks for all registered channels."""
+    results = []
+    try:
+        from channels.registry import all_channels
+        for ch in all_channels():
+            try:
+                if not ch.is_configured():
+                    results.append(CheckResult(ch.display_name, "inactive",
+                                               "Not configured", settings_tab="Channels"))
+                elif ch.is_running():
+                    results.append(CheckResult(ch.display_name, "ok",
+                                               "Running", settings_tab="Channels"))
+                else:
+                    results.append(CheckResult(ch.display_name, "warn",
+                                               "Stopped", settings_tab="Channels"))
+            except Exception as exc:
+                results.append(CheckResult(ch.display_name, "error",
+                                           str(exc), settings_tab="Channels"))
+    except Exception:
+        pass
+    return results
+
+
+def check_tunnel() -> CheckResult:
+    """Health check for the tunnel subsystem."""
+    try:
+        from tunnel import tunnel_manager
+        if not tunnel_manager.is_available():
+            return CheckResult("Tunnel", "inactive", "Not configured",
+                               settings_tab="Channels")
+        active = tunnel_manager.active_tunnels()
+        if active:
+            urls = ", ".join(f"{p}\u2192{u}" for p, u in active.items())
+            return CheckResult("Tunnel", "ok",
+                               f"{len(active)} active: {urls}",
+                               settings_tab="Channels")
+        return CheckResult("Tunnel", "inactive", "Ready (no active tunnels)",
+                           settings_tab="Channels")
+    except Exception as exc:
+        return CheckResult("Tunnel", "error", str(exc),
+                           settings_tab="Channels")
+
+
 def check_gmail_oauth() -> CheckResult:
     """Check Gmail OAuth token health."""
     try:
@@ -388,7 +432,8 @@ ALL_CHECKS = [
     check_ollama,
     check_active_model,
     check_cloud_api,
-    check_telegram,
+    check_channels,
+    check_tunnel,
     check_gmail_oauth,
     check_calendar_oauth,
     check_task_scheduler,
@@ -408,7 +453,8 @@ ALL_CHECKS = [
 # Lightweight checks (just reading Python booleans — near zero cost)
 LIGHT_CHECKS = [
     check_active_model,
-    check_telegram,
+    check_channels,
+    check_tunnel,
     check_task_scheduler,
     check_tts,
     check_tools,
@@ -437,7 +483,11 @@ def run_all_checks() -> list[CheckResult]:
     results = []
     for fn in ALL_CHECKS:
         try:
-            results.append(fn())
+            result = fn()
+            if isinstance(result, list):
+                results.extend(result)
+            else:
+                results.append(result)
         except Exception as exc:
             results.append(CheckResult(fn.__name__, "error", str(exc)))
     return results
@@ -448,7 +498,11 @@ def run_light_checks() -> list[CheckResult]:
     results = []
     for fn in LIGHT_CHECKS:
         try:
-            results.append(fn())
+            result = fn()
+            if isinstance(result, list):
+                results.extend(result)
+            else:
+                results.append(result)
         except Exception as exc:
             results.append(CheckResult(fn.__name__, "error", str(exc)))
     return results

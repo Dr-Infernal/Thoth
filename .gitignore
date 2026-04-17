@@ -4,6 +4,10 @@ __pycache__/
 *.pyo
 .venv/
 
+# Node.js (WhatsApp bridge)
+channels/whatsapp_bridge/node_modules/
+channels/whatsapp_bridge/package-lock.json
+
 # Secrets
 api_keys.json
 

@@ -130,7 +130,7 @@ _YT_EMBED_RE = re.compile(
     r'\*{0,2}'                                        # optional leading **
     r'(?:\[([^\]]*)\]\()?'                            # optional [link text](
     r'https?://(?:www\.)?'
-    r'(?:youtube\.com/watch\?v=|youtu\.be/)'
+    r'(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)'
     r'([a-zA-Z0-9_-]{11})'                           # video id
     r'[^\s)\]]*'                                      # trailing query params
     r'(?:\))?'                                        # optional closing )

@@ -154,6 +154,33 @@ def get_and_clear_last_image() -> str | None:
     return img
 
 
+def _save_image_to_disk(b64_str: str, prefix: str = "gen") -> str | None:
+    """Persist generated/edited image to the per-thread media directory.
+
+    Returns the absolute path as a string, or None if saving fails.
+    Uses the media pipeline from threads.py (``save_media_file`` +
+    ``_next_media_filename``) so images survive reload and can be
+    referenced by tools like ``send_telegram_photo``.
+    """
+    try:
+        from agent import _current_thread_id_var
+        from threads import save_media_file, _next_media_filename
+
+        thread_id = _current_thread_id_var.get() or ""
+        if not thread_id:
+            logger.debug("_save_image_to_disk: no thread_id in context")
+            return None
+
+        filename = _next_media_filename(thread_id, prefix, "png")
+        img_bytes = base64.b64decode(b64_str)
+        saved_path = save_media_file(thread_id, filename, img_bytes)
+        logger.info("Saved generated image to %s", saved_path)
+        return str(saved_path)
+    except Exception:
+        logger.warning("Failed to save generated image to disk", exc_info=True)
+        return None
+
+
 # ── Provider resolution ──────────────────────────────────────────────────
 
 def _parse_model_config(value: str) -> tuple[str, str]:
@@ -357,10 +384,14 @@ def _generate_image(
         b64_str = base64.b64encode(img_bytes).decode("ascii")
         _last_generated_image = b64_str
         _image_cache["__last_generated__"] = img_bytes
-        return (
+        saved = _save_image_to_disk(b64_str, "gen")
+        result = (
             f"Image generated successfully. Model: {model} | "
             f"Aspect ratio: {aspect_ratio} | Provider: {provider_label}"
         )
+        if saved:
+            result += f"\nSaved to: {saved}"
+        return result
 
     # ── xAI provider ──────────────────────────────────────────────────────
     # xAI does NOT support 'size' or 'style'. Uses 'aspect_ratio' & 'resolution'.
@@ -400,11 +431,15 @@ def _generate_image(
 
         _last_generated_image = b64_str
         _image_cache["__last_generated__"] = base64.b64decode(b64_str)
+        saved = _save_image_to_disk(b64_str, "gen")
         disp_aspect = aspect if aspect != "auto" else "auto"
-        return (
+        result = (
             f"Image generated successfully. Model: {model} | "
             f"Aspect ratio: {disp_aspect} | Provider: {provider_label}"
         )
+        if saved:
+            result += f"\nSaved to: {saved}"
+        return result
 
     # ── OpenAI provider ──────────────────────────────────────────────────
     kwargs: dict = {
@@ -439,8 +474,11 @@ def _generate_image(
     # Also store in cache for edit_image "last" reference
     _image_cache["__last_generated__"] = base64.b64decode(b64_str)
 
+    saved = _save_image_to_disk(b64_str, "gen")
     revised_prompt = getattr(image_data, "revised_prompt", None)
     result = f"Image generated successfully. Model: {model} | Size: {kwargs['size']} | Provider: {provider_label}"
+    if saved:
+        result += f"\nSaved to: {saved}"
     if revised_prompt:
         result += f"\nRevised prompt: {revised_prompt}"
     return result
@@ -503,10 +541,14 @@ def _edit_image(
         b64_str = base64.b64encode(img_out).decode("ascii")
         _last_generated_image = b64_str
         _image_cache["__last_generated__"] = img_out
-        return (
+        saved = _save_image_to_disk(b64_str, "edit")
+        result = (
             f"Image edited successfully. Model: {model} | "
             f"Provider: {provider_label}"
         )
+        if saved:
+            result += f"\nSaved to: {saved}"
+        return result
 
     # ── xAI provider — uses JSON body with image URL, not multipart ─────
     if provider_id == "xai":
@@ -562,10 +604,14 @@ def _edit_image(
 
         _last_generated_image = b64_str
         _image_cache["__last_generated__"] = base64.b64decode(b64_str)
-        return (
+        saved = _save_image_to_disk(b64_str, "edit")
+        result = (
             f"Image edited successfully. Model: {model} | "
             f"Provider: {provider_label}"
         )
+        if saved:
+            result += f"\nSaved to: {saved}"
+        return result
 
     # ── OpenAI provider ──────────────────────────────────────────────────
     mime = _detect_mime(image_bytes)
@@ -600,8 +646,11 @@ def _edit_image(
     _last_generated_image = b64_str
     _image_cache["__last_generated__"] = base64.b64decode(b64_str)
 
+    saved = _save_image_to_disk(b64_str, "edit")
     revised_prompt = getattr(image_data, "revised_prompt", None)
     result = f"Image edited successfully. Model: {model} | Size: {kwargs['size']} | Provider: {provider_label}"
+    if saved:
+        result += f"\nSaved to: {saved}"
     if revised_prompt:
         result += f"\nRevised prompt: {revised_prompt}"
     return result

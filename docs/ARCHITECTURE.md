@@ -1,4 +1,4 @@
-# 𓁟 Thoth — Architecture & Detailed Design
+﻿# 𓁟 Thoth — Architecture & Detailed Design
 
 > Full technical reference for every feature, module, and subsystem in Thoth.
 > For a concise overview, see the [README](../README.md).
@@ -19,7 +19,10 @@
 - [Vision](#vision)
 - [Workflows & Scheduling](#workflows--scheduling)
 - [Messaging Channels](#messaging-channels)
+- [Tunnel Manager](#tunnel-manager)
 - [Image Generation](#image-generation)
+- [X (Twitter) Tool](#x-twitter-tool)
+- [Tool Guides](#tool-guides)
 - [Plugin System & Marketplace](#plugin-system--marketplace)
 - [Habit & Health Tracker](#habit--health-tracker)
 - [Desktop App](#desktop-app)
@@ -35,7 +38,7 @@
 ## ReAct Agent Architecture
 
 - **Autonomous tool use** — the agent decides which tools to call, when, and how many times, based on your question
-- **25 tools / 69 sub-tools** — web search, email, calendar, file management, shell access, browser automation, Telegram messaging, vision, image generation, memory, scheduled tasks, habit tracking, and more (see [Tools](#tools))
+- **25 tools / 79 sub-tools** — web search, email, calendar, file management, shell access, browser automation, 5 messaging channels (Telegram, WhatsApp, Discord, Slack, SMS), X (Twitter), vision, image generation, memory, scheduled tasks, habit tracking, and more (see [Tools](#tools))
 - **Streaming responses** — tokens stream in real-time with a typing indicator
 - **Thinking indicators** — shows when the model is reasoning before responding
 - **Smart context management** — automatic conversation summarization compresses older turns when token usage exceeds 80% of the context window, preserving the 5 most recent turns and a running summary; a hard trim at 85% drops oldest messages as a safety net; oversized tool outputs (e.g. large PDF reads) are proportionally shrunk so multi-tool chains fit within context; accurate token counting via tiktoken (cl100k_base)
@@ -266,23 +269,30 @@ Tasks have been renamed to **Workflows** throughout the application. The workflo
 
 ## Messaging Channels
 
-Thoth uses a generic **Channel ABC** — any messaging platform can plug in by subclassing `Channel`, declaring its capabilities, and registering itself. The system auto-generates LangChain tools and Settings UI for each registered channel.
+Thoth uses a generic **Channel ABC** — any messaging platform can plug in by subclassing `Channel`, declaring its capabilities, and registering itself. The system auto-generates LangChain tools, Settings UI, and health checks for each registered channel. Five channels ship out of the box: **Telegram**, **WhatsApp**, **Discord**, **Slack**, and **SMS**.
 
 ### Channel Architecture
 
-- **`Channel` ABC** — abstract base class all channel adapters inherit from; lifecycle methods `start()`, `stop()`, `is_configured()`, `is_running()`; outbound methods `send_message()`, `send_photo()`, `send_document()`, `send_approval_request()`; extensibility hooks `extra_tools()` and `build_custom_ui()`
-- **`ChannelCapabilities`** — declarative feature flags per channel: `photo_in`, `photo_out`, `voice_in`, `document_in`, `buttons`, `streaming`, `reactions`, `slash_commands`; the UI and tool factory read these to auto-generate tooling
+- **`Channel` ABC** — abstract base class all channel adapters inherit from; lifecycle methods `start()`, `stop()`, `is_configured()`, `is_running()`; outbound methods `send_message()`, `send_photo()`, `send_document()`, `send_approval_request()`; extensibility hooks `extra_tools()` and `build_custom_ui()`; `get_default_target()` for target resolution; `webhook_port` and `needs_tunnel` properties for tunnel integration
+- **`ChannelCapabilities`** — declarative feature flags per channel: `photo_in`, `photo_out`, `voice_in`, `document_in`, `buttons`, `streaming`, `typing`, `reactions`, `slash_commands`; the UI and tool factory read these to auto-generate tooling
 - **`ConfigField`** — describes user-configurable fields (name, label, type, required flag) that render automatically in the Settings UI
 - **Channel registry** — `register()` at import time, `all_channels()`, `running_channels()`, `configured_channels()`; central routing via `deliver(channel_name, target, text)` with validation; used by the task engine for delivery
-- **Shared media pipeline** — `channels/media.py` provides reusable media processing for any channel: `transcribe_audio()` (faster-whisper, OGG/MP3/WAV/WebM), `analyze_image()` (Vision service), `extract_document_text()` (PDF/CSV/JSON/plain-text with truncation), `save_inbound_file()` (persist to `~/.thoth/inbox/`)
-- **Tool factory** — `channels/tool_factory.py` auto-generates LangChain tools for each registered channel based on capabilities: `send_{name}_message`, `send_{name}_photo`, `send_{name}_document`; Pydantic input schemas; multi-strategy file path resolution (absolute, workspace-relative, tracker exports, cwd)
+- **Shared media pipeline** — `channels/media.py` provides reusable media processing for any channel: `transcribe_audio()` (faster-whisper, OGG/MP3/WAV/WebM), `analyze_image()` (Vision service), `extract_document_text()` (PDF/CSV/JSON/plain-text with truncation), `save_inbound_file()` (persist to `~/.thoth/inbox/`), `copy_to_workspace()` (copies received files into the filesystem-tool workspace under `Received Files/` with dedup)
+- **Shared utilities** — `channels/auth.py` (common auth helpers), `channels/commands.py` (slash command handling), `channels/approval.py` (approval routing), `channels/media_capture.py` (vision/image-gen capture helpers), `channels/thread_repair.py` (corrupt-thread detection for stuck tool-call errors)
+- **Tool factory** — `channels/tool_factory.py` auto-generates LangChain tools for each registered channel based on capabilities: `send_{name}_message`, `send_{name}_photo`, `send_{name}_document`; Pydantic input schemas; multi-strategy file path resolution (absolute, workspace-relative, tracker exports, cwd); target resolution delegates to each channel's `get_default_target()` method
+- **Channel tool injection** — `agent.py` iterates `running_channels()` at graph creation time and injects auto-generated channel tools into the LangChain tools list; each running channel contributes its send/photo/document tools dynamically
+- **Activity tracker** — `channels/base.py` maintains a module-level `_channel_activity` dict mapping channel names to epoch timestamps; `record_activity()` called by all 5 channel handlers on each inbound message; `get_last_activity()` read by the sidebar monitor
+- **YouTube URL extraction** — `channels/__init__.py` provides `extract_youtube_urls(text)` that strips YouTube URLs (including Shorts) from message text so they can be sent as separate messages for native platform previews
 - **Channel config** — per-channel key-value store in `~/.thoth/channels_config.json`
-- **Auto-start** — channels with `auto_start` enabled start automatically when Thoth launches
-- **Settings UI** — configure, start/stop, and manage channels from Settings → Channels tab
+- **Auto-start** — channels with `auto_start` enabled start automatically when Thoth launches; `app.py` imports all 5 channel adapters at startup
+- **Settings UI** — configure, start/stop, and manage channels from Settings → Channels tab; dynamic `_build_channel_panel(ch)` renders auto-generated config UI for any registered channel using `config_fields`
+- **Health checks** — `check_channels()` returns a `CheckResult` per channel (ok/warn/error/inactive); `check_tunnel()` reports tunnel status; both included in `ALL_CHECKS` and `LIGHT_CHECKS`
+- **Sidebar channel monitor** — live panel below the conversation list shows status dots (green = running, amber = stopped, grey = not configured), channel-specific icons, display names, and relative last-activity times ("2m ago", "1h ago"); 5-second polling timer; click any row to open Settings; channel pills filtered from the status bar to avoid duplication
 
 ### Telegram
 
 - **Full ReAct agent access** — messages processed by the full agent with all tools available; each chat gets its own conversation thread
+- **Streaming responses** — sends a "⏳" placeholder message, then progressively edits it with accumulated tokens and tool status lines via `_tg_edit_consumer()`; rate-limited edits (every 1.5s) to respect Telegram API limits; overflow protection falls back to split messages when text exceeds `MAX_TG_MESSAGE_LEN`
 - **Voice messages** — inbound voice/audio transcribed via faster-whisper through the shared media pipeline; transcript sent to agent as user text
 - **Photo messages** — inbound photos analyzed via Vision service; analysis sent to agent with optional caption
 - **Document handling** — inbound documents saved to `~/.thoth/inbox/`, text extracted (PDF, CSV, JSON, plain text), file path + extracted content + caption sent to agent as one message
@@ -291,11 +301,46 @@ Thoth uses a generic **Channel ABC** — any messaging platform can plug in by s
 - **Interrupt approval** — tool calls requiring human approval render as inline keyboard buttons (Approve / Deny)
 - **Multi-channel approval routing** — workflow approval gates send approval requests to Telegram with inline Approve / Deny buttons; responses routed back to the workflow engine
 - **Safety mode enforcement** — respects per-workflow safety mode settings; destructive tool calls in `require_approval` mode trigger approval requests via Telegram
-- **Proactive messaging** — the agent can send messages, photos, and documents to any Telegram chat via `send_telegram_message`, `send_telegram_photo`, `send_telegram_document`
+- **Proactive messaging** — the agent can send messages, photos, and documents to any Telegram chat via auto-generated channel tools
 - **`/model` command** — list and switch models (local or cloud) from within Telegram
-- **Auto-recovery** — handles orphaned tool calls gracefully; offers fresh thread on persistent failures; corrupt thread recovery with user-friendly messages
+- **Auto-recovery** — handles orphaned tool calls gracefully; offers fresh thread on persistent failures; corrupt thread recovery via shared `thread_repair` module
 - **HTML formatting** — responses formatted with Telegram-compatible HTML
 - **Bot commands** — registered with BotFather for discoverability
+
+### WhatsApp
+
+- **Baileys bridge** — Node.js bridge (`channels/whatsapp_bridge/bridge.js`) using Baileys v6 for WhatsApp Web protocol; communicates with the Python adapter via stdin/stdout JSON messages
+- **QR code pairing** — QR code displayed in Settings → Channels for scanning with WhatsApp mobile app; auth state persisted for reconnection
+- **Inbound media** — voice messages transcribed via faster-whisper; photos analyzed via Vision; documents saved and text extracted; all routed through the shared media pipeline
+- **YouTube rich previews** — YouTube URLs extracted from outbound messages and sent separately with native link preview metadata (oEmbed title/description + JPEG thumbnail) via Baileys `linkPreview` format; Shorts URLs supported
+- **Markdown-to-WhatsApp formatting** — converts Markdown bold/italic/code to WhatsApp-native formatting; table conversion for readability
+- **Streaming responses** — rate-limited message edits for progressive response display
+- **Typing indicators & reactions** — typing presence and emoji reactions on inbound messages
+- **Thread management** — `_get_or_create_thread` with "📲 WhatsApp conversation" naming; always bumps `updated_at` for sidebar ordering
+
+### Discord
+
+- **`discord.py` adapter** — DM-based messaging via Discord bot with OAuth bot token; numeric User ID gating via `_get_allowed_user_id()`
+- **Streaming responses** — progressive message edits in Discord DMs
+- **Reactions & typing** — emoji reactions and typing indicators
+- **Slash commands** — Discord slash command support via shared commands module
+- **Media support** — photo and document sending/receiving
+- **Thread management** — `_get_or_create_thread` with "🎮 Discord conversation" naming; always bumps `updated_at`
+
+### Slack
+
+- **`slack-bolt` adapter** — Socket Mode for zero-webhook operation (no public URL needed); DM-based messaging
+- **Streaming responses** — progressive updates via `chat.update` API
+- **Reactions & typing** — emoji reactions and typing indicators
+- **File uploads** — photo and document support via Slack Files API
+- **Thread management** — DM threading with sidebar thread list integration
+
+### SMS
+
+- **Twilio adapter** — inbound webhook receiver for incoming SMS/MMS; outbound via Twilio REST API
+- **MMS photo support** — send and receive photos via MMS
+- **Tunnel required** — needs a public URL for Twilio to deliver inbound messages; auto-integrates with the tunnel manager
+- **Thread management** — per-phone-number threads
 
 ### Gmail Tools
 
@@ -303,13 +348,57 @@ Thoth uses a generic **Channel ABC** — any messaging platform can plug in by s
 
 ---
 
+## Tunnel Manager
+
+A provider-agnostic tunnel infrastructure for exposing local webhook ports to the internet. Channels that need inbound webhooks (e.g. SMS/Twilio) use the tunnel manager to obtain public HTTPS URLs without manual port forwarding.
+
+- **`tunnel.py`** — `TunnelProvider` ABC that each backend implements; `NgrokProvider` concrete implementation using `pyngrok`; thread-safe `TunnelManager` singleton created at import time but dormant until first use
+- **Auto-lifecycle** — channels call `tunnel_manager.start_tunnel(port)` on start and `stop_tunnel(port)` on shutdown; multiple ports can be tunneled simultaneously
+- **Main app tunnel** — optional toggle to tunnel the main Thoth web UI port for remote access (with warning about UI exposure)
+- **Settings UI** — Tunnel Settings section in the Channels tab with provider picker (ngrok), auth token input, active tunnel display with port→URL mapping, and save button
+- **Health check** — `check_tunnel()` reports provider availability, active tunnel count and URLs, or "not configured" status
+
+---
+all running messaging channels retrieve the generated image from the side-channel and send it as a photo message
+- **Disk persistence** — `_save_image_to_disk()` writes every generated image to `~/.thoth/media/` with timestamped filenames; file path included in tool response so the agent can reference or re-send the image later
+## X (Twitter) Tool
+
+Full-featured X / Twitter integration with 13 tools for reading, posting, and managing content.
+
+- **13 tools** — `post_tweet`, `post_thread`, `reply_to_tweet`, `retweet`, `like_tweet`, `unlike_tweet`, `delete_tweet`, `get_tweet`, `get_user_tweets`, `search_tweets`, `get_user_profile`, `get_followers`, `get_following`
+- **OAuth 2.0 PKCE** — browser-based OAuth flow with PKCE challenge; tokens stored in `~/.thoth/x/`; auto-refresh with refresh tokens; revoke-and-reauth on persistent 403s
+- **Rate limiting** — per-endpoint rate tracking with configurable tier limits; `_check_rate_limit()` before every call; `_record_rate_usage()` after; proactive budget warnings injected into tool responses
+- **Tier detection** — auto-detects Free/Basic/Pro tier from API responses and adjusts rate limits accordingly; falls back to Free tier defaults
+- **Thread posting** — `post_thread` splits long content into a chain of reply tweets; returns all tweet IDs and URLs
+- **Media uploads** — `post_tweet` and `post_thread` accept image file paths; images uploaded via Twitter media API; multi-strategy path resolution (absolute, workspace-relative, tracker exports)
+- **Settings UI** — X / Twitter section in Settings → Accounts with OAuth connect/disconnect button, tier display, and rate limit status
+- **Graceful degradation** — all tools return structured error messages with remaining rate budget on failure; never raises to the agent
+
+---
+
+## Tool Guides
+
+A system for attaching contextual usage instructions to tools via lightweight SKILL.md files.
+or, charts, DuckDuckGo, filesystem, Gmail, image generation, memory, shell, Telegram, tracker, URL reader, and web search tools
+- **`tools` activation field** — each guide's SKILL.md frontmatter declares a `tools:` list; the guide is auto-activated when any listed tool appears in the agent's tool belt
+- **Prompt injection** — `prompts.py` scans active tool guides and injects their content into the system prompt, replacing hardcoded per-tool instructions
+- **Prompt cleanup** — old hardcoded tool instructions in `prompts.py` removed in favor of the guide system
+
+---
+
+#--
+
 ## Image Generation
+
+-# Image Generationall running messaging channels retrieve the generated image from the side-channel and send it as a photo message
+- **Disk persistence** — every generated image is saved to `~/.thoth/images/` with a timestamped filename; the chat UI links to the saved file so images survive page reloads and can be shared across channels
 
 - **Generate images** — create images from text prompts via OpenAI, xAI (Grok Imagine), and Google (Imagen 4, Nano Banana); supports OpenAI (`gpt-image-1`, `gpt-image-1.5`, `gpt-image-1-mini`), xAI (`grok-imagine-image` with quality-to-resolution mapping), and Google (`imagen-4.0-generate-001`, `imagen-4.0-fast-generate-001`, `imagen-4.0-ultra-generate-001`, plus Gemini image models via `generate_content` API) with configurable size and quality
 - **Edit images** — modify existing images with a text prompt; image sources: `"last"` (most recent generation), filename (from attachment cache), or file path on disk
 - **Side-channel rendering** — `_last_generated_image` global holds the base64 image data; the UI streaming layer picks it up and renders it inline in chat; automatically cleared after retrieval
 - **Attachment cache** — pasted and attached images are stored in `_image_cache` (populated by `ui/streaming.py`) so the agent can reference them by filename for editing
-- **Channel delivery** — Telegram (and future channels) retrieve the generated image from the side-channel and send it as a photo message
+- **Channel delivery** — all running messaging channels retrieve the generated image from the side-channel and send it as a photo message
+- **Disk persistence** — every generated image is saved to `~/.thoth/images/` with a timestamped filename; the chat UI links to the saved file so images survive page reloads and can be shared across channels
 - **Base64 data-URI** — auto-detects PNG/JPEG/WebP/GIF format from image bytes and renders with the correct MIME type
 - **Model selector** — configurable in Settings → Models; default `openai/gpt-image-1.5`
 
@@ -328,6 +417,8 @@ A sandboxed, hot-reloadable extension system that lets anyone add new tools and 
 - **Dependency safety** — freezes core dependency versions before installing plugin deps; blocks downgrades that could break Thoth
 - **State persistence** — enable/disable state, config values, and API key secrets stored in `plugin_state.json` and `plugin_secrets.json` (restricted file permissions) under `~/.thoth/`
 - **Hot reload** — "Reload Plugins" button in Settings clears the registry and re-runs discovery without restarting the app; agent cache is invalidated automatically
+- **External link handling** — `JsApi.open_url()` opens external links in the system browser instead of navigating the app webview; viewport lock prevents the webview from zooming or scrolling unexpectedly
+- **Paste fix** — clipboard paste support in the native webview (Ctrl+V / Cmd+V)
 - **Skill auto-discovery** — `SKILL.md` files in a plugin’s `skills/` directory are detected and injected into the agent’s system prompt alongside built-in skills
 - **Version gating** — plugins declare `min_thoth_version`; loader rejects incompatible plugins with a clear error message
 
@@ -339,7 +430,9 @@ A sandboxed, hot-reloadable extension system that lets anyone add new tools and 
 - **Auto-reload** — after marketplace install/update, plugins are automatically reloaded and agent cache cleared so new tools are available immediately
 - **Update detection** — `check_updates()` compares installed versions against the marketplace index
 
-### Plugin Settings UI
+### External link handling** — `JsApi.open_url()` opens external links in the system browser instead of navigating the app webview; viewport lock prevents the webview from zooming or scrolling unexpectedly
+- **Paste fix** — clipboard paste support in the native webview (Ctrl+V / Cmd+V)
+- **Plugin Settings UI
 
 - **Card grid** — each plugin rendered as a card with icon, name, version badge, description, tool/skill count badges, and enable/disable toggle
 - **Missing API key warnings** — cards show a warning badge when required secrets are not configured
@@ -350,8 +443,11 @@ A sandboxed, hot-reloadable extension system that lets anyone add new tools and 
 
 - **`app.py`** — calls `load_plugins()` asynchronously at startup; logs loaded/failed counts; surfaces failures as startup warnings
 - **`agent.py`** — injects plugin tools into the LangChain tools list and plugin skills into the system prompt; `clear_agent_cache()` ensures new tools take effect after reload
-- **`ui/settings.py`** — wires the Plugins tab and marketplace dialog button
-
+- **`ui/settings.py`** — wires the Pluand YouTube Shorts links in responses are rendered as playable embedded videos; Shorts URLs normalized to standard embed format
+- **Syntax-highlighted code blocks** — fenced code blocks render with language-aware highlighting and a built-in copy button
+- **Modern chat input** — redesigned input area with a card-based layout: rounded input field with attachment button (left), send button (right), and model selector pill below; replaces the previous flat textarea
+- **Finish-reason truncation warning** — when a model response is cut short by token limits (`finish_reason: length`), a warning banner appears below the message explaining the truncation
+- **Auto-scroll fix** — wheel and touch events on the chat container properly cancel auto-scroll to prevent the view from jumping while the user is reading
 ---
 
 ## Habit & Health Tracker
@@ -422,8 +518,9 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 | **☀️ Daily Briefing** | Compile a morning briefing with weather, calendar, and news headlines |
 | **🔬 Deep Research** | Perform multi-source research on a topic and produce a structured report |
 | **🗣️ Humanizer** | Write in a natural, human tone — no AI-speak, no filler, no corporate fluff |
-| **📋 Meeting Notes** | Structure raw meeting notes into actionable minutes with follow-ups |
-| **🎯 Proactive Agent** | Anticipate user needs, ask clarifying questions, and self-check work at milestones |
+| **📋 Meeting Notes** | Structure raw meeting notes into actionable minutes with follow-ups | with `JsApi` for external link handling and viewport lock
+| **13 tool guides** — lightweight skill files in `tool_guides/` that attach contextual usage instructions to specific tools; auto-activated via the `tools:` frontmatter field when the corresponding tool is in the agent's tool belt; covers browser, calculator, charts, DuckDuckGo, filesystem, Gmail, image generation, memory, shell, Telegram, tracker, URL reader, and web search
+- **🎯 Proactive Agent** | Anticipate user needs, ask clarifying questions, and self-check work at milestones |
 | **🪞 Self-Reflection** | Periodically review memory for contradictions, gaps, and stale information |
 | **⚙️ Task Automation** | Design effective advanced workflows with step pipelines, conditions, approval gates, and delivery channels |
 | **🌐 Web Navigator** | Strategic patterns for effective browser automation — research, forms, and data extraction |
@@ -435,7 +532,7 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 - **Tool-aware** — each skill declares which tools it needs; the agent knows what capabilities are available for each skill
 - **Versioned & tagged** — skills carry version numbers and tags for organization
 
----
+--- and finish-reason detection (truncation warnings) with modern card-based input layout, sidebar thread manager with live token counter, approval badge, and channel monitor panel (status dots, activity times, 5s polling), Settings dialog (13 tabs including Cloud, Plugins, and Channels with tunnel settings), tabbed home screen (Workflows + Activity + Knowledge graph), pending approvals panel, extraction journal viewer, dream journal viewer, status monitor panel with animated avatar, 17 health-check pills, and diagnosis button (`status_bar.py` + `status_checks.py`), Workflow Edit dialog with Simple/Advanced mode toggle and step-builder UI with Mermaid flow preview, file attachment handling with clipboard paste and drag-and-drop, streaming event loop with error recovery and finish-reason truncation warnings
 
 ## Core Modules
 
@@ -449,18 +546,21 @@ Skills are reusable instruction packs that shape how the agent thinks and respon
 | **`wiki_vault.py`** | Obsidian-compatible markdown vault export — per-entity articles with YAML frontmatter, wiki-links, type-based directory grouping, per-type and master indexes, full-text search, conversation export, live export on save/delete |
 | **`dream_cycle.py`** | 4-phase nightly knowledge refinement daemon — duplicate merge (≥0.93 similarity), description enrichment from conversation context, relationship inference with hub diversity cap, batch rotation, 7-day rejection cache, pre-flight merge check, Ollama busy check, and confidence decay on stale relations; three-layer anti-contamination, configurable dream window, dream journal logging |
 | **`document_extraction.py`** | Background map-reduce LLM pipeline for document knowledge extraction — split → summarize → extract entities with source provenance; curated 67-type relation vocabulary, entity cap (12), min description length (30 chars), hub entity dedup, quality gates; queue-based with live progress in status bar |
-| **`models.py`** | Ollama + cloud model management — local model listing/downloading/switching, cloud provider support (OpenAI, Anthropic via ChatAnthropic, Google AI via ChatGoogleGenerativeAI, xAI via ChatXAI, OpenRouter via ChatOpenRouter), starred models, context-size catalog with xAI Grok 2M-token entries, model override routing, cloud vision detection, reasoning model support (`reasoning=True` for thinking models) |
+| **`models.py`** | Ollama + cloud model management — local model listing/downloading/switching, clo with `JsApi` for external link handling and viewport lockud provider support (OpenAI, Anthropic via ChatAnthropic, Google AI via ChatGoogleGenerativeAI, xAI via ChatXAI, OpenRouter via ChatOpenRouter), starred models, context-size catalog with xAI Grok 2M-token entries, model override routing, cloud vision detection, reasoning model support (`reasoning=True` for thinking models) |
 | **`documents.py`** | Document ingestion — PDF/DOCX/TXT/Markdown/HTML/EPUB loading, chunking, FAISS embedding and storage; per-document removal with source cleanup |
-| **`voice.py`** | Local STT pipeline — toggle-based 4-state machine (stopped/listening/transcribing/muted) with faster-whisper CPU-only int8 transcription |
+| **`voice.py`** | Local STT pipeline — toggle-based 4-state machine (stopped/listening/transcribing/muted) with faster-whisper CPU-only int8 transcripti with tool guide injection replacing hardcoded per-tool instructionson |
 | **`tts.py`** | Kokoro TTS integration — cross-platform neural TTS, model auto-downloaded on first use (~169 MB), 10 built-in voices, streaming sentence-by-sentence playback |
 | **`vision.py`** | Camera/screen capture via OpenCV/MSS, workspace image file analysis, image analysis via local or cloud vision models |
 | **`data_reader.py`** | Shared pandas-based reader for CSV, TSV, Excel, JSON, JSONL — returns schema + stats + preview rows |
 | **`launcher.py`** | Desktop launcher — system tray (pystray), native window management (pywebview), two-tier splash screen (tkinter with console fallback), manages NiceGUI server lifecycle; structured logging to `~/.thoth/thoth_app.log` |
 | **`api_keys.py`** | API key management — tool keys from `~/.thoth/api_keys.json`, cloud LLM provider keys and starred models from `~/.thoth/cloud_config.json` |
-| **`prompts.py`** | Centralized LLM prompts — system prompt (with BUILDING CONNECTIONS, EXPLORING CONNECTIONS, and BACKGROUND TASK PERMISSIONS sections), extraction prompt (triple-based with User entity convention, 10 entity types, vague-type banning, relation taxonomy, and explicit DO NOT EXTRACT exclusions), summarization prompt, dream cycle prompts (merge/enrich/infer with `uses` rule tightening and multi-excerpt evidence), document extraction prompts (map/reduce/extract with curated relation vocabulary and 0.80 confidence floor alignment), prompt-injection defence layers (instruction override, role impersonation, data exfiltration, encoding evasion, social engineering); memory guidelines with dedup, update, and cross-entity overwrite guard |
+| **`prompts.py`** | Centralized LLM prompts — system prompt (with BUILDING CONNECTIONS, EXP (`get_default_target()`, `webhook_port`, `needs_tunnel`), channel registry with auto-start and delivery routing, activity tracker (`record_activity`/`get_last_activity`), shared media pipeline (transcribe/analyze/extract/save/`copy_to_workspace`), shared utilities (`auth.py`, `commands.py`, `approval.py`, `media_capture.py`, `thread_repair.py`), YouTube URL extraction, tool factory for auto-generated LangChain tools per channel with `get_default_target()` delegation; 5 adapters: Telegram (streaming, voice/photo/document inbound, emoji reactions, interrupt buttons, multi-channel approval, safety mode, image gen delivery, `/model`, HTML formatting), WhatsApp (Baileys bridge, QR pairing, YouTube rich previews, Markdown-to-WhatsApp formatting, streaming), Discord (`discord.py`, DM-based, streaming, reactions, slash commands), Slack (`slack-bolt`, Socket Mode, streaming, file uploads), SMS (Twilio, webhook, MMS, tunnel integration); sidebar channel monitor with live status dots and activity times |
+| **`tunnel.py`** | Provider-agnostic tunnel infrastructure — `TunnelProvider` ABC, `NgrokProvider` (pyngrok), `TunnelManager` singleton; auto-lifecycle for channel webhooks, orphan cleanup, graceful shutdown, main app tunnel toggle, Settings UI, health check |
+| **`tools/x_tool.py`** | X (Twitter) integration — 13 tools (post/reply/retweet/like/unlike/delete/get/search/profile/followers/following), OAuth 2.0 PKCE flow, per-endpoint rate limiting, tier detection (Free/Basic/Pro), media uploads, thread posting, Settings Accounts panellation vocabulary and 0.80 confidence floor alignment), prompt-injection defence layers (instruction override, role impersonation, data exfiltration, encoding evasion, social engineering); memory guidelines with dedup, update, and cross-entity overwrite guard |
 | **`memory_extraction.py`** | Background memory extraction — scans past conversations via LLM, extracts entities and relations as structured triples, two-pass dedup (entities with alias merging, then relations with subject-to-ID resolution), vague-type banning, relation pre-normalisation, cross-source merge protection (0.90 threshold), User entity pre-population, excludes active and workflow (⚡) threads, assistant message truncation (200 chars), 0.80 confidence floor, runs on startup + every 6 hours |
-| **`skills.py`** | Skills engine — discovers, loads, and caches bundled and user skill definitions from `SKILL.md` files with YAML frontmatter; builds prompt text for enabled skills injected into the system prompt; config persistence in `~/.thoth/skills_config.json` |
-| **`bundled_skills/`** | 10 built-in skill packages (Brain Dump, Daily Briefing, Data Analyst, Deep Research, Humanizer, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) — each a directory containing a `SKILL.md` instruction file |
+| **`skills.py`** | Skills engine — discovers, loads, and caches bundled skills, tool guides, and user skill definitions from `SKILL.md` files with YAML frontmatter; tool guides (skills with a `tools:` list) auto-activate when their linked tool is enabled and are always injected into the system prompt; manual skills are user-toggled and shown in the Skills tab; builds prompt text for injection; config persistence in `~/.thoth/skills_config.json` |
+| **`bundled_skills/`** | 11 built-in manual skill packages (Brain Dump, Daily Briefing, Data Analyst, Deep Research, Humanizer, Knowledge Base, Meeting Notes, Proactive Agent, Self-Reflection, Task Automation, Web Navigator) — each a directory containing a `SKILL.md` instruction file |
+| **`tool_guides/`** | 13 built-in tool guide packages (Browser, Calendar, Chart, Email, Filesystem, Math, Shell, Telegram, Tracker, Vision, Weather, Wiki, X) — auto-activated when their linked tool is enabled; invisible to the user in the Skills tab |
 | **`tasks.py`** | Workflow engine — SQLite CRUD, APScheduler integration, 7 schedule types, template variable expansion, step-based pipelines (5 step types: Prompt, Condition, Approval, Subtask, Notify), conditional branching, approval gates, webhook triggers, task-completion triggers, concurrency groups, safety mode, sequential prompt execution, background runner with threading, channel delivery (any registered channel), per-task model override, persistent threads, notify-only mode, skills override, run history persistence, task stop/cancel, auto-migration from workflows.db, 5 default templates, per-task `allowed_commands` and `allowed_recipients` permission fields |
 | **`notifications.py`** | Unified notification system — desktop notifications (plyer), sound effects, and in-app toast queue with `toast_type` support (positive/negative); error toasts render as persistent red banners; coordinates task completion chimes, timer alerts, and approval gate notifications |
 | **`channels/`** | Messaging channel framework — `Channel` ABC with capability declarations, channel registry with auto-start and delivery routing, shared media pipeline (transcribe/analyze/extract/save), tool factory for auto-generated LangChain tools per channel, per-channel config store; Telegram adapter with voice/photo/document inbound, emoji reactions, interrupt buttons, multi-channel approval routing, safety mode enforcement, image gen delivery, `/model` command, and HTML formatting |
@@ -486,19 +586,20 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 ├── dream_rejections.json   # Dream Cycle 7-day rejection cache for inference pairs
 ├── api_keys.json           # API keys (Tavily, Wolfram, etc.)
 ├── cloud_config.json       # Cloud LLM provider keys and starred models
-├── app_config.json         # Onboarding / first-run state
-├── tools_config.json       # Tool enable/disable state & config
-├── model_settings.json     # Selected model & context size
-├── tts_settings.json       # Selected TTS voice
-├── vision_settings.json    # Vision model & camera selection
-├── voice_settings.json     # Whisper model size preference
-├── processed_files.json    # Tracks indexed documents
-├── tasks.db                # Task definitions, schedules, run history & delivery config
-├── channels_config.json    # Channel settings (Telegram auto-start, per-channel config)
+├── app_config.json         # Onboarding / firstauto-start, per-channel config for all 5 adapters, tunnel config)
 ├── inbox/                  # Inbound files received via messaging channels
 ├── shell_history.json      # Shell command history per thread
 ├── skills_config.json      # Skill enable/disable state
 ├── user_config.json        # Avatar emoji & ring color preferences
+├── thoth_app.log           # Application log (structured, timestamped)
+├── splash.log              # Splash screen diagnostic log
+├── tracker/
+│   ├── tracker.db          # Habit/health tracker data (trackers + entries)
+│   └── exports/            # CSV exports from trend analysis queries
+├── vector_store/           # FAISS index for uploaded documents
+├── gmail/                  # Gmail OAuth tokens
+├── calendar/               # Calendar OAuth tokens
+├── x/                      # X (Twitter) OAuth tokens and auth stateolor preferences
 ├── thoth_app.log           # Application log (structured, timestamped)
 ├── splash.log              # Splash screen diagnostic log
 ├── tracker/
@@ -527,7 +628,7 @@ All user data is stored in `~/.thoth/` (`%USERPROFILE%\.thoth\` on Windows):
 Most open-source AI assistants are **developer tools disguised as products** — CLI-first, config-file-driven, Linux-only, and held together with Docker, YAML, and `.env` files. Getting them running means cloning repos, editing configs, wiring up databases, and debugging dependency conflicts before you can ask a single question.
 
 **Thoth is different.** One-click installer, native desktop GUI, works out of the box on Windows and macOS, zero accounts required. Install it, launch it, start talking. No terminal expertise needed, no Docker, no YAML — just a private AI assistant that works.
-
+7
 ### Why not just use ChatGPT?
 
 | | ChatGPT / Claude / Gemini | Thoth |
@@ -548,8 +649,8 @@ Most open-source AI assistants are **developer tools disguised as products** —
 [OpenClaw](https://github.com/openclaw/openclaw) is the most popular open-source personal AI assistant (~350k stars). It's a powerful multi-channel gateway built for developers comfortable in the terminal. Here's how the two compare:
 
 | | Thoth | OpenClaw |
-|---|---|---|
-| **Getting started** | **One-click installer** (`.exe` / `.dmg`) — download, run, done. Built-in setup wizard, no terminal required | `npm install -g openclaw@latest` → CLI onboarding. Requires Node.js 24. Windows needs WSL2 (no native Windows support) |
+|---|---|---|79 sub-operations — Gmail, Calendar, Arxiv, YouTube, Wolfram Alpha, Plotly charts, wiki vault, habit tracker, image generation, X (Twitter)
+| **Getting started** | **O**5 channels** — Telegram, WhatsApp (Baileys bridge), Discord, Slack (Socket Mode), SMS (Twilio) + Gmail. Tunnel manager for webhook channels. Sidebar channel monitor with live statusnpm install -g openclaw@latest` → CLI onboarding. Requires Node.js 24. Windows needs WSL2 (no native Windows support) |
 | **Local AI (offline)** | **Local-first** — Ollama with 39 curated models out of the box. Works fully offline. Cloud is opt-in | Cloud-first design — requires an API key to start. Local model support through provider config |
 | **Memory** | **Personal knowledge graph** — 10 entity types, typed directional relations, visual explorer, FAISS semantic search + 1-hop graph expansion, memory decay, orphan repair | Flat markdown files (`MEMORY.md` + daily notes) with semantic search. No structured graph |
 | **Knowledge refinement** | **Dream Cycle** — 4-phase nightly engine: duplicate merging (≥0.93 similarity), description enrichment, relationship inference with hub diversity caps and rejection cache, confidence decay on stale relations. 3-layer anti-contamination system, dream journal | Dreaming (experimental) — Light/Deep/REM phases that promote short-term signals to long-term memory via scoring thresholds |

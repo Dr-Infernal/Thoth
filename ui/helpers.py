@@ -820,11 +820,18 @@ def _pick_file_native(
             script += f' default location POSIX file "{initial_dir}"'
         if filetypes:
             exts = []
+            uti_map = {"json": "public.json", "txt": "public.plain-text",
+                       "csv": "public.comma-separated-values-text",
+                       "pdf": "com.adobe.pdf", "png": "public.png",
+                       "jpg": "public.jpeg", "jpeg": "public.jpeg"}
             for _, pattern in filetypes:
                 for part in pattern.replace(";", " ").split():
                     ext = part.strip().lstrip("*.").lower()
                     if ext:
                         exts.append(f'"{ext}"')
+                        uti = uti_map.get(ext)
+                        if uti:
+                            exts.append(f'"{uti}"')
             if exts:
                 script += f' of type {{{", ".join(exts)}}}'
         script += ')'

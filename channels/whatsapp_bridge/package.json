@@ -1,0 +1,16 @@
+{
+  "name": "thoth-whatsapp-bridge",
+  "version": "2.0.0",
+  "type": "module",
+  "description": "WhatsApp bridge for Thoth AI assistant (Baileys)",
+  "main": "bridge.js",
+  "private": true,
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.16",
+    "@hapi/boom": "^10.0.1",
+    "pino": "^9.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

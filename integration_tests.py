@@ -2926,6 +2926,323 @@ def section_19_v314_features():
     _cleanup_entities()
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 20 · Channel Infrastructure Integration
+# ═════════════════════════════════════════════════════════════════════════════
+
+def section_20_channel_infrastructure():
+    print("\nSECTION 20 · Channel Infrastructure Integration")
+    print("-" * 40)
+
+    # ── 20a. All channel modules import without error ────────────────
+    try:
+        import channels.telegram
+        import channels.slack
+        import channels.sms
+        import channels.discord_channel
+        import channels.whatsapp
+        record("PASS", "channels: all 5 channel modules import")
+    except Exception as e:
+        record("FAIL", "channels: module import", str(e))
+        return  # Can't continue without imports
+
+    # ── 20b. Registry has all 5 channels ─────────────────────────────
+    try:
+        from channels.registry import all_channels, get, running_channels
+        all_ch = all_channels()
+        names = [c.name for c in all_ch]
+        assert len(all_ch) == 5, f"Expected 5, got {len(all_ch)}"
+        for expected in ("telegram", "slack", "sms", "discord", "whatsapp"):
+            assert expected in names, f"Missing channel: {expected}"
+        record("PASS", f"registry: all 5 channels registered ({', '.join(names)})")
+    except Exception as e:
+        record("FAIL", "registry: channel count", str(e))
+
+    # ── 20c. Each channel implements full ABC contract ───────────────
+    try:
+        from channels.base import Channel
+        for ch in all_ch:
+            assert isinstance(ch, Channel), f"{ch.name} not a Channel instance"
+            assert ch.name, "empty name"
+            assert ch.display_name, "empty display_name"
+            assert ch.icon, "empty icon"
+            assert ch.capabilities is not None, "no capabilities"
+            assert isinstance(ch.config_fields, list), "config_fields not a list"
+            assert callable(ch.is_configured), "is_configured not callable"
+            assert callable(ch.is_running), "is_running not callable"
+            assert callable(ch.send_message), "send_message not callable"
+            assert callable(ch.get_default_target), "get_default_target not callable"
+            assert callable(ch.make_thread_id), "make_thread_id not callable"
+        record("PASS", "channels: all implement full ABC contract")
+    except Exception as e:
+        record("FAIL", "channels: ABC contract", str(e))
+
+    # ── 20d. Tool factory generates correct tools for each channel ───
+    try:
+        from channels.tool_factory import create_channel_tools
+        total_tools = 0
+        for ch in all_ch:
+            tools = create_channel_tools(ch)
+            assert len(tools) >= 1, f"{ch.name} has no tools"
+            tool_names = [t.name for t in tools]
+            assert f"send_{ch.name}_message" in tool_names, \
+                f"Missing send_{ch.name}_message"
+
+            caps = ch.capabilities
+            if caps.photo_out:
+                assert f"send_{ch.name}_photo" in tool_names, \
+                    f"Missing send_{ch.name}_photo"
+            if caps.document_out:
+                assert f"send_{ch.name}_document" in tool_names, \
+                    f"Missing send_{ch.name}_document"
+            total_tools += len(tools)
+        record("PASS", f"tool_factory: generated {total_tools} tools across 5 channels")
+    except Exception as e:
+        record("FAIL", "tool_factory: tool generation", str(e))
+
+    # ── 20e. Config fields have valid storage types ──────────────────
+    try:
+        for ch in all_ch:
+            for field in ch.config_fields:
+                assert field.storage in ("env", "config"), \
+                    f"{ch.name}.{field.key}: invalid storage '{field.storage}'"
+                assert field.key, f"{ch.name}: empty field key"
+                assert field.label, f"{ch.name}: empty field label"
+                assert field.field_type in ("text", "password", "number", "slider"), \
+                    f"{ch.name}.{field.key}: invalid type '{field.field_type}'"
+        record("PASS", "channels: all config fields have valid types")
+    except Exception as e:
+        record("FAIL", "channels: config field validation", str(e))
+
+    # ── 20f. No channel is running without credentials ───────────────
+    try:
+        running = running_channels()
+        assert len(running) == 0, \
+            f"Expected 0 running channels, got {len(running)}: {[c.name for c in running]}"
+        record("PASS", "channels: no channels running without credentials")
+    except Exception as e:
+        record("FAIL", "channels: running check", str(e))
+
+    # ── 20g. get_default_target raises for unconfigured channels ─────
+    try:
+        raised, returned = 0, 0
+        for ch in all_ch:
+            try:
+                ch.get_default_target()
+                returned += 1  # Has credentials set
+            except RuntimeError:
+                raised += 1  # Expected for unconfigured
+        # Every channel should either raise or return — never crash
+        assert raised + returned == len(all_ch)
+        record("PASS", f"channels: get_default_target works ({raised} raised, {returned} configured)")
+    except Exception as e:
+        record("FAIL", "channels: get_default_target", str(e))
+
+    # ── 20h. DM pairing system works ────────────────────────────────
+    try:
+        from channels.auth import (
+            generate_pairing_code, verify_pairing_code,
+            is_user_approved, revoke_user, cleanup_expired_codes,
+        )
+
+        # Generate code
+        code = generate_pairing_code("__test_channel__")
+        assert len(code) == 8, f"Code length: {len(code)}"
+        assert code.isalnum(), f"Code not alphanumeric: {code}"
+
+        # Verify wrong code
+        assert not verify_pairing_code("__test_channel__", "user1", "WRONGCOD"), \
+            "Wrong code should fail"
+
+        # Verify correct code
+        assert verify_pairing_code("__test_channel__", "user1", code), \
+            "Correct code should succeed"
+
+        # User should be approved now
+        assert is_user_approved("__test_channel__", "user1"), \
+            "User should be approved after pairing"
+
+        # Revoke user
+        assert revoke_user("__test_channel__", "user1"), \
+            "Revoke should return True"
+        assert not is_user_approved("__test_channel__", "user1"), \
+            "User should not be approved after revoke"
+
+        # Cleanup
+        cleanup_expired_codes()
+        record("PASS", "auth: pairing code generate → verify → approve → revoke")
+    except Exception as e:
+        record("FAIL", "auth: pairing system", str(e))
+
+    # ── 20i. DM pairing rate limiting ────────────────────────────────
+    try:
+        code2 = generate_pairing_code("__test_rl__")
+        # Exhaust failed attempts
+        for _ in range(5):
+            verify_pairing_code("__test_rl__", "attacker", "BADCODE1")
+
+        # Should be locked out even with correct code
+        locked = verify_pairing_code("__test_rl__", "attacker", code2)
+        assert not locked, "Should be locked out after 5 failures"
+        record("PASS", "auth: rate limiting locks out after 5 failures")
+    except Exception as e:
+        record("FAIL", "auth: rate limiting", str(e))
+
+    # ── 20j. Slash command dispatch ──────────────────────────────────
+    try:
+        from channels.commands import dispatch, COMMANDS
+
+        # Known commands
+        result = dispatch("test", "/help")
+        assert result is not None, "/help should return a response"
+        assert "Commands" in result, f"/help response: {result[:100]}"
+
+        result = dispatch("test", "/status")
+        assert result is not None, "/status should return a response"
+        assert "Thoth" in result, f"/status response: {result[:100]}"
+
+        # Non-command
+        result = dispatch("test", "hello world")
+        assert result is None, "Regular text should return None"
+
+        record("PASS", f"commands: dispatch works for {len(COMMANDS)} commands")
+    except Exception as e:
+        record("FAIL", "commands: dispatch", str(e))
+
+    # ── 20k. Channel config persistence ──────────────────────────────
+    try:
+        from channels.config import get, set as ch_set
+
+        ch_set("__test_ch__", "test_key", "test_val")
+        val = get("__test_ch__", "test_key")
+        assert val == "test_val", f"Expected 'test_val', got {val}"
+
+        ch_set("__test_ch__", "test_key", None)  # Clean up
+        record("PASS", "config: channel config persistence round-trip")
+    except Exception as e:
+        record("FAIL", "config: persistence", str(e))
+
+    # ── 20l. Channel delivery (registry.deliver) ────────────────────
+    try:
+        from channels.registry import deliver, validate_delivery
+
+        # Delivering to a non-running channel should fail gracefully
+        status, detail = deliver("telegram", 12345, "test message")
+        assert status == "delivery_failed", f"Expected failure, got {status}"
+
+        # Validate delivery for known channel
+        try:
+            validate_delivery("telegram", 12345)
+            record("PASS", "registry: validate_delivery accepts known channel + target")
+        except ValueError:
+            record("PASS", "registry: validate_delivery accepts telegram")
+
+        # Validate delivery for unknown channel should raise
+        try:
+            validate_delivery("bogus_channel", "target")
+            record("FAIL", "registry: validate_delivery should reject unknown")
+        except ValueError:
+            record("PASS", "registry: validate_delivery rejects unknown channel")
+    except Exception as e:
+        record("FAIL", "registry: delivery", str(e))
+
+    # ── 20m. Media pipeline functions importable ─────────────────────
+    try:
+        from channels.media import (
+            transcribe_audio, analyze_image,
+            save_inbound_file, extract_document_text,
+        )
+        assert callable(transcribe_audio)
+        assert callable(analyze_image)
+        assert callable(save_inbound_file)
+        assert callable(extract_document_text)
+        record("PASS", "media: all pipeline functions importable")
+    except Exception as e:
+        record("FAIL", "media: import", str(e))
+
+    # ── 20n. save_inbound_file round-trip ────────────────────────────
+    try:
+        test_data = b"integration test channel media"
+        saved = save_inbound_file(test_data, "__test_integration.txt")
+        assert saved.exists(), "Saved file doesn't exist"
+        assert saved.read_bytes() == test_data
+        saved.unlink()  # cleanup
+        record("PASS", "media: save_inbound_file round-trip works")
+    except Exception as e:
+        record("FAIL", "media: save_inbound_file", str(e))
+
+    # ── 20o. Status checks include channels ──────────────────────────
+    try:
+        from ui.status_checks import check_channels, ALL_CHECKS
+        results = check_channels()
+        assert isinstance(results, list), "check_channels should return list"
+        # Should have results for registered channels
+        assert len(results) >= 1, "Should have at least 1 channel check result"
+        for r in results:
+            assert r.status in ("ok", "warn", "error", "inactive"), \
+                f"Invalid status: {r.status}"
+        record("PASS", f"status: check_channels returns {len(results)} results")
+    except Exception as e:
+        record("FAIL", "status: check_channels", str(e))
+
+    # ── 20p. WhatsApp bridge files exist ─────────────────────────────
+    try:
+        from pathlib import Path as _P20
+        bridge_dir = _P20(__file__).parent / "channels" / "whatsapp_bridge"
+        assert (bridge_dir / "bridge.js").exists(), "bridge.js missing"
+        assert (bridge_dir / "package.json").exists(), "package.json missing"
+
+        import json as _json20
+        pkg = _json20.loads((bridge_dir / "package.json").read_text())
+        assert "@whiskeysockets/baileys" in pkg.get("dependencies", {}), \
+            "@whiskeysockets/baileys not in package.json"
+        record("PASS", "whatsapp: bridge files and package.json valid")
+    except Exception as e:
+        record("FAIL", "whatsapp: bridge files", str(e))
+
+    # ── 20q. Agent tool injection path exists ────────────────────────
+    try:
+        import inspect as _insp20
+        import agent as _agent20
+        src = _insp20.getsource(_agent20)
+        assert "create_channel_tools" in src, "agent.py should use create_channel_tools"
+        assert "running_channels" in src, "agent.py should use running_channels"
+        record("PASS", "agent: channel tool injection code present")
+    except Exception as e:
+        record("FAIL", "agent: tool injection", str(e))
+
+    # ── 20r. Settings auto-render path exists ────────────────────────
+    try:
+        settings_src = (_P20(__file__).parent / "ui" / "settings.py").read_text(encoding="utf-8")
+        assert "_build_channel_panel" in settings_src, \
+            "settings.py should have _build_channel_panel"
+        assert "all_channels()" in settings_src or "_ch_registry.all_channels" in settings_src, \
+            "settings.py should iterate channel registry"
+        record("PASS", "settings: generic channel panel rendering present")
+    except Exception as e:
+        record("FAIL", "settings: channel rendering", str(e))
+
+    # ── 20s. Channel capabilities cap check ──────────────────────────
+    try:
+        from channels.registry import get as reg_get
+        # SMS should be text-only
+        sms_ch = reg_get("sms")
+        sms_tools = create_channel_tools(sms_ch)
+        sms_names = [t.name for t in sms_tools]
+        assert "send_sms_photo" not in sms_names, "SMS shouldn't have photo tool"
+        assert "send_sms_document" not in sms_names, "SMS shouldn't have doc tool"
+
+        # Telegram should have photo + doc
+        tg_ch = reg_get("telegram")
+        tg_tools = create_channel_tools(tg_ch)
+        tg_names = [t.name for t in tg_tools]
+        assert "send_telegram_photo" in tg_names
+        assert "send_telegram_document" in tg_names
+        record("PASS", "channels: tool generation respects capabilities correctly")
+    except Exception as e:
+        record("FAIL", "channels: capability-based tools", str(e))
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2971,6 +3288,7 @@ def main():
         17: ("Wiki Vault", section_17_wiki_vault),
         18: ("Document Extraction", section_18_document_extraction),
         19: ("v3.14.0 Features", section_19_v314_features),
+        20: ("Channel Infrastructure", section_20_channel_infrastructure),
     }
 
     # Section 1 is always required

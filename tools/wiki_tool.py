@@ -137,8 +137,8 @@ def _export_conversation(title: str = "") -> str:
         from langchain_core.messages import HumanMessage, AIMessage
 
         # Load messages from the LangGraph checkpointer
-        from agent import _build_graph
-        graph = _build_graph()
+        from agent import get_agent_graph
+        graph = get_agent_graph()
         config = {"configurable": {"thread_id": thread_id}}
         state = graph.get_state(config)
         messages = state.values.get("messages", []) if state and state.values else []

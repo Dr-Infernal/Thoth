@@ -144,7 +144,8 @@ def build_chat(
             # ── Per-thread skills override ───────────────────────────
             import skills as _skills_mod
             _skills_mod.load_skills()
-            _enabled_sk = _skills_mod.get_enabled_skills()
+            _enabled_sk = [s for s in _skills_mod.get_enabled_skills()
+                           if not _skills_mod.is_tool_guide(s)]
             if _enabled_sk:
                 _thread_sk_override = get_thread_skills_override(state.thread_id)
                 _enabled_names = set(sk.name for sk in _enabled_sk)
@@ -166,7 +167,8 @@ def build_chat(
 
                         def _update_sk_label():
                             _cur = get_thread_skills_override(state.thread_id)
-                            _en = set(sk.name for sk in _skills_mod.get_enabled_skills())
+                            _en = set(sk.name for sk in _skills_mod.get_enabled_skills()
+                                      if not _skills_mod.is_tool_guide(sk))
                             _act = set(_cur) & _en if _cur is not None else _en
                             n = len(_act)
                             _sk_btn.text = f"✨ {n} skill{'s' if n != 1 else ''}" if n > 0 else "✨ No skills"
@@ -347,7 +349,11 @@ def build_chat(
         p.chat_scroll.scroll_to(percent=1.0)
         # Client-side auto-scroll: a MutationObserver scrolls to the
         # bottom whenever content changes, unless the user has scrolled up.
-        # Mirrors the pattern used by NiceGUI's own ui.log component.
+        # Uses wheel/touchstart timestamps to distinguish user-initiated
+        # scrolls from programmatic ones (MutationObserver).  On Mac
+        # WKWebView the old approach of checking scroll position in every
+        # scroll event caused a feedback loop because the programmatic
+        # scroll fired a scroll event that immediately re-enabled _tSS.
         _sid = p.chat_scroll.id
         ui.run_javascript(f"""(function(){{
             var el = getElement({_sid});
@@ -355,7 +361,11 @@ def build_chat(
             var c = el.$el.querySelector('.q-scrollarea__container');
             if (!c) return;
             el._tSS = true;
+            var uTs = 0;
+            c.addEventListener('wheel', function() {{ uTs = Date.now(); }}, {{passive:true}});
+            c.addEventListener('touchstart', function() {{ uTs = Date.now(); }}, {{passive:true}});
             c.addEventListener('scroll', function() {{
+                if (Date.now() - uTs > 1000) return;
                 el._tSS = (c.scrollHeight - c.scrollTop - c.clientHeight) < 50;
             }});
             new MutationObserver(function() {{
@@ -363,8 +373,8 @@ def build_chat(
             }}).observe(c, {{childList: true, subtree: true, characterData: true}});
         }})()""")
 
-    # ── File chips ───────────────────────────────────────────────────
-    p.file_chips_row = ui.row().classes("w-full flex-wrap gap-1")
+    # ── File chips (created early so _on_upload can reference) ──────
+    # We'll parent these inside the input card below
 
     async def _on_upload(e: events.UploadEventArguments):
         data = await e.file.read()
@@ -460,7 +470,7 @@ def build_chat(
         }})();
     ''')
 
-    # ── Chat input + attach + send + stop ────────────────────────────
+    # ── Chat input card (modern SOTA layout) ────────────────────────
     async def _on_attach():
         if sys.platform == "darwin" and os.environ.get("THOTH_NATIVE") == "1":
             path = await browse_file(
@@ -486,22 +496,48 @@ def build_chat(
                 f"document.getElementById('c{_hidden_upload.id}').querySelector('input[type=file]').click()"
             )
 
-    with ui.row().classes("w-full items-end gap-2 shrink-0"):
-        ui.button(icon="attach_file", on_click=_on_attach).props("flat round dense").tooltip("Attach files")
+    with ui.column().classes("w-full shrink-0 gap-0").style(
+        "border: 1px solid rgba(255,255,255,0.15); border-radius: 18px; "
+        "background: rgba(255,255,255,0.04); padding: 0; overflow: hidden; "
+        "position: relative;"
+    ):
+        # File chips inside the card (top)
+        p.file_chips_row = ui.row().classes("w-full flex-wrap gap-1 q-px-md q-pt-sm")
 
-        p.chat_input = ui.input(placeholder="Ask anything…").classes("flex-grow").props("outlined dense")
+        # Context counter — absolute overlay, top-right
+        with ui.row().classes("items-center gap-1").style(
+            "position: absolute; top: 8px; right: 12px; z-index: 1; "
+            "pointer-events: none; opacity: 0.7;"
+        ):
+            with ui.column().classes("gap-0 items-end").style("min-width: 100px;"):
+                p.token_label = ui.label("Context: 0K / 32K (0%)").classes("text-xs text-grey-6")
+                p.token_bar = ui.linear_progress(value=0, show_value=False).style("height: 3px; width: 100px;")
+
+        # Textarea
+        p.chat_input = (
+            ui.textarea(placeholder="Ask anything…")
+            .classes("w-full")
+            .props('borderless autogrow input-style="padding: 12px 16px 4px 16px; max-height: 200px; overflow-y: auto;"')
+            .style("font-size: 0.95rem;")
+        )
 
         async def _on_send():
             text = p.chat_input.value
             if text and text.strip():
                 p.chat_input.value = ""
+                # Re-engage auto-scroll on new message
+                if p.chat_scroll:
+                    _re = p.chat_scroll.id
+                    ui.run_javascript(
+                        f"(function(){{ var e=getElement({_re}); if(e) e._tSS=true; }})()"
+                    )
                 await send_message(text)
             elif p.pending_files:
                 p.chat_input.value = ""
                 await send_message("")
 
-        p.chat_input.on("keydown.enter", _on_send)
-        ui.button(icon="send", on_click=_on_send).props("color=primary round")
+        # Enter to send (without Shift), Shift+Enter for newline
+        p.chat_input.on("keydown.enter.exact.prevent", _on_send)
 
         def _on_stop():
             gen = _active_generations.get(state.thread_id)
@@ -515,22 +551,26 @@ def build_chat(
             if p.stop_btn:
                 p.stop_btn.props('icon=hourglass_top')
 
-        p.stop_btn = ui.button(icon="stop", on_click=_on_stop).props("round").tooltip("Stop generation")
-        _has_active = state.thread_id in _active_generations
-        if not _has_active:
-            p.stop_btn.disable()
+        # Bottom bar inside card: attach, voice, spacer, send, stop
+        with ui.row().classes("w-full items-center q-px-sm q-pb-sm q-pt-none gap-1"):
+            ui.button(icon="attach_file", on_click=_on_attach).props(
+                "flat round dense size=sm"
+            ).tooltip("Attach files")
 
-    # ── Voice bar ────────────────────────────────────────────────────
-    with ui.row().classes("w-full items-center shrink-0 gap-2 py-1"):
-        def _toggle_voice(e):
-            state.voice_enabled = e.value
-            if e.value:
-                state.voice_service.start()
-            else:
-                state.voice_service.stop()
-        p.voice_switch = ui.switch("🎤 Voice", value=state.voice_enabled, on_change=_toggle_voice)
-        p.voice_status_label = ui.label("").classes("text-xs text-grey-6")
-        ui.space()  # push token counter to the right
-        with ui.column().classes("gap-0 items-end").style("min-width: 130px;"):
-            p.token_label = ui.label("Context: 0K / 32K (0%)").classes("text-xs text-grey-6")
-            p.token_bar = ui.linear_progress(value=0, show_value=False).style("height: 4px; width: 130px;")
+            def _toggle_voice(e):
+                state.voice_enabled = e.value
+                if e.value:
+                    state.voice_service.start()
+                else:
+                    state.voice_service.stop()
+            p.voice_switch = ui.switch("🎤 Voice", value=state.voice_enabled, on_change=_toggle_voice).classes("text-xs")
+            p.voice_status_label = ui.label("").classes("text-xs text-grey-6")
+
+            ui.space()  # push right-side items to the right
+
+            ui.button(icon="send", on_click=_on_send).props("color=primary round dense size=sm").tooltip("Send")
+
+            p.stop_btn = ui.button(icon="stop", on_click=_on_stop).props("round dense size=sm").tooltip("Stop generation")
+            _has_active = state.thread_id in _active_generations
+            if not _has_active:
+                p.stop_btn.disable()

@@ -154,7 +154,7 @@ def _check_oauth_tokens(_st=None) -> list[str]:
                 label = "token healthy" if status == "valid" else "token refreshed"
                 print(f"[oauth] ✅ {display} {label}")
             elif status == "expired":
-                msg = f"⚠️ {display} token expired — re-authenticate in Settings → Google"
+                msg = f"⚠️ {display} token expired — re-authenticate in Settings → Accounts"
                 warnings.append(msg)
                 print(f"[oauth] {msg}")
             elif status == "error":
@@ -188,6 +188,10 @@ async def on_startup():
     # Attach persistent file logging (daily JSONL to ~/.thoth/logs/)
     from logging_config import setup_file_logging
     setup_file_logging()
+
+    # Kill orphaned ngrok processes from previous runs
+    from tunnel import kill_stale_ngrok
+    kill_stale_ngrok()
 
     import ui.state as _st
 
@@ -244,8 +248,12 @@ async def on_startup():
 
     # Auto-start channels via registry
     _set("📡 Starting channels…")
-    # Ensure telegram module is imported so it self-registers
-    import channels.telegram  # noqa: F401
+    # Ensure channel modules are imported so they self-register
+    import channels.telegram        # noqa: F401
+    import channels.slack           # noqa: F401
+    import channels.sms             # noqa: F401
+    import channels.discord_channel # noqa: F401
+    import channels.whatsapp        # noqa: F401
     for _ch in _ch_registry.all_channels():
         if _ch_config.get(_ch.name, "auto_start", False):
             try:
@@ -339,6 +347,12 @@ async def on_shutdown():
             print("[shutdown] Terminal bridge destroyed")
     except Exception as exc:
         print(f"[shutdown] Terminal bridge cleanup error: {exc}")
+    try:
+        from tunnel import tunnel_manager
+        tunnel_manager.stop_all()
+        print("[shutdown] Tunnels closed")
+    except Exception as exc:
+        print(f"[shutdown] Tunnel cleanup error: {exc}")
     print("[shutdown] Done")
 
 
@@ -450,7 +464,7 @@ async def index():
     from tools import registry as _tool_registry
 
     _outer = ui.column().classes("w-full max-w-7xl mx-auto px-4 no-wrap").style(
-        "height: calc(100vh - 16px); overflow: hidden;"
+        "height: calc(100vh - 16px); overflow: hidden; padding-bottom: 12px;"
     )
     with _outer:
         p.main_col = ui.column().classes("w-full no-wrap flex-grow").style(

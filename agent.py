@@ -1108,6 +1108,22 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
         except Exception as exc:
             logger.debug("Plugin tool injection skipped: %s", exc)
 
+        # Append auto-generated tools for running channels (tool_factory)
+        try:
+            from channels.registry import running_channels as _running_channels
+            from channels.tool_factory import create_channel_tools as _create_ch_tools
+            for _ch in _running_channels():
+                try:
+                    _ch_tools = _create_ch_tools(_ch)
+                    lc_tools.extend(_ch_tools)
+                    logger.debug("Injected %d tools for channel %s",
+                                 len(_ch_tools), _ch.name)
+                except Exception as exc:
+                    logger.debug("Channel tool injection for %s skipped: %s",
+                                 _ch.name, exc)
+        except Exception as exc:
+            logger.debug("Channel tool injection skipped: %s", exc)
+
         if is_background:
             # Background tool gating — three modes:
             #  block:     strip all destructive tools (LLM can't call them)
@@ -1532,6 +1548,7 @@ def _stream_graph(agent, input_data, config: dict,
     full_answer = []
     thinking_signalled = False
     _in_think = False           # True while inside a <think>…</think> block
+    _finish_reason: str | None = None  # tracks API finish_reason from last chunk
     _seen_tool_calls: set[str] = set()
 
     # Loop detection: track consecutive identical tool call signatures.
@@ -1637,6 +1654,12 @@ def _stream_graph(agent, input_data, config: dict,
             # Skip chunks that are part of a tool-call decision
             if getattr(msg, "tool_calls", []) or getattr(msg, "tool_call_chunks", []):
                 continue
+
+            # Track finish_reason from streaming response_metadata
+            _rm = getattr(msg, "response_metadata", None) or {}
+            _fr = _rm.get("finish_reason")
+            if _fr:
+                _finish_reason = _fr
 
             content = _content_to_str(msg.content)
 
@@ -1804,6 +1827,15 @@ def _stream_graph(agent, input_data, config: dict,
         if all_interrupts:
             yield ("interrupt", all_interrupts)
             return
+
+    # Warn if the model stopped due to output token limit
+    if _finish_reason == "length" and full_answer:
+        logger.warning("Model output truncated (finish_reason=length) — "
+                       "response was cut short by the provider's output token limit")
+        full_answer.append(
+            "\n\n⚠️ *This response was cut short by the model's output token "
+            "limit. You can ask me to continue or rephrase for a shorter answer.*"
+        )
 
     yield ("done", "".join(full_answer))
 

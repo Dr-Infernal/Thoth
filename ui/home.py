@@ -278,21 +278,6 @@ def build_home(
             with activity_container:
                 _build_activity_content(activity_container)
 
-    # Home screen input row
-    with ui.row().classes("w-full items-end gap-2 shrink-0 py-2"):
-        home_input = ui.input(placeholder="Ask anything to start a conversation…").classes(
-            "flex-grow"
-        ).props('outlined dense')
-
-        async def _home_send():
-            text = home_input.value
-            if text and text.strip():
-                home_input.value = ""
-                await send_message(text)
-
-        home_input.on("keydown.enter", _home_send)
-        ui.button(icon="send", on_click=_home_send).props("color=primary round")
-
 
 # ══════════════════════════════════════════════════════════════════════
 # ACTIVITY CONTENT

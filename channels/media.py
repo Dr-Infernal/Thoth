@@ -182,3 +182,49 @@ def extract_document_text(data: bytes, filename: str,
             return ""
 
     return ""
+
+
+# ── Copy to workspace ────────────────────────────────────────────────
+
+_RECEIVED_FOLDER = "Received Files"
+
+
+def copy_to_workspace(saved_path: pathlib.Path) -> str | None:
+    """Copy an inbox file into the filesystem-tool workspace so the agent
+    can re-read it without escaping the sandbox.
+
+    Returns the *workspace-relative* path (e.g. ``Received Files/doc.pdf``)
+    on success, or ``None`` if the workspace is not configured or the copy
+    fails.
+    """
+    import shutil
+
+    try:
+        from tools.registry import get_tool_config
+        root = get_tool_config("filesystem", "workspace_root", "")
+        if not root:
+            root = str(pathlib.Path.home() / "Documents" / "Thoth")
+    except Exception:
+        root = str(pathlib.Path.home() / "Documents" / "Thoth")
+
+    dest_dir = pathlib.Path(root) / _RECEIVED_FOLDER
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    dest = dest_dir / saved_path.name
+    # Avoid overwrites — append a suffix if needed
+    if dest.exists():
+        stem = dest.stem
+        suffix = dest.suffix
+        counter = 1
+        while dest.exists():
+            dest = dest_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+
+    try:
+        shutil.copy2(saved_path, dest)
+        rel = f"{_RECEIVED_FOLDER}/{dest.name}"
+        log.info("Copied to workspace: %s", rel)
+        return rel
+    except Exception as exc:
+        log.warning("Could not copy file to workspace: %s", exc)
+        return None

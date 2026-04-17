@@ -210,14 +210,17 @@ def build_command_center(
                         if logs:
                             with ui.expansion("Log", icon="terminal").props(
                                 "dense"
-                            ).classes("w-full text-xs"):
+                            ).classes("w-full text-xs").style(
+                                "min-width: 0; max-width: 100%; overflow: hidden;"
+                            ):
                                 ui.html(
                                     '<pre style="'
                                     "font-size: 0.65rem; line-height: 1.3;"
                                     "background: rgba(0,0,0,0.3); padding: 6px;"
                                     "border-radius: 4px; margin: 0;"
                                     "max-height: 180px; overflow-y: auto;"
-                                    "white-space: pre-wrap; word-break: break-word;"
+                                    "overflow-x: hidden;"
+                                    "white-space: pre-wrap; word-break: break-all;"
                                     '">'
                                     + _escape_html("\n".join(logs))
                                     + "</pre>",

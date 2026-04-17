@@ -19,8 +19,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import queue
 import re
 import threading
+import time
 from typing import Any
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ReactionTypeEmoji
@@ -159,37 +161,17 @@ def _new_thread(chat_id: int) -> dict:
 # ──────────────────────────────────────────────────────────────────────
 # Agent invocation (synchronous — runs in executor)
 # ──────────────────────────────────────────────────────────────────────
-def _grab_vision_capture() -> bytes | None:
-    """Return the last captured image from the vision service, if any."""
-    try:
-        from tools.vision_tool import _get_vision_service
-        svc = _get_vision_service()
-        if svc and svc.last_capture:
-            img = svc.last_capture
-            svc.last_capture = None
-            return img
-    except Exception:
-        pass
-    return None
+from channels.media_capture import grab_vision_capture as _grab_vision_capture
+from channels.media_capture import grab_generated_image as _grab_generated_image
 
 
-def _grab_generated_image() -> bytes | None:
-    """Return the last image-gen output as raw bytes, if any."""
-    try:
-        import base64
-        from tools.image_gen_tool import get_and_clear_last_image
-        b64 = get_and_clear_last_image()
-        if b64:
-            return base64.b64decode(b64)
-    except Exception:
-        pass
-    return None
-
-
-def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None, list[bytes]]:
+def _run_agent_sync(user_text: str, config: dict,
+                    event_queue=None) -> tuple[str, dict | None, list[bytes]]:
     """Run the agent synchronously, collecting the full response.
 
     Returns (answer_text, interrupt_data_or_None, captured_images).
+    If *event_queue* is provided, also pushes (event_type, payload) tuples
+    for live streaming.  Pushes ``None`` sentinel when done.
     """
     # Ensure recursion limit matches the web UI (default is too low)
     config = {**config, "recursion_limit": agent_mod.RECURSION_LIMIT_CHAT}
@@ -221,12 +203,17 @@ def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None, lis
         elif event_type == "done":
             if payload and not full_answer:
                 full_answer.append(payload)
+        if event_queue is not None:
+            event_queue.put((event_type, payload))
 
     answer = "".join(full_answer)
     if tool_reports and answer:
         answer = "\n".join(tool_reports) + "\n\n" + answer
     elif tool_reports:
         answer = "\n".join(tool_reports)
+
+    if event_queue is not None:
+        event_queue.put(None)  # sentinel
 
     captured_images: list[bytes] = []
     if used_vision:
@@ -324,6 +311,82 @@ def _split_message(text: str, max_len: int = MAX_TG_MESSAGE_LEN) -> list[str]:
         remaining = remaining[break_at:]
 
     return chunks
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Streaming: rate-limited edit consumer
+# ──────────────────────────────────────────────────────────────────────
+_STREAM_EDIT_INTERVAL = 1.5  # seconds between message edits
+
+
+async def _tg_edit_consumer(chat, sent_msg, event_queue: queue.Queue,
+                            loop) -> str | None:
+    """Read events from *event_queue* and edit *sent_msg* progressively.
+
+    Returns the final assembled display text (or None if nothing came).
+    """
+    accumulated = ""
+    tool_lines: list[str] = []
+    last_edit = 0.0
+    overflow = False  # set when text exceeds MAX_TG_MESSAGE_LEN
+
+    while True:
+        try:
+            event = await loop.run_in_executor(None, lambda: event_queue.get(timeout=0.2))
+        except Exception:
+            # queue.Empty — just loop and try again
+            continue
+        if event is None:
+            break  # sentinel
+
+        event_type, payload = event
+        if event_type == "token":
+            accumulated += payload
+        elif event_type == "tool_call":
+            tool_lines.append(f"🔧 Using {payload}…")
+        elif event_type == "tool_done":
+            name = payload['name'] if isinstance(payload, dict) else payload
+            tool_lines.append(f"✅ {name} done")
+
+        # Rate-limited edit
+        now = time.monotonic()
+        if now - last_edit >= _STREAM_EDIT_INTERVAL and not overflow:
+            display = _build_stream_display(tool_lines, accumulated)
+            if len(display) > MAX_TG_MESSAGE_LEN:
+                overflow = True
+                continue
+            try:
+                html = _md_to_html(display) if display else "⏳"
+                await sent_msg.edit_text(html, parse_mode="HTML")
+            except Exception:
+                try:
+                    await sent_msg.edit_text(display or "⏳")
+                except Exception:
+                    pass
+            last_edit = now
+
+    # Final edit
+    display = _build_stream_display(tool_lines, accumulated)
+    if display and not overflow:
+        try:
+            html = _md_to_html(display)
+            await sent_msg.edit_text(html, parse_mode="HTML")
+        except Exception:
+            try:
+                await sent_msg.edit_text(display)
+            except Exception:
+                pass
+    return display if not overflow else None
+
+
+def _build_stream_display(tool_lines: list[str], accumulated: str) -> str:
+    """Assemble tool status lines + accumulated tokens into display text."""
+    parts = []
+    if tool_lines:
+        parts.append("\n".join(tool_lines))
+    if accumulated:
+        parts.append(accumulated)
+    return ("\n\n".join(parts)) if parts else ""
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -556,20 +619,7 @@ async def _send_html_msg(chat, text: str, **kwargs) -> None:
         await chat.send_message(plain, **kwargs)
 
 
-_THREAD_CORRUPT_PATTERNS = (
-    "tool call.*without.*result",
-    "tool_calls.*without.*tool_results",
-    "tool_calls that do not have a corresponding",
-    "tool_call_ids did not have response",
-    "must be followed by tool messages",
-    "expected.*tool.*message",
-)
-
-
-def _is_corrupt_thread_error(exc: Exception) -> bool:
-    """Return True if the exception indicates a stuck/corrupt thread."""
-    msg = str(exc).lower()
-    return any(re.search(p, msg) for p in _THREAD_CORRUPT_PATTERNS)
+from channels.thread_repair import is_corrupt_thread_error as _is_corrupt_thread_error
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -656,11 +706,36 @@ async def _run_agent_for_message(
     await update.effective_chat.send_action("typing")
 
     loop = asyncio.get_event_loop()
+
+    # Send placeholder and start streaming
     try:
-        answer, interrupt_data, captured_images = await loop.run_in_executor(
-            None, _run_agent_sync, user_text, config
+        sent_msg = await update.effective_chat.send_message("⏳")
+    except Exception:
+        sent_msg = None
+
+    eq = queue.Queue()
+
+    try:
+        executor_future = loop.run_in_executor(
+            None, _run_agent_sync, user_text, config, eq
         )
+        # Run streaming consumer in parallel
+        if sent_msg:
+            consumer_task = asyncio.ensure_future(
+                _tg_edit_consumer(update.effective_chat, sent_msg, eq, loop)
+            )
+        answer, interrupt_data, captured_images = await executor_future
+        if sent_msg:
+            streamed_display = await consumer_task
+        else:
+            streamed_display = None
     except Exception as exc:
+        # Drain the queue to prevent leaks
+        try:
+            while True:
+                eq.get_nowait()
+        except Exception:
+            pass
         log.error("Agent error for chat %s: %s", chat_id, exc)
         if _is_corrupt_thread_error(exc):
             try:
@@ -672,27 +747,72 @@ async def _run_agent_for_message(
                 answer, interrupt_data, captured_images = await loop.run_in_executor(
                     None, _run_agent_sync, user_text, config
                 )
+                streamed_display = None
             except Exception as retry_exc:
                 log.error("Retry after repair failed: %s", retry_exc)
                 config = _new_thread(chat_id)
                 context.chat_data["thread_config"] = config
                 await _react(msg, "💔")
-                await msg.reply_text(
-                    "⚠️ The previous conversation had a stuck tool call "
-                    "and couldn't be repaired.\n"
-                    "🆕 I've started a fresh thread — please resend your message."
-                )
+                if sent_msg:
+                    try:
+                        await sent_msg.edit_text(
+                            "⚠️ The previous conversation had a stuck tool call "
+                            "and couldn't be repaired.\n"
+                            "🆕 I've started a fresh thread — please resend your message."
+                        )
+                    except Exception:
+                        pass
+                else:
+                    await msg.reply_text(
+                        "⚠️ The previous conversation had a stuck tool call "
+                        "and couldn't be repaired.\n"
+                        "🆕 I've started a fresh thread — please resend your message."
+                    )
                 return
         else:
             await _react(msg, "💔")
-            await msg.reply_text(f"⚠️ Error: {exc}")
+            if sent_msg:
+                try:
+                    await sent_msg.edit_text(f"⚠️ Error: {exc}")
+                except Exception:
+                    pass
+            else:
+                await msg.reply_text(f"⚠️ Error: {exc}")
             return
 
     await _react(msg, "👍")
-    await _send_agent_response(
-        update.effective_chat, msg, chat_id, config,
-        answer, interrupt_data, captured_images,
-    )
+
+    # Extract YouTube URLs for separate messages (auto-preview)
+    from channels import extract_youtube_urls
+    clean_answer, yt_urls = extract_youtube_urls(answer) if answer else ("", [])
+
+    # If streaming covered the full response, skip re-sending the text
+    if streamed_display and not interrupt_data:
+        # Send YouTube URLs as separate messages for auto-preview
+        for url in yt_urls:
+            await update.effective_chat.send_message(url)
+        # Still need to send images
+        for img_bytes in captured_images:
+            try:
+                import io
+                await update.effective_chat.send_photo(
+                    photo=io.BytesIO(img_bytes), caption="🖼️ Image"
+                )
+            except Exception as exc_img:
+                log.warning("Failed to send image to Telegram: %s", exc_img)
+    else:
+        # Streaming overflowed or wasn't available — delete placeholder, send normally
+        if sent_msg:
+            try:
+                await sent_msg.delete()
+            except Exception:
+                pass
+        await _send_agent_response(
+            update.effective_chat, msg, chat_id, config,
+            clean_answer, interrupt_data, captured_images,
+        )
+        for url in yt_urls:
+            await update.effective_chat.send_message(url)
 
 
 async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -702,6 +822,9 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"⛔ Unauthorised. Your user ID is {update.effective_user.id}."
         )
         return
+
+    from channels.base import record_activity
+    record_activity("telegram")
 
     text = (update.message.text or "").strip()
     if not text:
@@ -734,12 +857,20 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_text(
             f"{action} — {_escape_html(info['task_name'])}"
         )
-        # Respond to approval in background thread
+        # Respond to approval in a thread pool — respond_to_approval
+        # calls _resolve_approval_on_channels which may block on
+        # other channels' send_outbound (e.g. Slack's fut.result()).
         try:
             from tasks import respond_to_approval
-            result = respond_to_approval(info["resume_token"], approved,
-                                          note="Approved via Telegram" if approved else "Denied via Telegram",
-                                          source="telegram")
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: respond_to_approval(
+                    info["resume_token"], approved,
+                    note="Approved via Telegram" if approved else "Denied via Telegram",
+                    source="telegram",
+                ),
+            )
             if not result:
                 await update.effective_chat.send_message(
                     "⚠️ Could not process approval — request may have expired."
@@ -941,17 +1072,23 @@ async def _handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     raw_bytes = bytes(data)
 
-    from channels.media import save_inbound_file, extract_document_text
+    from channels.media import save_inbound_file, extract_document_text, copy_to_workspace
     saved_path = save_inbound_file(raw_bytes, filename)
 
     # Extract text content so the agent can work with it directly
     extracted = extract_document_text(raw_bytes, filename)
 
+    # Copy into workspace so agent can re-read via filesystem tool
+    ws_rel = copy_to_workspace(saved_path)
+
     caption = (update.message.caption or "").strip()
 
     # Build rich context for the agent
     parts = [f"[User sent a file: {filename}]"]
-    parts.append(f"Saved to: {saved_path}")
+    if ws_rel:
+        parts.append(f"Workspace path: {ws_rel}")
+    else:
+        parts.append(f"Saved to: {saved_path}")
     if extracted:
         parts.append(f"\n--- File content ---\n{extracted}\n--- End of file ---")
     else:
@@ -1273,7 +1410,7 @@ class TelegramChannel(Channel):
             photo_out=True,
             document_out=True,
             buttons=True,
-            streaming=False,
+            streaming=True,
             typing=True,
             reactions=True,
             slash_commands=False,
@@ -1311,6 +1448,12 @@ class TelegramChannel(Channel):
 
     def is_running(self) -> bool:
         return is_running()
+
+    def get_default_target(self) -> int:
+        uid = _get_allowed_user_id()
+        if uid is None:
+            raise RuntimeError("TELEGRAM_USER_ID is not configured")
+        return uid
 
     def send_message(self, target: str | int, text: str) -> None:
         send_outbound(int(target), text)

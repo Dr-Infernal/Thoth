@@ -87,7 +87,7 @@ ALLOWED_UPLOAD_SUFFIXES = sorted(
 # ═════════════════════════════════════════════════════════════════════════════
 
 YT_URL_PATTERN = re.compile(
-    r"https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})(?:[^\s)\]]*)"
+    r"https?://(?:www\.)?(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)([a-zA-Z0-9_-]{11})(?:[^\s)\]]*)"
 )
 
 SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+')
@@ -96,7 +96,7 @@ SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+')
 # UI CONSTANTS
 # ═════════════════════════════════════════════════════════════════════════════
 
-SIDEBAR_MAX_THREADS = 8
+SIDEBAR_MAX_THREADS = 10
 MAX_STREAM_SENTENCES = 3
 
 ICON_OPTIONS = [

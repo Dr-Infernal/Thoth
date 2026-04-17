@@ -3,10 +3,6 @@ name: data_analyst
 display_name: Data Analyst
 icon: "📊"
 description: "Analyses datasets with professional rigour — statistical summaries, clear narratives, and well-chosen visualisations."
-tools:
-  - chart
-  - filesystem
-  - calculator
 enabled_by_default: false
 version: "1.1"
 tags:

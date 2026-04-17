@@ -73,8 +73,10 @@ def build_terminal_panel(p, state, tool_registry) -> None:
 
     # ── Terminal container (border + glow) ──────────────────────────
     _term_container = ui.column().classes("w-full shrink-0 no-wrap").style(
-        "gap: 0; border: 1px solid #30363d; border-radius: 6px;"
-        " overflow: hidden; box-shadow: 0 0 8px rgba(88, 166, 255, 0.08);"
+        "gap: 0; border: 1px solid #3a4a5c; border-radius: 8px;"
+        " overflow: hidden;"
+        " box-shadow: 0 0 12px rgba(88, 166, 255, 0.15), 0 0 4px rgba(88, 166, 255, 0.1);"
+        " margin-top: 4px;"
     )
 
     with _term_container:
@@ -129,12 +131,13 @@ def build_terminal_panel(p, state, tool_registry) -> None:
             "click.stop", lambda: _toggle_terminal()
         )
 
-    # ── Terminal panel (hidden by default) ────────────────────────────
-    p.terminal_panel = ui.column().classes("w-full shrink-0").style(
-        "height: 280px; background: #0d1117; gap: 0;"
-    )
-    p.terminal_panel._props['id'] = _panel_id
-    p.terminal_panel.set_visibility(False)
+    # ── Terminal panel (hidden by default) — inside _term_container for glow
+    with _term_container:
+        p.terminal_panel = ui.column().classes("w-full shrink-0").style(
+            "height: 280px; background: #0d1117; gap: 0;"
+        )
+        p.terminal_panel._props['id'] = _panel_id
+        p.terminal_panel.set_visibility(False)
 
     with p.terminal_panel:
         # xterm.js terminal

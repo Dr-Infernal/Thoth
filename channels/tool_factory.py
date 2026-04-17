@@ -179,15 +179,7 @@ def create_channel_tools(channel: Channel) -> list[StructuredTool]:
 def _get_default_target(channel: Channel) -> str | int:
     """Resolve the default delivery target for a channel.
 
-    Channels like Telegram always send to the configured user ID.
-    Others may need different resolution.
+    Delegates to the channel's own ``get_default_target()`` method,
+    which knows how to look up the correct user/chat ID.
     """
-    if channel.name == "telegram":
-        user_id = os.environ.get("TELEGRAM_USER_ID", "")
-        if user_id.strip().isdigit():
-            return int(user_id.strip())
-        raise RuntimeError("TELEGRAM_USER_ID is not configured")
-    raise RuntimeError(
-        f"No default target resolver for channel '{channel.name}'. "
-        "Pass target explicitly or implement a resolver."
-    )
+    return channel.get_default_target()

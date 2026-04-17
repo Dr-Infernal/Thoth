@@ -354,6 +354,13 @@ if sys.platform == "darwin":
         pass
 
 import webview
+import webbrowser
+
+class _JsApi:
+    """Expose Python helpers to JavaScript via window.pywebview.api."""
+    def open_url(self, url):
+        if isinstance(url, str) and url.lower().startswith(("https://", "http://")):
+            webbrowser.open(url)
 
 def _on_loaded(window):
     try:
@@ -377,7 +384,7 @@ def _on_loaded(window):
 
 url, title = sys.argv[1], sys.argv[2]
 w, h = int(sys.argv[3]), int(sys.argv[4])
-webview.create_window(title, url, width=w, height=h)
+webview.create_window(title, url, width=w, height=h, js_api=_JsApi())
 webview.start(func=_on_loaded)
 '''
 

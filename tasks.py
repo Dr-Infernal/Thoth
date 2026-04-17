@@ -940,21 +940,19 @@ def _push_approval_to_channels(task: dict, approval_id: str,
     Uses the unified ``channels`` field (null = all running channels).
     Stores message refs in ``approval_channel_refs`` for cross-channel
     resolution.
+
+    Both button-capable channels (Telegram inline buttons) and text-based
+    channels (Slack, Discord, WhatsApp, SMS) receive the request.  Each
+    channel's ``send_approval_request`` handles storage of pending state.
     """
     channels = get_task_channels(task)
     for ch in channels:
-        if not ch.capabilities.buttons:
+        try:
+            target = ch.get_default_target()
+        except Exception:
+            logger.debug("Skipping %s — no default target configured", ch.name)
             continue
         try:
-            # Resolve target: Telegram uses configured user ID
-            if ch.name == "telegram":
-                from channels.telegram import _get_allowed_user_id
-                target = _get_allowed_user_id()
-                if target is None:
-                    continue
-            else:
-                target = None  # future channels will resolve their own target
-
             config = {
                 "task_name": task["name"],
                 "resume_token": resume_token,

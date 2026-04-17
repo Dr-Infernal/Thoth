@@ -30,6 +30,8 @@ HEAD_HTML = """\
 })();
 </script>
 <style>
+    html, body { overflow: hidden !important; height: 100vh; }
+    .nicegui-content { overflow: hidden !important; }
     .thoth-msg pre { overflow-x: auto; max-width: 100%; }
     .thoth-msg a { color: #64b5f6; }
     .thoth-msg a:hover { text-decoration: underline; }
@@ -110,12 +112,21 @@ HEAD_HTML = """\
     .mermaid-rendered { background: rgba(255,255,255,0.03); border-radius: 8px; padding: 12px; margin: 8px 0; overflow-x: auto; }
 </style>
 <script>
-// Make all links in chat messages open in a new tab
+// Open all external (http/https) links in the system browser.
+// In native mode (pywebview) this routes through the Python js_api
+// so the OS default browser opens instead of navigating in-app.
+// In a regular browser session it falls back to window.open().
 document.addEventListener('click', function(e) {
-    const a = e.target.closest('.thoth-msg a, .thoth-msg-body a');
-    if (a && a.href && !a.href.startsWith('javascript:')) {
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
+    var a = e.target.closest('a[href]');
+    if (!a) return;
+    var href = a.href || '';
+    if (!/^https?:/i.test(href)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.open_url) {
+        window.pywebview.api.open_url(href);
+    } else {
+        window.open(href, '_blank', 'noopener');
     }
 });
 
@@ -160,12 +171,15 @@ document.addEventListener('click', function(e) {
                 e.preventDefault();
                 var cmd = btn.dataset.cmd;
                 if (cmd === 'paste') {
+                    if (_ctxTarget) _ctxTarget.focus();
                     navigator.clipboard.readText().then(function(t) {
-                        var el = document.activeElement;
+                        var el = _ctxTarget || document.activeElement;
                         if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
                             document.execCommand('insertText', false, t);
                         }
-                    }).catch(function() {});
+                    }).catch(function() {
+                        document.execCommand('paste');
+                    });
                 } else {
                     document.execCommand(cmd);
                 }
@@ -175,8 +189,11 @@ document.addEventListener('click', function(e) {
         });
         document.body.appendChild(menu);
 
+        var _ctxTarget = null;
+
         document.addEventListener('contextmenu', function(e) {
             e.preventDefault();
+            _ctxTarget = document.activeElement;
             var sel = window.getSelection().toString();
             var el = e.target.closest('input, textarea, [contenteditable]');
             menu.querySelectorAll('[data-cmd]').forEach(function(b) {

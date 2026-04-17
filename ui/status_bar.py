@@ -254,9 +254,17 @@ def build_status_bar(
         )
 
         def _render_pills(container, result_map: dict[str, CheckResult]):
+            # Channel pills are now shown in the sidebar monitor
+            _channel_names = set()
+            try:
+                from channels.registry import all_channels
+                _channel_names = {ch.display_name for ch in all_channels()}
+            except Exception:
+                pass
+
             container.clear()
             with container:
-                items = list(result_map.values())
+                items = [r for r in result_map.values() if r.name not in _channel_names]
                 mid = (len(items) + 1) // 2  # even-ish split
                 for row_items in (items[:mid], items[mid:]):
                     with ui.element("div").classes("status-pills-row"):

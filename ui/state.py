@@ -128,7 +128,7 @@ class P:
     voice_switch: ui.switch = None      # type: ignore[assignment]
     pending_files: list[dict] = []
     file_chips_row: ui.row = None       # type: ignore[assignment]
-    chat_input: ui.input = None         # type: ignore[assignment]
+    chat_input: ui.textarea = None      # type: ignore[assignment]
     chat_header_label: ui.label = None  # type: ignore[assignment]
     settings_dlg: ui.dialog = None      # type: ignore[assignment]
     export_dlg: ui.dialog = None        # type: ignore[assignment]

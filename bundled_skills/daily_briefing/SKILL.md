@@ -3,10 +3,6 @@ name: daily_briefing
 display_name: Daily Briefing
 icon: "☀️"
 description: Compile a morning briefing with weather, calendar, and news headlines.
-tools:
-  - weather
-  - calendar
-  - web_search
 enabled_by_default: false
 version: "1.1"
 tags:

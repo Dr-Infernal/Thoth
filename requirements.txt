@@ -86,6 +86,12 @@ plotly
 kaleido
 # ── Messaging Channels ─────────────────────────────────────────────────────
 python-telegram-bot
+slack-bolt>=1.28.0
+twilio
+discord.py>=2.7.0
+
+# ── Tunnel / Webhook Exposure ──────────────────────────────────────────────
+pyngrok
 
 # ── Voice Input (STT) ───────────────────────────────────────────────────────
 sounddevice
@@ -97,6 +103,9 @@ kokoro-onnx
 # ── System Tray / Launcher ──────────────────────────────────────────────────
 pystray
 Pillow
+
+# ── QR Code Generation ─────────────────────────────────────────────────────
+qrcode
 
 # ── Browser Automation ────────────────────────────────────────────────────────
 playwright

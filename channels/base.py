@@ -79,6 +79,25 @@ class ConfigField:
     slider_step: int            = 1
 
 
+import time as _time
+
+# ── Channel activity tracker ─────────────────────────────────────────
+# Lightweight session-level tracker — records the last time a channel
+# received an inbound message.  Read by the sidebar channel monitor.
+
+_channel_activity: dict[str, float] = {}   # channel_name → epoch timestamp
+
+
+def record_activity(channel_name: str) -> None:
+    """Record an inbound message event on *channel_name* (call from handlers)."""
+    _channel_activity[channel_name] = _time.time()
+
+
+def get_last_activity(channel_name: str) -> float | None:
+    """Return epoch timestamp of last inbound message, or ``None``."""
+    return _channel_activity.get(channel_name)
+
+
 # ── Channel ABC ──────────────────────────────────────────────────────
 
 class Channel(ABC):
@@ -125,6 +144,19 @@ class Channel(ABC):
     def config_fields(self) -> list[ConfigField]:
         """Ordered list of user-configurable fields for settings UI."""
         return []
+
+    # ── Webhook / tunnel support ─────────────────────────────────────
+
+    @property
+    def webhook_port(self) -> int | None:
+        """Port for the inbound webhook server, or ``None`` if no webhook
+        is needed (e.g. polling-based channels)."""
+        return None
+
+    @property
+    def needs_tunnel(self) -> bool:
+        """``True`` when this channel benefits from a public tunnel URL."""
+        return self.webhook_port is not None
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -186,6 +218,23 @@ class Channel(ABC):
         Override to edit the original message and remove interactive buttons.
         """
         pass  # default: no-op (channel may not support editing)
+
+    # ── Default target ───────────────────────────────────────────────
+
+    def get_default_target(self) -> str | int:
+        """Return the default delivery target for this channel.
+
+        Channels like Telegram always send to the configured user ID.
+        Override to provide a channel-specific default (e.g., env-based
+        user ID lookup).  The tool factory calls this so the LLM does
+        not need to supply a target explicitly.
+
+        Raises ``RuntimeError`` if no sensible default exists.
+        """
+        raise RuntimeError(
+            f"Channel '{self.name}' has no default target. "
+            "Override get_default_target() or pass target explicitly."
+        )
 
     # ── Thread management ────────────────────────────────────────────
 

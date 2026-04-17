@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/tests-All%20Pass-brightgreen?style=flat" alt="Tests">
 </p>
 
-Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 25 integrated tools (69 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, image generation, long-term memory with a personal knowledge graph, **advanced workflows** with conditional branching and approval gates, habit tracking, and more — plus a **plugin system** with a built-in marketplace and a **multi-channel messaging framework** (Telegram with full media support; more channels coming). Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models from **OpenAI**, **Anthropic** (Claude), **Google AI** (Gemini), **xAI** (Grok), and **OpenRouter** (100+ models) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
+Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 25 integrated tools (79 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, image generation, X (Twitter), long-term memory with a personal knowledge graph, **advanced workflows** with conditional branching and approval gates, habit tracking, and more — plus a **plugin system** with a built-in marketplace and **5 messaging channels** (Telegram, WhatsApp, Discord, Slack, SMS) with full media support, streaming, reactions, and per-channel tool generation. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models from **OpenAI**, **Anthropic** (Claude), **Google AI** (Gemini), **xAI** (Grok), and **OpenRouter** (100+ models) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
 
 > **Local models are already amazing.** You'll be surprised what a 14B+ local model can do. If you start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
 
@@ -42,7 +42,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ### 🤖 ReAct Agent Architecture
 
-LangGraph-based autonomous agent with **25 tools / 69 sub-operations** — the agent decides which tools to call, how many times, and in what order. Real-time token streaming with thinking model support (DeepSeek-R1, Qwen3, QwQ — collapsible reasoning bubbles). Smart context management via tiktoken: auto-summarization at 80% capacity, proportional tool-output shrinking, and dynamic tool budgets that adapt to available headroom. Destructive actions require explicit confirmation; orphaned tool calls are auto-repaired; recursive loops are caught with a wind-down warning at 75%.
+LangGraph-based autonomous agent with **25 tools / 79 sub-operations** — the agent decides which tools to call, how many times, and in what order. Real-time token streaming with thinking model support (DeepSeek-R1, Qwen3, QwQ — collapsible reasoning bubbles). Smart context management via tiktoken: auto-summarization at 80% capacity, proportional tool-output shrinking, and dynamic tool budgets that adapt to available headroom. Destructive actions require explicit confirmation; orphaned tool calls are auto-repaired; recursive loops are caught with a wind-down warning at 75%.
 
 [Details →](docs/ARCHITECTURE.md#react-agent-architecture)
 
@@ -108,13 +108,21 @@ Advanced **workflow engine** powered by APScheduler with 7 schedule types (daily
 
 ### 📬 Messaging Channels
 
-A generic **Channel ABC** lets any messaging platform plug into Thoth — channels declare capabilities (photo, voice, documents, reactions, buttons) and the system auto-generates tools and settings UI for each one. **Telegram** is the first full-featured channel: inbound voice transcription (faster-whisper), photo analysis (Vision), document handling with text extraction (PDF/CSV/JSON), emoji reactions (👀/👍/💔) for real-time status, inline keyboard buttons for interrupt approval, multi-channel approval routing for workflow approval gates, safety mode enforcement, and image generation delivery. The agent can proactively send messages, photos, and documents to any registered channel.
+A generic **Channel ABC** lets any messaging platform plug into Thoth — channels declare capabilities (photo, voice, documents, reactions, buttons, streaming) and the system auto-generates tools, settings UI, and health checks for each one. **Five channels** ship out of the box:
+
+- **Telegram** — inbound voice transcription (faster-whisper), photo analysis (Vision), document handling with text extraction (PDF/CSV/JSON), emoji reactions (👀/👍/💔), inline keyboard buttons for approvals, streaming responses via progressive message edits
+- **WhatsApp** — Node.js bridge (Baileys) with QR-code pairing; inbound/outbound text, photos, documents, and voice; YouTube rich link previews; Markdown-to-WhatsApp formatting; streaming via message edits
+- **Discord** — `discord.py` adapter with DM-based messaging; streaming, reactions, typing indicators, slash commands, and media support
+- **Slack** — `slack-bolt` adapter with Socket Mode (no webhook needed); DM threading; streaming via `chat.update`; reactions, typing, and file uploads
+- **SMS** — Twilio adapter with inbound webhook; outbound via REST API; MMS photo support; auto-tunnel for inbound delivery
+
+All channels share auth utilities, slash commands, approval routing, corrupt-thread repair, and media capture helpers. A **tunnel manager** (ngrok) auto-exposes webhook ports for channels that need inbound delivery. A live **channel monitor** in the sidebar shows status dots, icons, and last-activity times for all configured channels.
 
 [Details →](docs/ARCHITECTURE.md#messaging-channels)
 
 ### 🖼️ Image Generation
 
-Generate and edit images via **OpenAI**, **xAI** (Grok Imagine), and **Google** (Imagen 4, Nano Banana) — rendered inline in chat and delivered to Telegram. Supports OpenAI (`gpt-image-1`, `gpt-image-1.5`, `gpt-image-1-mini`), xAI (`grok-imagine-image`), and Google (`imagen-4.0-generate-001`, Gemini image models) with configurable size and quality. Edit existing images by referencing the last generation, a pasted attachment, or a file path. Per-provider model picker in Settings → Models.
+Generate and edit images via **OpenAI**, **xAI** (Grok Imagine), and **Google** (Imagen 4, Nano Banana) — rendered inline in chat, persisted to disk, and deliverable to any messaging channel. Supports OpenAI (`gpt-image-1`, `gpt-image-1.5`, `gpt-image-1-mini`), xAI (`grok-imagine-image`), and Google (`imagen-4.0-generate-001`, Gemini image models) with configurable size and quality. Edit existing images by referencing the last generation, a pasted attachment, or a file path. Per-provider model picker in Settings → Models.
 
 [Details →](docs/ARCHITECTURE.md#image-generation)
 
@@ -138,7 +146,7 @@ Native window via **pywebview** with system tray, splash screen, right-click con
 
 ### 💬 Chat & Conversations
 
-Multi-turn threads with LangGraph checkpointer, auto-naming, per-thread model switching, and export (Markdown, text, PDF via Playwright). Attach images, PDFs, CSV, Excel, JSON — plus clipboard paste and drag-and-drop. **File-on-disk media storage** with two-tier persistence — generated content survives thread deletion, transient captures cleaned up automatically. **Auto-scroll** follows streaming output with user-override (scroll up to pause, new message re-engages). Inline rendering: **Plotly charts**, **Mermaid diagrams** (flowchart, sequence, state, ER, Gantt, mindmap), **YouTube embeds**, and syntax-highlighted code. **Status monitor panel** with animated avatar, 17 health-check pills, OAuth token monitoring, and one-click diagnosis. Streaming robustness improvements replace silent failures with debug logging.
+Multi-turn threads with LangGraph checkpointer, auto-naming, per-thread model switching, and export (Markdown, text, PDF via Playwright). Attach images, PDFs, CSV, Excel, JSON — plus clipboard paste and drag-and-drop. **File-on-disk media storage** with two-tier persistence — generated content survives thread deletion, transient captures cleaned up automatically. **Auto-scroll** follows streaming output with user-override (scroll up to pause, new message re-engages). Inline rendering: **Plotly charts**, **Mermaid diagrams** (flowchart, sequence, state, ER, Gantt, mindmap), **YouTube embeds** (including Shorts), and syntax-highlighted code. **Modern chat input** with rounded card layout and inline file chips. **Status monitor panel** with animated avatar, health-check pills, OAuth token monitoring, and one-click diagnosis. **Sidebar channel monitor** with live status dots, icons, and last-activity tracking for all configured channels. Streaming robustness improvements replace silent failures with debug logging; output truncation detection warns when the model hits its token limit.
 
 [Details →](docs/ARCHITECTURE.md#chat--conversations)
 
@@ -150,7 +158,7 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 
 ### 🧩 Bundled Skills
 
-**10 reusable instruction packs** injected into the system prompt when enabled — each a `SKILL.md` with YAML frontmatter. Toggle from Settings; create custom skills via the in-app editor or `~/.thoth/skills/`.
+**10 reusable instruction packs** plus **13 tool guides** injected into the system prompt when enabled — each a `SKILL.md` with YAML frontmatter. Manual skills toggle from Settings; tool guides auto-activate when their linked tools are enabled. Create custom skills via the in-app editor or `~/.thoth/skills/`.
 
 | Skill | Description |
 |-------|-------------|
@@ -183,8 +191,8 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 | **Wiki vault** | **Obsidian-compatible export** — one `.md` per entity with `[[wiki-links]]`, YAML frontmatter, and per-type indexes | Not available |
 | **Voice** | **Fully local** — faster-whisper STT + Kokoro TTS with 10 voices. Audio never leaves your machine | ElevenLabs (cloud TTS) + system fallback. Voice Wake on macOS/iOS |
 | **Health tracking** | **Built-in tracker** — medications, symptoms, exercise, mood, sleep, periods. Streak analysis, CSV export, Plotly charts | Not available |
-| **Tools** | 25 tools / 69 sub-operations — Gmail, Calendar, Arxiv, YouTube, Wolfram Alpha, Plotly charts, wiki vault, habit tracker, image generation | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
-| **Messaging channels** | Telegram (voice, photo, documents, reactions, buttons) + Gmail. *Slack, Discord, WhatsApp, Teams coming soon* | **23+ channels** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, and many more |
+| **Tools** | 25 tools / 79 sub-operations — Gmail, Calendar, Arxiv, YouTube, Wolfram Alpha, Plotly charts, wiki vault, habit tracker, image generation, X (Twitter) | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
+| **Messaging channels** | **5 channels** — Telegram, WhatsApp, Discord, Slack, SMS — all with streaming, reactions, media, and approval routing. Auto-generated per-channel tools. Tunnel manager for webhooks | **23+ channels** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, and many more |
 | **Autonomous agents** | **Advanced workflows** — step-based pipelines with conditions, approval gates, webhook triggers, concurrency groups, and per-workflow safety mode. Multiple run in parallel with their own persistent threads | Multi-agent routing with isolated sessions per sender/channel |
 | **Desktop app** | Native window (pywebview) + system tray on **Windows & macOS**. One-click installers for both | macOS menu bar app. No native Windows app (WSL2 required). iOS & Android companion apps |
 | **Canvas** | Mermaid diagrams and Plotly charts rendered inline | A2UI — agent-driven interactive visual workspace |
@@ -198,9 +206,9 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 
 ---
 
-## 🔧 Tools (25 Tools / 69 Sub-tools)
+## 🔧 Tools (25 Tools / 79 Sub-tools)
 
-Thoth's agent has access to 25 tools that expose 69 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
+Thoth's agent has access to 25 tools that expose 79 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
 
 ### Search & Knowledge
 
@@ -226,7 +234,8 @@ Thoth's agent has access to 25 tools that expose 69 individual operations to the
 | **🌐 Browser** | Autonomous web browsing in a visible Chromium window — navigate, click, type, scroll, snapshot, back, tab management; accessibility-tree snapshots with numbered element references; persistent profile for logins | None |
 | **📋 Workflows** | Create, list, update, delete, and run advanced workflows — step-based pipelines with conditions, approvals, triggers, 7 schedule types (daily, weekly, weekdays, weekends, interval, cron, delay), channel delivery, per-task model override | None |
 | **📋 Tracker** | Habit/health tracker — log meds, symptoms, exercise, periods; streak, adherence, trend analysis; CSV export | None |
-| **📬 Telegram** | Send messages, photos, and documents to any Telegram chat; receive voice, photo, and document messages with transcription, analysis, and text extraction | Bot API token |
+| **📬 Channels** | Auto-generated send/photo/document tools for each running channel (Telegram, WhatsApp, Discord, Slack, SMS); receive voice, photos, and documents with transcription, analysis, and text extraction | Per-channel config |
+| **🐦 X (Twitter)** | Read timeline, search, post, reply, retweet, like/unlike, mentions, followers/following — 13 API operations via OAuth 2.0 PKCE | X API keys |
 | **🖼️ Image Generation** | Generate images from text prompts and edit existing images via OpenAI, xAI (Grok Imagine), and Google (Imagen 4, Nano Banana); rendered inline in chat and deliverable to channels | Cloud API key |
 
 ### Computation & Analysis
@@ -282,7 +291,7 @@ Thoth's agent has access to 25 tools that expose 69 individual operations to the
 │   Graph-enhanced auto-recall (semantic + 1-hop expansion)           │
 │   Per-thread model override (local or cloud)                        │
 │                                                                      │
-│   69 LangChain sub-tools from 25 registered tool modules            │
+│   79 LangChain sub-tools from 25 registered tool modules            │
 │   + plugin tools + auto-generated channel tools                     │
 └───────┬──────────┬──────────┬──────────┬──────────┬─────────────────┘
         │          │          │          │          │
@@ -333,13 +342,13 @@ Thoth's agent has access to 25 tools that expose 69 individual operations to the
 
 ### Windows
 
-1. Download **[ThothSetup_3.14.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.15.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.14.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.15.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Open the DMG and drag **Thoth.app** into the **Applications** folder
 3. Launch **Thoth** from Applications or Launchpad
    - First run may prompt "Thoth is an app downloaded from the internet" → click **Open**
@@ -421,7 +430,18 @@ Configure cloud keys in **⚙️ Settings → ☁️ Cloud** tab. Keys are store
 | **Tavily** | `TAVILY_API_KEY` | Web search (1,000 free searches/month) | [app.tavily.com](https://app.tavily.com/) |
 | **Wolfram Alpha** | `WOLFRAM_ALPHA_APPID` | Advanced computation & scientific data | [developer.wolframalpha.com](https://developer.wolframalpha.com/) |
 
-Configure tool keys in **⚙️ Settings → 🔍 Search** tab. Keys are saved locally to `~/.thoth/api_keys.json`.
+### Channel & Service Keys
+
+| Service | Key | Purpose | How to Get |
+|---------|-----|---------|------------|
+| **Telegram** | `TELEGRAM_BOT_TOKEN` | Telegram bot messaging | [BotFather](https://t.me/botfather) |
+| **Discord** | `DISCORD_BOT_TOKEN` | Discord DM messaging | [Discord Developer Portal](https://discord.com/developers/) |
+| **Slack** | `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` | Slack DM messaging (Socket Mode) | [Slack API](https://api.slack.com/apps) |
+| **Twilio (SMS)** | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | SMS messaging | [twilio.com](https://www.twilio.com/) |
+| **X (Twitter)** | `X_CLIENT_ID` / `X_CLIENT_SECRET` | X API v2 (OAuth 2.0 PKCE) | [X Developer Portal](https://developer.x.com/) |
+| **ngrok** | `NGROK_AUTHTOKEN` | Tunnel for inbound webhooks (SMS, etc.) | [ngrok.com](https://ngrok.com/) |
+
+Configure channel keys in **⚙️ Settings → 📡 Channels** and **⚙️ Settings → 🔗 Accounts** tabs. Keys are stored locally.
 
 For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credentials.json` — setup instructions are provided in the respective Settings tabs.
 

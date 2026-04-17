@@ -2,6 +2,178 @@
 
 ---
 
+## v3.15.0 — Multi-Channel Messaging, X Tool, Tunnels & Tool Guides
+
+Thoth goes **multi-channel** — four new messaging adapters join Telegram: **WhatsApp** (via Baileys bridge with QR pairing), **Discord**, **Slack**, and **SMS** (Twilio). All five channels share full parity: streaming responses, typing indicators, reactions, media capture, slash commands, and thread management. A new **tunnel manager** (ngrok) auto-exposes webhook ports so channels like SMS receive inbound messages without manual port forwarding. The **X (Twitter) tool** adds native read, post, and engagement capabilities via OAuth 2.0 PKCE. A **tool guides** system auto-injects per-tool usage instructions into the system prompt when tools are enabled, replacing 120+ lines of hardcoded prompt text. The **sidebar** gains a live **channel health monitor** with status dots, icons, and last-activity tracking. A **chat input redesign** wraps the composer in a modern card layout. Generated images now **persist to disk** so channels can send them after generation. Ships with **~76 net new tests** across 3 sections, covering the X tool, finish-reason detection, and tunnel infrastructure.
+
+### 📡 Multi-Channel Messaging
+
+Four new channel adapters give Thoth the same conversational experience across five platforms.
+
+- **WhatsApp** — Node.js bridge powered by Baileys v6 with QR code pairing (displayed in Settings); inbound/outbound text, photos, documents, and voice; YouTube URL extraction with rich link previews via oEmbed + thumbnail fetch; Markdown-to-WhatsApp formatting with table conversion; streaming responses via rate-limited message edits; typing indicators and emoji reactions
+- **Discord** — `discord.py` adapter with DM-based messaging; OAuth bot token authentication with numeric User ID gating; streaming via message edits; reactions, typing, slash commands, and media support
+- **Slack** — `slack-bolt` adapter with Socket Mode for zero-webhook operation; DM threading; streaming responses via `chat.update`; reactions, typing, and file uploads
+- **SMS** — Twilio adapter with inbound webhook receiver; outbound via Twilio REST API; MMS photo support; requires tunnel for inbound delivery
+- **Channel parity** — all 5 channels share media capture helpers (`channels/media_capture.py`), auth utilities (`channels/auth.py`), slash command handling (`channels/commands.py`), corrupt-thread detection (`channels/thread_repair.py`), approval routing (`channels/approval.py`), and YouTube URL extraction (`channels/__init__.py`)
+- **Auto-start** — each channel has an `auto_start` config flag; `app.py` imports all five adapters at startup and starts configured channels automatically
+- **Channel tool factory** — `channels/tool_factory.py` delegates target resolution to each channel's `get_default_target()` method, replacing hardcoded Telegram-only logic; running channels auto-inject their send/photo/document tools into the agent graph
+
+### 🔗 Tunnel Manager
+
+A provider-agnostic tunnel infrastructure for exposing local webhook ports to the internet.
+
+- **`tunnel.py`** — `TunnelProvider` ABC with `NgrokProvider` implementation using `pyngrok`; thread-safe `TunnelManager` singleton
+- **Auto-lifecycle** — channels call `tunnel_manager.start_tunnel(port)` on start and `stop_tunnel(port)` on shutdown; orphaned ngrok processes killed at app startup via `kill_stale_ngrok()`
+- **Settings UI** — Tunnel Settings section in the Channels tab with provider picker (ngrok), auth token input, active tunnel display, and optional main-app tunnel toggle
+- **Health check** — `check_tunnel()` in `status_checks.py` reports active tunnel count and URLs
+
+### 🐦 X (Twitter) Tool
+
+Native X API v2 integration with OAuth 2.0 PKCE authentication — no external CLI or tweepy dependency.
+
+- **13 tools** — `x_get_timeline`, `x_get_user_tweets`, `x_search`, `x_get_tweet`, `x_post_tweet`, `x_reply`, `x_retweet`, `x_like`, `x_unlike`, `x_get_mentions`, `x_get_followers`, `x_get_following`, `x_get_user`
+- **OAuth 2.0 PKCE flow** — browser-based authorization with local HTTP callback server; token persistence and auto-refresh; tier detection (Free/Basic/Pro) with endpoint gating
+- **Rate limiting** — per-endpoint rate limit tracking with automatic backoff and retry
+- **Settings UI** — Accounts tab with X (Twitter) panel showing connection status, API key configuration with step-by-step setup guide, and Connect/Disconnect buttons
+
+### 📘 Tool Guides
+
+A new skill category that auto-injects per-tool usage instructions into the system prompt.
+
+- **`tool_guides/` directory** — 13 SKILL.md files (browser, calendar, chart, email, filesystem, math, shell, telegram, tracker, vision, weather, wiki, x) containing focused tool-usage instructions
+- **`tools` field in SKILL.md** — skills can now declare linked tools; when any linked tool is enabled, the guide auto-activates without manual toggling
+- **Prompt cleanup** — 120+ lines of hardcoded tool instructions removed from `AGENT_SYSTEM_PROMPT` in `prompts.py`; replaced by dynamically-injected tool guides that only appear when relevant tools are enabled
+- **UI separation** — `get_manual_skills()` returns only user-created skills for the Settings Skills tab; tool guides are hidden from manual toggle but always active when their tools are on
+- **Skill editor** — new "Linked Tools" multi-select field with chip display for creating tool-linked skills
+
+### 📊 Sidebar Channel Monitor
+
+A live channel health panel in the sidebar, replacing the status bar channel pills.
+
+- **Channel monitor panel** — renders below the conversation list with status dots (green = running, amber = stopped, grey = not configured), channel-specific icons, display names, and relative last-activity times ("2m ago", "1h ago")
+- **Activity tracker** — `channels/base.py` tracks `record_activity()` / `get_last_activity()` per channel; all 5 channel handlers call `record_activity()` on each inbound message
+- **5-second polling** — `ui.timer(5.0)` refreshes the panel; click any row to open Settings
+- **Status bar cleanup** — channel pills filtered from `_render_pills()` in `ui/status_bar.py`; channel health checks remain in the diagnosis dialog
+
+### 💬 Chat Input Redesign
+
+The chat composer is modernized with a card-based layout.
+
+- **Rounded card** — input wrapped in a styled column with `border-radius: 18px`, subtle border, and translucent background
+- **File chips inside card** — attached file chips render inside the input card instead of a separate row above
+- **Auto-scroll fix** — `wheel`/`touchstart` timestamp tracking prevents the MutationObserver feedback loop on Mac WKWebView that caused auto-scroll to fight user scrolling
+
+### 🖥️ Native App Improvements
+
+- **External link handling** — links in chat now open in the system browser instead of navigating in-app; in pywebview mode, routes through `JsApi.open_url()` via `window.pywebview.api`
+- **Context menu paste fix** — right-click Paste now correctly focuses the target element before inserting text; fallback to `document.execCommand('paste')` on clipboard API failure
+- **Viewport lock** — `html, body { overflow: hidden }` prevents page-level scrolling in the native window
+- **Layout padding** — bottom padding added to prevent chat input from touching the window edge
+
+### 🖼️ Image Persistence to Disk
+
+Generated and edited images now persist to the per-thread media directory.
+
+- **`_save_image_to_disk()`** — saves base64 image data to `~/.thoth/media/{thread_id}/gen_NNN.png` (or `edit_NNN.png`) using the existing media pipeline from `threads.py`
+- **All providers** — OpenAI, xAI, and Google image gen/edit paths now call `_save_image_to_disk()` after generation; the saved path is included in the tool result so channels can reference it for sending photos
+- **Received files** — `channels/media.py` gains `copy_to_workspace()` to copy inbound attachments into the filesystem-tool workspace (`Received Files/`) with dedup
+
+### ⚡ Streaming on Telegram
+
+Telegram responses now stream live instead of waiting for the full answer.
+
+- **Placeholder + edit pattern** — sends a "⏳" placeholder message, then progressively edits it with accumulated tokens and tool status lines
+- **Rate-limited edits** — `_tg_edit_consumer()` edits at most every 1.5 seconds to respect Telegram API rate limits; uses a `queue.Queue` bridge between the sync agent executor and the async Telegram event loop
+- **Overflow protection** — if the accumulated text exceeds `MAX_TG_MESSAGE_LEN`, streaming stops editing and the final response is sent as a fresh split message
+
+### ⚠️ Finish-Reason Detection
+
+- **`_finish_reason` tracking** — `_stream_graph()` now reads `response_metadata.finish_reason` from each streaming chunk
+- **Truncation warning** — when `finish_reason == "length"`, appends a user-visible warning: "⚠️ This response was cut short by the model's output token limit"
+
+### 🐛 Bug Fixes
+
+- **YouTube Shorts URLs** — `youtube.com/shorts/` pattern added to all 3 Python regexes (`channels/__init__.py`, `ui/render.py`, `ui/constants.py`) and the bridge; previously Shorts links were silently dropped
+- **Thread ordering** — WhatsApp and Discord `_get_or_create_thread` now always call `_save_thread_meta`, not just for new threads; conversations correctly reorder by last message in the sidebar
+- **Channel thread icons** — WhatsApp (📲 / `forum`), Discord (🎮 / `sports_esports`), and SMS (`textsms`) threads show correct icons in the sidebar
+- **Sidebar thread limit** — `SIDEBAR_MAX_THREADS` bumped from 8 to 10
+- **OAuth token message** — "re-authenticate in Settings → Google" corrected to "Settings → Accounts"
+- **Search tools filter** — Settings → Search & Knowledge now uses an allowlist (`web_search`, `duckduckgo`, `wolfram_alpha`, `arxiv`, `wikipedia`, `youtube`) instead of a blocklist, preventing new tools from being silently hidden
+
+### 🔧 Other Changes
+
+- **Settings → Accounts tab** — Google Account panel refactored into `_build_google_account_panel()` with live status text; new X (Twitter) panel with OAuth flow and tier detection
+- **Settings → Channels tab** — dynamic `_build_channel_panel(ch)` renders auto-generated config UI for any registered channel using `config_fields`; tunnel settings section
+- **Channel `webhook_port` / `needs_tunnel`** — new properties on `Channel` ABC for channels that need inbound webhooks
+- **Channel `get_default_target()`** — new method on `Channel` ABC; replaces hardcoded Telegram-only target resolution in tool factory
+- **`check_channels()` returns list** — `run_all_checks()` and `run_light_checks()` now handle list-returning check functions via `isinstance(result, list)` flattening
+- **Deleted `tools/telegram_tool.py`** — 244 lines removed; Telegram send/photo/document tools now generated dynamically by the channel tool factory
+- **Requirements** — 5 new dependencies (`slack-bolt`, `twilio`, `discord.py`, `pyngrok`, `qrcode`)
+
+### 🧪 Tests
+
+- **~76 net new tests** across 3 new sections (65–67), updating and expanding existing sections
+- **Section 65: X (Twitter) Tool** — OAuth token management, API tier detection, tool registration, rate limiting, Settings Accounts tab with X section
+- **Section 66: Streaming Finish-Reason Detection** — `_finish_reason` tracking in `_stream_graph`, truncation warning injection, `response_metadata` parsing
+- **Section 67: Tunnel & Webhook Infrastructure** — `tunnel.py` module structure, `TunnelManager` singleton, ngrok provider, Settings tunnel section, channel `needs_tunnel` / `webhook_port` properties
+- **Existing section updates** — removed obsolete Telegram-specific prompt tests (TELEGRAM MESSAGING, EMAIL ATTACHMENTS sections moved to tool guides); updated approval channel tests
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`tunnel.py`** | **New** — Tunnel manager with ngrok provider |
+| **`tools/x_tool.py`** | **New** — X (Twitter) tool with 13 API endpoints and OAuth 2.0 PKCE |
+| **`channels/whatsapp.py`** | **New** — WhatsApp channel adapter (Baileys bridge) |
+| **`channels/discord_channel.py`** | **New** — Discord channel adapter |
+| **`channels/slack.py`** | **New** — Slack channel adapter (Socket Mode) |
+| **`channels/sms.py`** | **New** — SMS/Twilio channel adapter |
+| **`channels/auth.py`** | **New** — Shared channel auth utilities |
+| **`channels/commands.py`** | **New** — Shared slash command handling |
+| **`channels/approval.py`** | **New** — Approval routing for channels |
+| **`channels/media_capture.py`** | **New** — Media capture helpers |
+| **`channels/thread_repair.py`** | **New** — Corrupt-thread detection |
+| **`channels/whatsapp_bridge/`** | **New** — Node.js bridge (bridge.js, package.json) |
+| **`tool_guides/`** | **New** — 13 tool guide SKILL.md files |
+| `channels/__init__.py` | YouTube URL extraction + Shorts regex |
+| `channels/base.py` | Activity tracker, `webhook_port`, `needs_tunnel`, `get_default_target()` |
+| `channels/media.py` | `copy_to_workspace()` for received files |
+| `channels/telegram.py` | Streaming via edit consumer, media capture refactor, thread repair import |
+| `channels/tool_factory.py` | Delegated target resolution to `get_default_target()` |
+| `agent.py` | Channel tool injection, `finish_reason` tracking, truncation warning |
+| `app.py` | 5-channel imports, tunnel startup/shutdown, OAuth label fix |
+| `launcher.py` | `JsApi.open_url()` for native external links |
+| `prompts.py` | Removed 120+ lines of hardcoded tool instructions |
+| `skills.py` | Tool guides system: `is_tool_guide()`, `_is_tool_guide_active()`, `get_manual_skills()`, linked tools in skill editor |
+| `tools/image_gen_tool.py` | `_save_image_to_disk()` for all providers |
+| `tools/telegram_tool.py` | **Deleted** — replaced by channel tool factory |
+| `ui/sidebar.py` | Channel monitor panel, channel thread icons |
+| `ui/settings.py` | Accounts tab (Google + X), Channels tab with dynamic panels, tunnel settings, skill tool linking |
+| `ui/chat.py` | Card-based input layout, auto-scroll wheel/touch fix, tool guide filtering |
+| `ui/status_bar.py` | Channel pill filtering |
+| `ui/status_checks.py` | `check_channels()`, `check_tunnel()`, list-result flattening |
+| `ui/head_html.py` | External link handler, viewport lock, paste fix |
+| `ui/constants.py` | YouTube Shorts pattern, `SIDEBAR_MAX_THREADS = 10` |
+| `ui/render.py` | YouTube Shorts embed regex |
+| `ui/helpers.py` | Helper additions |
+| `ui/home.py` | Layout cleanup |
+| `ui/command_center.py` | Minor adjustments |
+| `ui/terminal_widget.py` | Terminal widget updates |
+| `ui/state.py` | State field update |
+| `ui/task_dialog.py` | Task dialog tweaks |
+| `tools/__init__.py` | Registry update |
+| `tools/wiki_tool.py` | Minor cleanup |
+| `requirements.txt` | 5 new deps: `slack-bolt`, `twilio`, `discord.py`, `pyngrok`, `qrcode` |
+| `test_suite.py` | Sections 65–67, existing section updates |
+| `integration_tests.py` | New integration tests |
+| `.gitignore` | New ignore entries |
+| `installer/thoth_setup.iss` | Installer updates |
+| `installer/build_mac_app.sh` | Mac build updates |
+| `docs/ARCHITECTURE.md` | Architecture doc updates |
+| `bundled_skills/*.md` | Skill description trims |
+
+---
+
 ## v3.14.0 — Multi-Provider Cloud, xAI Integration, Workflow Console & UI Polish
 
 Thoth becomes truly **multi-provider** — Anthropic (Claude), Google (Gemini), and xAI (Grok) join OpenAI and OpenRouter as first-class cloud providers with key validation, model fetching, and live model pickers. **Image generation** expands to xAI's Grok Imagine and Google's Imagen 4 / Nano Banana families. A new **media storage architecture** replaces in-memory base64 with file-on-disk persistence and two-tier cleanup, laying the foundation for video generation. A new **Workflow Console** replaces the right drawer with a professional operations panel. The **terminal architecture** is refactored into a modular PTY bridge. **Prompt-injection defences** add 5-layer scanning. The UI receives a polish pass — auto-scroll, inline image rendering fixes, and sidebar refinements. Ships with **172 new tests** across 4 sections, bringing the total to **1526 PASS**, 0 FAIL, 3 WARN.

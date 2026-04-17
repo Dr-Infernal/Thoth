@@ -288,6 +288,98 @@ def build_sidebar(
         ui.label("Conversations").classes("text-subtitle2 mt-2")
         p.thread_container = ui.column().classes("w-full gap-0")
 
+        # ── Channel monitor panel ────────────────────────────────────
+        _ch_icon_map = {
+            "telegram": "send",
+            "discord": "sports_esports",
+            "slack": "tag",
+            "sms": "textsms",
+            "whatsapp": "forum",
+        }
+
+        def _fmt_ago(epoch: float | None) -> str:
+            """Format seconds-since-epoch as a relative string."""
+            if epoch is None:
+                return ""
+            import time as _t
+            delta = int(_t.time() - epoch)
+            if delta < 60:
+                return "just now"
+            if delta < 3600:
+                return f"{delta // 60}m ago"
+            if delta < 86400:
+                return f"{delta // 3600}h ago"
+            return f"{delta // 86400}d ago"
+
+        _ch_monitor_container = ui.column().classes("w-full gap-0 q-mt-sm")
+
+        def _build_channel_monitor() -> None:
+            from channels.registry import all_channels
+            from channels.base import get_last_activity
+
+            _ch_monitor_container.clear()
+            channels = all_channels()
+            if not channels:
+                return
+
+            with _ch_monitor_container:
+                ui.separator().classes("q-my-xs")
+                ui.label("Channels").classes("text-subtitle2")
+
+                for ch in channels:
+                    is_on = ch.is_running()
+                    is_cfg = ch.is_configured()
+
+                    if is_on:
+                        dot_color = "#4caf50"
+                        status_text = _fmt_ago(get_last_activity(ch.name)) or "Running"
+                    elif is_cfg:
+                        dot_color = "#ff9800"
+                        status_text = "Stopped"
+                    else:
+                        dot_color = "#666"
+                        status_text = "Off"
+
+                    icon_name = _ch_icon_map.get(ch.name, "chat")
+
+                    def _ch_click(e, _ch=ch):
+                        open_settings()
+
+                    with ui.row().classes(
+                        "w-full items-center no-wrap cursor-pointer q-py-xs q-px-sm rounded"
+                    ).style(
+                        "min-height: 28px; gap: 6px;"
+                        "transition: background 0.15s;"
+                    ).on("click", _ch_click).on(
+                        "mouseenter",
+                        js_handler="(e) => e.currentTarget.style.background='rgba(255,255,255,0.06)'",
+                    ).on(
+                        "mouseleave",
+                        js_handler="(e) => e.currentTarget.style.background='transparent'",
+                    ):
+                        # Status dot
+                        ui.html(
+                            f'<span style="display:inline-block;width:8px;height:8px;'
+                            f'border-radius:50%;background:{dot_color};flex-shrink:0;"></span>',
+                            sanitize=False,
+                        )
+                        # Channel icon
+                        ui.icon(icon_name, size="xs").classes(
+                            "text-grey-5" if not is_on else "text-primary"
+                        ).style("font-size: 0.85rem;")
+                        # Name
+                        ui.label(ch.display_name).classes("ellipsis").style(
+                            "font-size: 0.8rem; flex-grow: 1;"
+                            + ("opacity: 0.45;" if not is_cfg else "")
+                        )
+                        # Activity / status
+                        ui.label(status_text).classes("text-grey-6").style(
+                            "font-size: 0.7rem; flex-shrink: 0;"
+                        )
+
+        _build_channel_monitor()
+        ui.timer(5.0, _build_channel_monitor)
+
         # Spacer pushes bottom section down
         ui.space()
 
@@ -678,6 +770,14 @@ def build_sidebar(
                             _thr_icon = "email"
                         elif name.startswith("⚡"):
                             _thr_icon = "electric_bolt"
+                        elif name.startswith("�") or "WhatsApp" in name:
+                            _thr_icon = "forum"
+                        elif name.startswith("🎮") or "Discord" in name:
+                            _thr_icon = "sports_esports"
+                        elif name.startswith("�📱"):
+                            _thr_icon = "textsms"
+                        elif name.startswith("💬"):
+                            _thr_icon = "chat"
                         else:
                             _thr_icon = "computer"
                         _icon_el = ui.icon(_thr_icon, size="xs").classes(

@@ -817,7 +817,7 @@ def open_settings(
 
         def _refresh_skills_list():
             skills_container.clear()
-            all_skills = skills_mod.get_all_skills()
+            all_skills = skills_mod.get_manual_skills()
             if not all_skills:
                 with skills_container:
                     ui.label("No skills found. Create one to get started!").classes("text-grey-5 italic")
@@ -896,6 +896,21 @@ def open_settings(
                     value=", ".join(skill.tags) if skill and skill.tags else "",
                 ).classes("w-full")
 
+                # Tools linking — if set, skill auto-activates when any listed tool is enabled
+                from tools import registry as _tools_reg
+                _available_tools = sorted([t.name for t in _tools_reg.get_all_tools()])
+                _current_tools = list(skill.tools) if skill and skill.tools else []
+                tools_select = ui.select(
+                    label="Linked Tools (auto-activates when tool is enabled)",
+                    options=_available_tools,
+                    value=_current_tools,
+                    multiple=True,
+                ).classes("w-full").props('use-chips clearable')
+                ui.label(
+                    "Leave empty for a manually-toggled skill. "
+                    "Link to tools to auto-activate this skill when those tools are enabled."
+                ).classes("text-grey-5 text-xs")
+
                 ui.label("Instructions").classes("text-sm font-bold mt-4")
                 instructions_input = ui.textarea(
                     value=skill.instructions if skill else "",
@@ -921,6 +936,7 @@ def open_settings(
                         _icon_val = icon_sel.value
                         _instr = instructions_input.value.strip()
                         _tags = [t.strip() for t in tags_input.value.split(",") if t.strip()]
+                        _tools = list(tools_select.value) if tools_select.value else None
                         if not _name:
                             ui.notify("Name is required", type="warning")
                             return
@@ -931,12 +947,14 @@ def open_settings(
                             skills_mod.update_skill(
                                 name=_name, display_name=_display, icon=_icon_val,
                                 description=_desc, instructions=_instr, tags=_tags,
+                                tools=_tools,
                             )
                             ui.notify(f"✅ Skill '{_display}' updated", type="positive")
                         else:
                             skills_mod.create_skill(
                                 name=_name, display_name=_display, icon=_icon_val,
                                 description=_desc, instructions=_instr, tags=_tags,
+                                tools=_tools,
                             )
                             ui.notify(f"✅ Skill '{_display}' created", type="positive")
                         dlg.close()
@@ -995,14 +1013,12 @@ def open_settings(
         ui.label("Enable or disable search and knowledge tools.").classes("text-grey-6 text-sm")
         ui.separator()
 
-        skip_tools = {
-            "filesystem", "shell", "gmail", "documents", "calendar", "timer",
-            "url_reader", "calculator", "weather", "vision", "chart",
-            "system_info", "conversation_search", "memory", "tracker",
-            "browser", "telegram", "task", "image_gen", "wiki",
+        search_tools = {
+            "web_search", "duckduckgo", "wolfram_alpha", "arxiv",
+            "wikipedia", "youtube",
         }
         for tool in tool_registry.get_all_tools():
-            if tool.name in skip_tools:
+            if tool.name not in search_tools:
                 continue
             _build_tool_toggle(tool)
             ui.separator()
@@ -1220,7 +1236,7 @@ def open_settings(
 
     # ── Google Account Tab (unified Gmail + Calendar) ──────────────
 
-    def _build_google_account_tab() -> None:
+    def _build_google_account_panel() -> None:
         import shutil
         gmail_tool = tool_registry.get_tool("gmail")
         cal_tool = tool_registry.get_tool("calendar")
@@ -1232,225 +1248,496 @@ def open_settings(
         from tools.gmail_tool import _GMAIL_DIR, DEFAULT_CREDENTIALS_PATH as _GMAIL_CREDS_DEFAULT
         from tools.calendar_tool import DEFAULT_TOKEN_PATH as _CAL_TOKEN_PATH
 
-        ui.label("Google Account").classes("text-h6")
+        def _google_status_text():
+            _gmail_ok = gmail_tool.is_authenticated()
+            _cal_ok = cal_tool.is_authenticated()
+            if _gmail_ok and _cal_ok:
+                try:
+                    s1, _ = gmail_tool.check_token_health()
+                    s2, _ = cal_tool.check_token_health()
+                    if s1 in ("valid", "refreshed") and s2 in ("valid", "refreshed"):
+                        return "✅ Connected"
+                    return "⚠️ Token issue"
+                except Exception:
+                    return "✅ Connected"
+            if not gmail_tool.has_credentials_file():
+                return "⚠️ Not configured"
+            return "🔑 Not authenticated"
+
+        with ui.expansion(
+            f"Google (Gmail & Calendar) — {_google_status_text()}",
+            icon="account_circle",
+        ).classes("w-full") as google_panel:
+
+            # ── Enable switches ──
+            with ui.row().classes("gap-8 items-center"):
+                ui.switch(
+                    "Gmail",
+                    value=tool_registry.is_enabled("gmail"),
+                    on_change=lambda e: tool_registry.set_enabled("gmail", e.value),
+                ).tooltip(gmail_tool.description)
+                ui.switch(
+                    "Calendar",
+                    value=tool_registry.is_enabled("calendar"),
+                    on_change=lambda e: tool_registry.set_enabled("calendar", e.value),
+                ).tooltip(cal_tool.description)
+
+            ui.separator()
+
+            # ── Setup wizard (stepper) ──
+            with ui.expansion("Setup Guide — first-time setup", icon="help_outline").classes("w-full"):
+                with ui.stepper().props("vertical").classes("w-full") as stepper:
+                    with ui.step("Create Google Cloud Project"):
+                        ui.markdown(
+                            "1. Open [Google Cloud Console](https://console.cloud.google.com)\n"
+                            "2. Click the project dropdown (top bar) → **New Project**\n"
+                            "3. Name it anything (e.g. *Thoth*) → **Create**\n"
+                            "4. Make sure the new project is selected in the dropdown",
+                        )
+                        with ui.stepper_navigation():
+                            ui.button("Next", on_click=stepper.next)
+                    with ui.step("Enable APIs"):
+                        ui.markdown(
+                            "1. Go to **APIs & Services → Library**\n"
+                            "2. Search for **Gmail API** → click it → **Enable**\n"
+                            "3. Search for **Google Calendar API** → click it → **Enable**",
+                        )
+                        with ui.stepper_navigation():
+                            ui.button("Next", on_click=stepper.next)
+                            ui.button("Back", on_click=stepper.previous).props("flat")
+                    with ui.step("Configure OAuth Consent"):
+                        ui.markdown(
+                            "1. Go to **APIs & Services → OAuth consent screen**\n"
+                            '2. Select **External** → **Create**\n'
+                            "3. Fill in App name (e.g. *Thoth*), your email → **Save and Continue**\n"
+                            "4. On **Scopes** page → just click **Save and Continue**\n"
+                            "5. On **Test users** → **Add Users** → add your Gmail address → **Save**",
+                        )
+                        with ui.stepper_navigation():
+                            ui.button("Next", on_click=stepper.next)
+                            ui.button("Back", on_click=stepper.previous).props("flat")
+                    with ui.step("Create OAuth Client ID"):
+                        ui.markdown(
+                            "1. Go to **APIs & Services → Credentials**\n"
+                            "2. Click **+ Create Credentials → OAuth client ID**\n"
+                            "3. Application type → **Desktop app**\n"
+                            "4. Name it anything → **Create**\n"
+                            "5. Click **Download JSON** (saves as `client_secret_...json`)",
+                        )
+                        with ui.stepper_navigation():
+                            ui.button("Next", on_click=stepper.next)
+                            ui.button("Back", on_click=stepper.previous).props("flat")
+                    with ui.step("Select Credentials & Authenticate"):
+                        ui.markdown(
+                            "Use the **Browse** button below to select the downloaded JSON file, "
+                            "then click **Authenticate Google**. A browser window will open for sign-in.",
+                        )
+                        with ui.stepper_navigation():
+                            ui.button("Back", on_click=stepper.previous).props("flat")
+
+            ui.separator()
+
+            # ── Credentials path + browse + auto-copy ──
+            creds_default = gmail_tool.config_schema.get("credentials_path", {}).get("default", "")
+            current_creds = gmail_tool.get_config("credentials_path", creds_default)
+            creds_input = ui.input(
+                "credentials.json path", value=current_creds or "",
+            ).classes("w-full").props("readonly")
+
+            async def _browse_and_copy():
+                path = await browse_file(
+                    "Select credentials.json (or client_secret_*.json)",
+                    os.path.dirname(current_creds) if current_creds else "",
+                    [("JSON files", "*.json")],
+                )
+                if not path:
+                    return
+                src = pathlib.Path(path)
+                dest = _GMAIL_DIR / "credentials.json"
+                # Auto-copy to canonical location if not already there
+                if src.resolve() != dest.resolve():
+                    try:
+                        shutil.copy2(str(src), str(dest))
+                        ui.notify(f"Copied to {dest}", type="info")
+                    except Exception as exc:
+                        ui.notify(f"Copy failed: {exc}", type="negative")
+                        # Fall back to using the original path
+                        creds_input.value = path
+                        gmail_tool.set_config("credentials_path", path)
+                        cal_tool.set_config("credentials_path", path)
+                        return
+                canonical = str(dest)
+                creds_input.value = canonical
+                gmail_tool.set_config("credentials_path", canonical)
+                cal_tool.set_config("credentials_path", canonical)
+                ui.notify("Credentials ready — click Authenticate Google", type="positive")
+
+            ui.button("Browse…", on_click=_browse_and_copy, icon="folder_open").props("flat dense")
+
+            ui.separator()
+
+            # ── Combined auth status ──
+            _has_creds = gmail_tool.has_credentials_file()
+            _gmail_authed = gmail_tool.is_authenticated()
+            _cal_authed = cal_tool.is_authenticated()
+            _both_authed = _gmail_authed and _cal_authed
+
+            def _show_token_status(label: str, tool, authed: bool):
+                if not authed:
+                    ui.label(f"⬜ {label} — not authenticated").classes("text-grey-6 text-sm")
+                    return
+                try:
+                    status, detail = tool.check_token_health()
+                except Exception:
+                    status, detail = "valid", ""
+                if status in ("valid", "refreshed"):
+                    ui.label(f"✅ {label} — token healthy").classes("text-positive text-sm")
+                elif status == "expired":
+                    ui.label(f"⚠️ {label} — token expired").classes("text-warning text-sm")
+                elif status == "error":
+                    ui.label(f"⚠️ {label} — {detail}").classes("text-warning text-sm")
+                else:
+                    ui.label(f"✅ {label} — connected").classes("text-positive text-sm")
+
+            with ui.column().classes("gap-1"):
+                _show_token_status("Gmail", gmail_tool, _gmail_authed)
+                _show_token_status("Calendar", cal_tool, _cal_authed)
+
+            # ── Combined authenticate / re-authenticate ──
+            def _do_combined_auth():
+                """Single OAuth flow with both Gmail + Calendar scopes."""
+                from google_auth_oauthlib.flow import InstalledAppFlow
+                from tools.gmail_tool import GMAIL_SCOPES, DEFAULT_TOKEN_PATH as _GMAIL_TOKEN
+                from tools.calendar_tool import CALENDAR_SCOPES
+
+                creds_path = gmail_tool._get_credentials_path()
+                combined_scopes = GMAIL_SCOPES + CALENDAR_SCOPES
+
+                flow = InstalledAppFlow.from_client_secrets_file(creds_path, combined_scopes)
+                creds = flow.run_local_server(port=0)
+
+                # Write token to both locations
+                pathlib.Path(_GMAIL_TOKEN).parent.mkdir(parents=True, exist_ok=True)
+                pathlib.Path(_GMAIL_TOKEN).write_text(creds.to_json())
+                pathlib.Path(_CAL_TOKEN_PATH).parent.mkdir(parents=True, exist_ok=True)
+                pathlib.Path(_CAL_TOKEN_PATH).write_text(creds.to_json())
+
+            if _has_creds:
+                if _both_authed:
+                    async def _reauth_google():
+                        try:
+                            # Remove both tokens
+                            for tp in (gmail_tool._get_token_path(), cal_tool._get_token_path()):
+                                if os.path.isfile(tp):
+                                    os.remove(tp)
+                            await run.io_bound(_do_combined_auth)
+                            clear_agent_cache()
+                            ui.notify("✅ Google account re-authenticated!", type="positive")
+                            _reopen("Accounts")
+                        except Exception as e:
+                            ui.notify(f"Auth failed: {e}", type="negative")
+
+                    ui.button("Re-authenticate Google", on_click=_reauth_google, icon="refresh").props("flat dense")
+                else:
+                    async def _auth_google():
+                        try:
+                            await run.io_bound(_do_combined_auth)
+                            clear_agent_cache()
+                            ui.notify("✅ Google account authenticated!", type="positive")
+                            _reopen("Accounts")
+                        except Exception as e:
+                            ui.notify(f"Auth failed: {e}", type="negative")
+
+                    ui.button("Authenticate Google", on_click=_auth_google, icon="login").props("outlined")
+            else:
+                ui.label(
+                    "Select your credentials file above to get started."
+                ).classes("text-grey-6 text-sm")
+
+            # ── Gmail operation checkboxes ──
+            ui.separator()
+            ui.label("Gmail Operations").classes("text-subtitle2")
+            from tools.gmail_tool import _READ_OPS, _COMPOSE_OPS, _SEND_OPS
+            ops_default = gmail_tool.config_schema.get("selected_operations", {}).get("default", [])
+            current_ops = gmail_tool.get_config("selected_operations", ops_default)
+            if not isinstance(current_ops, list):
+                current_ops = ops_default
+            _build_ops_checkboxes(
+                [("Read", _READ_OPS), ("Compose", _COMPOSE_OPS), ("⚠️ Send", _SEND_OPS)],
+                current_ops, gmail_tool,
+            )
+
+            # ── Calendar operation checkboxes ──
+            ui.separator()
+            ui.label("Calendar Operations").classes("text-subtitle2")
+            from tools.calendar_tool import (
+                _READ_OPS as CAL_READ_OPS,
+                _WRITE_OPS as CAL_WRITE_OPS,
+                _DESTRUCTIVE_OPS as CAL_DESTRUCTIVE_OPS,
+            )
+            cal_ops_default = cal_tool.config_schema.get("selected_operations", {}).get("default", [])
+            current_cal_ops = cal_tool.get_config("selected_operations", cal_ops_default)
+            if not isinstance(current_cal_ops, list):
+                current_cal_ops = cal_ops_default
+            _build_ops_checkboxes(
+                [("Read", CAL_READ_OPS), ("Write", CAL_WRITE_OPS), ("⚠️ Destructive", CAL_DESTRUCTIVE_OPS)],
+                current_cal_ops, cal_tool,
+            )
+
+    # ── Accounts Tab ─────────────────────────────────────────────────
+
+    def _build_accounts_tab() -> None:
+        ui.label("👥 Accounts").classes("text-h6")
         ui.label(
-            "Connect Gmail and Google Calendar with a single sign-in."
+            "Connect Google, social media, and other personal accounts."
         ).classes("text-grey-6 text-sm")
 
-        # ── Enable switches ──
-        with ui.row().classes("gap-8 items-center"):
-            ui.switch(
-                "Gmail",
-                value=tool_registry.is_enabled("gmail"),
-                on_change=lambda e: tool_registry.set_enabled("gmail", e.value),
-            ).tooltip(gmail_tool.description)
-            ui.switch(
-                "Calendar",
-                value=tool_registry.is_enabled("calendar"),
-                on_change=lambda e: tool_registry.set_enabled("calendar", e.value),
-            ).tooltip(cal_tool.description)
-
         ui.separator()
 
-        # ── Setup wizard (stepper) ──
-        with ui.expansion("Setup Guide — first-time setup", icon="help_outline").classes("w-full"):
-            with ui.stepper().props("vertical").classes("w-full") as stepper:
-                with ui.step("Create Google Cloud Project"):
-                    ui.markdown(
-                        "1. Open [Google Cloud Console](https://console.cloud.google.com)\n"
-                        "2. Click the project dropdown (top bar) → **New Project**\n"
-                        "3. Name it anything (e.g. *Thoth*) → **Create**\n"
-                        "4. Make sure the new project is selected in the dropdown",
-                    )
-                    with ui.stepper_navigation():
-                        ui.button("Next", on_click=stepper.next)
-                with ui.step("Enable APIs"):
-                    ui.markdown(
-                        "1. Go to **APIs & Services → Library**\n"
-                        "2. Search for **Gmail API** → click it → **Enable**\n"
-                        "3. Search for **Google Calendar API** → click it → **Enable**",
-                    )
-                    with ui.stepper_navigation():
-                        ui.button("Next", on_click=stepper.next)
-                        ui.button("Back", on_click=stepper.previous).props("flat")
-                with ui.step("Configure OAuth Consent"):
-                    ui.markdown(
-                        "1. Go to **APIs & Services → OAuth consent screen**\n"
-                        '2. Select **External** → **Create**\n'
-                        "3. Fill in App name (e.g. *Thoth*), your email → **Save and Continue**\n"
-                        "4. On **Scopes** page → just click **Save and Continue**\n"
-                        "5. On **Test users** → **Add Users** → add your Gmail address → **Save**",
-                    )
-                    with ui.stepper_navigation():
-                        ui.button("Next", on_click=stepper.next)
-                        ui.button("Back", on_click=stepper.previous).props("flat")
-                with ui.step("Create OAuth Client ID"):
-                    ui.markdown(
-                        "1. Go to **APIs & Services → Credentials**\n"
-                        "2. Click **+ Create Credentials → OAuth client ID**\n"
-                        "3. Application type → **Desktop app**\n"
-                        "4. Name it anything → **Create**\n"
-                        "5. Click **Download JSON** (saves as `client_secret_...json`)",
-                    )
-                    with ui.stepper_navigation():
-                        ui.button("Next", on_click=stepper.next)
-                        ui.button("Back", on_click=stepper.previous).props("flat")
-                with ui.step("Select Credentials & Authenticate"):
-                    ui.markdown(
-                        "Use the **Browse** button below to select the downloaded JSON file, "
-                        "then click **Authenticate Google**. A browser window will open for sign-in.",
-                    )
-                    with ui.stepper_navigation():
-                        ui.button("Back", on_click=stepper.previous).props("flat")
+        _build_google_account_panel()
+        _build_x_account_panel()
 
-        ui.separator()
+    def _build_x_account_panel() -> None:
+        """Render the X (Twitter) account settings panel."""
+        from tools.x_tool import (
+            XTool, _READ_OPS as X_READ_OPS, _POST_OPS as X_POST_OPS,
+            _ENGAGE_OPS as X_ENGAGE_OPS,
+        )
 
-        # ── Credentials path + browse + auto-copy ──
-        creds_default = gmail_tool.config_schema.get("credentials_path", {}).get("default", "")
-        current_creds = gmail_tool.get_config("credentials_path", creds_default)
-        creds_input = ui.input(
-            "credentials.json path", value=current_creds or "",
-        ).classes("w-full").props("readonly")
+        x_tool = tool_registry.get_tool("x")
+        if not x_tool:
+            ui.label("X tool not found.").classes("text-negative")
+            return
 
-        async def _browse_and_copy():
-            path = await browse_file(
-                "Select credentials.json (or client_secret_*.json)",
-                os.path.dirname(current_creds) if current_creds else "",
-                [("JSON files", "*.json")],
-            )
-            if not path:
-                return
-            src = pathlib.Path(path)
-            dest = _GMAIL_DIR / "credentials.json"
-            # Auto-copy to canonical location if not already there
-            if src.resolve() != dest.resolve():
-                try:
-                    shutil.copy2(str(src), str(dest))
-                    ui.notify(f"Copied to {dest}", type="info")
-                except Exception as exc:
-                    ui.notify(f"Copy failed: {exc}", type="negative")
-                    # Fall back to using the original path
-                    creds_input.value = path
-                    gmail_tool.set_config("credentials_path", path)
-                    cal_tool.set_config("credentials_path", path)
-                    return
-            canonical = str(dest)
-            creds_input.value = canonical
-            gmail_tool.set_config("credentials_path", canonical)
-            cal_tool.set_config("credentials_path", canonical)
-            ui.notify("Credentials ready — click Authenticate Google", type="positive")
-
-        ui.button("Browse…", on_click=_browse_and_copy, icon="folder_open").props("flat dense")
-
-        ui.separator()
-
-        # ── Combined auth status ──
-        _has_creds = gmail_tool.has_credentials_file()
-        _gmail_authed = gmail_tool.is_authenticated()
-        _cal_authed = cal_tool.is_authenticated()
-        _both_authed = _gmail_authed and _cal_authed
-
-        def _show_token_status(label: str, tool, authed: bool):
-            if not authed:
-                ui.label(f"⬜ {label} — not authenticated").classes("text-grey-6 text-sm")
-                return
-            try:
-                status, detail = tool.check_token_health()
-            except Exception:
-                status, detail = "valid", ""
+        def _x_status_text():
+            if not x_tool.has_credentials():
+                return "⚠️ Not configured"
+            if not x_tool.is_authenticated():
+                return "🔑 Not authenticated"
+            status, _ = x_tool.check_token_health()
             if status in ("valid", "refreshed"):
-                ui.label(f"✅ {label} — token healthy").classes("text-positive text-sm")
-            elif status == "expired":
-                ui.label(f"⚠️ {label} — token expired").classes("text-warning text-sm")
-            elif status == "error":
-                ui.label(f"⚠️ {label} — {detail}").classes("text-warning text-sm")
-            else:
-                ui.label(f"✅ {label} — connected").classes("text-positive text-sm")
+                return "✅ Connected"
+            if status == "expired":
+                return "⚠️ Token expired"
+            return "⚠️ Check status"
 
-        with ui.column().classes("gap-1"):
-            _show_token_status("Gmail", gmail_tool, _gmail_authed)
-            _show_token_status("Calendar", cal_tool, _cal_authed)
+        with ui.expansion(
+            f"𝕏 X (Twitter) — {_x_status_text()}",
+            icon="tag",
+        ).classes("w-full") as panel:
 
-        # ── Combined authenticate / re-authenticate ──
-        def _do_combined_auth():
-            """Single OAuth flow with both Gmail + Calendar scopes."""
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            from tools.gmail_tool import GMAIL_SCOPES, DEFAULT_TOKEN_PATH as _GMAIL_TOKEN
-            from tools.calendar_tool import CALENDAR_SCOPES
+            # ── Enable switch ────────────────────────────────────────
+            ui.switch(
+                "Enable X tool",
+                value=tool_registry.is_enabled("x"),
+                on_change=lambda e: (
+                    tool_registry.set_enabled("x", e.value),
+                    clear_agent_cache(),
+                ),
+            ).tooltip(x_tool.description)
 
-            creds_path = gmail_tool._get_credentials_path()
-            combined_scopes = GMAIL_SCOPES + CALENDAR_SCOPES
+            # ── Setup Guide (collapsible) ────────────────────────────
+            with ui.expansion("📖 Setup Guide", icon="help_outline").classes("w-full mt-2"):
+                with ui.stepper().props("vertical").classes("w-full") as stepper:
+                    with ui.step("Create X Developer Account"):
+                        ui.markdown(
+                            "1. Go to [developer.x.com](https://developer.x.com)\n"
+                            "2. Sign in with your X account\n"
+                            "3. Apply for a developer account if you haven't already\n"
+                            "4. Go to the **Developer Portal Dashboard**",
+                        )
+                        with ui.stepper_navigation():
+                            ui.button("Next", on_click=stepper.next)
+                    with ui.step("Create a Project & App"):
+                        ui.markdown(
+                            "1. In the Developer Portal, click **+ Create Project**\n"
+                            "2. Name it (e.g. *Thoth*) → select a use case → **Next**\n"
+                            "3. An App will be created automatically\n"
+                            "4. Go to your App's **Settings** tab",
+                        )
+                        with ui.stepper_navigation():
+                            ui.button("Next", on_click=stepper.next)
+                            ui.button("Back", on_click=stepper.previous).props("flat")
+                    with ui.step("Configure OAuth 2.0"):
+                        ui.markdown(
+                            "1. Under **User authentication settings**, click **Set up**\n"
+                            "2. Enable **OAuth 2.0**\n"
+                            "3. App type: **Web App** (or Native App)\n"
+                            "4. Callback URL: **`http://127.0.0.1:17638/callback`**\n"
+                            "   *(this must match exactly — including the port)*\n"
+                            "5. Website URL: any URL (e.g. `https://example.com`)\n"
+                            "6. Click **Save**",
+                        )
+                        with ui.stepper_navigation():
+                            ui.button("Next", on_click=stepper.next)
+                            ui.button("Back", on_click=stepper.previous).props("flat")
+                    with ui.step("Copy Client ID & Secret"):
+                        ui.markdown(
+                            "1. Go to your App's **Keys and tokens** tab\n"
+                            "2. Under **OAuth 2.0 Client ID and Client Secret**:\n"
+                            "   - Copy the **Client ID** and paste below\n"
+                            "   - Copy the **Client Secret** and paste below\n"
+                            "3. Click **Save** below, then **Authenticate**",
+                        )
+                        with ui.stepper_navigation():
+                            ui.button("Back", on_click=stepper.previous).props("flat")
 
-            flow = InstalledAppFlow.from_client_secrets_file(creds_path, combined_scopes)
-            creds = flow.run_local_server(port=0)
+            ui.separator()
 
-            # Write token to both locations
-            pathlib.Path(_GMAIL_TOKEN).parent.mkdir(parents=True, exist_ok=True)
-            pathlib.Path(_GMAIL_TOKEN).write_text(creds.to_json())
-            pathlib.Path(_CAL_TOKEN_PATH).parent.mkdir(parents=True, exist_ok=True)
-            pathlib.Path(_CAL_TOKEN_PATH).write_text(creds.to_json())
+            # ── Client ID / Secret fields ────────────────────────────
+            current_id = get_key("X_CLIENT_ID")
+            current_secret = get_key("X_CLIENT_SECRET")
 
-        if _has_creds:
-            if _both_authed:
-                async def _reauth_google():
-                    try:
-                        # Remove both tokens
-                        for tp in (gmail_tool._get_token_path(), cal_tool._get_token_path()):
-                            if os.path.isfile(tp):
-                                os.remove(tp)
-                        await run.io_bound(_do_combined_auth)
-                        clear_agent_cache()
-                        ui.notify("✅ Google account re-authenticated!", type="positive")
-                        _reopen("Google")
-                    except Exception as e:
-                        ui.notify(f"Auth failed: {e}", type="negative")
+            id_input = ui.input(
+                "Client ID", value=current_id,
+                password=True, password_toggle_button=True,
+            ).classes("w-full")
 
-                ui.button("Re-authenticate Google", on_click=_reauth_google, icon="refresh").props("flat dense")
-            else:
-                async def _auth_google():
-                    try:
-                        await run.io_bound(_do_combined_auth)
-                        clear_agent_cache()
-                        ui.notify("✅ Google account authenticated!", type="positive")
-                        _reopen("Google")
-                    except Exception as e:
-                        ui.notify(f"Auth failed: {e}", type="negative")
+            secret_input = ui.input(
+                "Client Secret", value=current_secret,
+                password=True, password_toggle_button=True,
+            ).classes("w-full")
 
-                ui.button("Authenticate Google", on_click=_auth_google, icon="login").props("outlined")
-        else:
-            ui.label(
-                "Select your credentials file above to get started."
-            ).classes("text-grey-6 text-sm")
+            # ── Auth status ──────────────────────────────────────────
+            status_container = ui.column().classes("gap-1 mt-2")
 
-        # ── Gmail operation checkboxes ──
-        ui.separator()
-        ui.label("Gmail Operations").classes("text-subtitle2")
-        from tools.gmail_tool import _READ_OPS, _COMPOSE_OPS, _SEND_OPS
-        ops_default = gmail_tool.config_schema.get("selected_operations", {}).get("default", [])
-        current_ops = gmail_tool.get_config("selected_operations", ops_default)
-        if not isinstance(current_ops, list):
-            current_ops = ops_default
-        _build_ops_checkboxes(
-            [("Read", _READ_OPS), ("Compose", _COMPOSE_OPS), ("⚠️ Send", _SEND_OPS)],
-            current_ops, gmail_tool,
-        )
+            def _update_auth_status():
+                status_container.clear()
+                with status_container:
+                    if not x_tool.has_credentials():
+                        ui.label("⬜ Not configured — enter Client ID and Secret above").classes(
+                            "text-grey-6 text-sm"
+                        )
+                        return
+                    if not x_tool.is_authenticated():
+                        ui.label("🔑 Credentials saved — click Authenticate below").classes(
+                            "text-info text-sm"
+                        )
+                        return
+                    status, detail = x_tool.check_token_health()
+                    if status in ("valid", "refreshed"):
+                        username = x_tool.get_authenticated_username()
+                        if username:
+                            ui.label(f"✅ Authenticated as @{username}").classes(
+                                "text-positive text-sm"
+                            )
+                        else:
+                            ui.label("✅ Token healthy").classes("text-positive text-sm")
+                    elif status == "expired":
+                        ui.label(f"⚠️ Token expired — {detail}").classes(
+                            "text-warning text-sm"
+                        )
+                    else:
+                        ui.label(f"⚠️ {detail}").classes("text-warning text-sm")
 
-        # ── Calendar operation checkboxes ──
-        ui.separator()
-        ui.label("Calendar Operations").classes("text-subtitle2")
-        from tools.calendar_tool import (
-            _READ_OPS as CAL_READ_OPS,
-            _WRITE_OPS as CAL_WRITE_OPS,
-            _DESTRUCTIVE_OPS as CAL_DESTRUCTIVE_OPS,
-        )
-        cal_ops_default = cal_tool.config_schema.get("selected_operations", {}).get("default", [])
-        current_cal_ops = cal_tool.get_config("selected_operations", cal_ops_default)
-        if not isinstance(current_cal_ops, list):
-            current_cal_ops = cal_ops_default
-        _build_ops_checkboxes(
-            [("Read", CAL_READ_OPS), ("Write", CAL_WRITE_OPS), ("⚠️ Destructive", CAL_DESTRUCTIVE_OPS)],
-            current_cal_ops, cal_tool,
-        )
+            _update_auth_status()
+
+            # ── Save / Auth / Re-auth buttons ────────────────────────
+            def _save_x_credentials():
+                cid = (id_input.value or "").strip()
+                csecret = (secret_input.value or "").strip()
+                if not cid or not csecret:
+                    ui.notify("Please enter both Client ID and Client Secret", type="warning")
+                    return
+                set_key("X_CLIENT_ID", cid)
+                set_key("X_CLIENT_SECRET", csecret)
+                clear_agent_cache()
+                _update_auth_status()
+                _update_buttons()
+                _refresh_x_header()
+                ui.notify("X credentials saved", type="positive")
+
+            async def _do_x_auth():
+                if not x_tool.has_credentials():
+                    ui.notify("Please save your Client ID and Secret first", type="warning")
+                    return
+                try:
+                    ui.notify("Opening browser for X authentication…", type="info")
+                    await run.io_bound(x_tool.authenticate)
+                    clear_agent_cache()
+                    _update_auth_status()
+                    _update_buttons()
+                    _refresh_x_header()
+                    ui.notify("✅ X authentication successful!", type="positive")
+                except Exception as exc:
+                    ui.notify(f"X authentication failed: {exc}", type="negative")
+
+            async def _do_x_reauth():
+                # Remove existing token
+                from tools.x_tool import _TOKEN_PATH
+                if _TOKEN_PATH.is_file():
+                    _TOKEN_PATH.unlink()
+                await _do_x_auth()
+
+            buttons_container = ui.row().classes("gap-2 items-center mt-2")
+
+            def _update_buttons():
+                buttons_container.clear()
+                with buttons_container:
+                    ui.button("💾 Save", on_click=_save_x_credentials)
+                    if x_tool.has_credentials():
+                        if x_tool.is_authenticated():
+                            ui.button("🔄 Re-authenticate", on_click=_do_x_reauth).props("flat")
+                        else:
+                            ui.button("🔑 Authenticate", on_click=_do_x_auth).props("color=positive")
+
+            _update_buttons()
+
+            # ── Operations checkboxes ────────────────────────────────
+            ui.separator()
+
+            ui.label("X Operations").classes("text-subtitle2")
+            ui.label("Allowed operations").classes("text-sm font-bold mt-2")
+
+            def _make_toggle(selected, cfg_key):
+                def _toggle(op, val):
+                    if val and op not in selected:
+                        selected.append(op)
+                    elif not val and op in selected:
+                        selected.remove(op)
+                    x_tool.set_config(cfg_key, list(selected))
+                return _toggle
+
+            with ui.row().classes("w-full gap-8"):
+                # Read column
+                read_default = x_tool.config_schema.get("read_operations", {}).get("default", [])
+                current_read = list(x_tool.get_config("read_operations", read_default))
+                if not isinstance(current_read, list):
+                    current_read = list(read_default)
+                toggle_read = _make_toggle(current_read, "read_operations")
+                with ui.column():
+                    ui.label("📖 Read").classes("font-bold text-sm")
+                    for op in X_READ_OPS:
+                        ui.checkbox(op, value=op in current_read,
+                                    on_change=lambda e, o=op: toggle_read(o, e.value))
+
+                # Post column
+                post_default = x_tool.config_schema.get("post_operations", {}).get("default", [])
+                current_post = list(x_tool.get_config("post_operations", post_default))
+                if not isinstance(current_post, list):
+                    current_post = list(post_default)
+                toggle_post = _make_toggle(current_post, "post_operations")
+                with ui.column():
+                    ui.label("⚠️ Post (requires approval)").classes("font-bold text-sm")
+                    for op in X_POST_OPS:
+                        ui.checkbox(op, value=op in current_post,
+                                    on_change=lambda e, o=op: toggle_post(o, e.value))
+
+                # Engage column
+                engage_default = x_tool.config_schema.get("engage_operations", {}).get("default", [])
+                current_engage = list(x_tool.get_config("engage_operations", engage_default))
+                if not isinstance(current_engage, list):
+                    current_engage = list(engage_default)
+                toggle_engage = _make_toggle(current_engage, "engage_operations")
+                with ui.column():
+                    ui.label("👍 Engage").classes("font-bold text-sm")
+                    for op in X_ENGAGE_OPS:
+                        ui.checkbox(op, value=op in current_engage,
+                                    on_change=lambda e, o=op: toggle_engage(o, e.value))
+
+            def _refresh_x_header():
+                panel._props["label"] = f"𝕏 X (Twitter) — {_x_status_text()}"
+                panel.update()
 
     # ── Utilities Tab ────────────────────────────────────────────────
 
@@ -1966,118 +2253,403 @@ def open_settings(
     # ── Channels Tab ─────────────────────────────────────────────────
 
     def _build_channels_tab() -> None:
-        from channels.telegram import is_configured as tg_configured, is_running as tg_running
-        from channels.telegram import start_bot as _tg_start_bot, stop_bot as _tg_stop_bot
+        from channels import registry as _ch_registry
         from channels import config as _ch_config
+        from tunnel import tunnel_manager
 
+        # ── Tunnel Settings ──────────────────────────────────────
+        ui.label("🔗 Tunnel Settings").classes("text-h6")
+        ui.label(
+            "Securely expose local webhook ports to the internet."
+        ).classes("text-grey-6 text-sm")
+
+        with ui.card().classes("w-full q-pa-md q-mb-md"):
+            # Provider selector (future: cloudflare, tailscale)
+            provider_val = _ch_config.get("tunnel", "provider", "ngrok")
+            provider_select = ui.select(
+                label="Provider",
+                options=["ngrok"],
+                value=provider_val,
+            ).classes("w-full").style("max-width: 300px")
+
+            # Authtoken
+            token_val = get_key("NGROK_AUTHTOKEN") or ""
+            token_input = ui.input(
+                label="Authtoken",
+                value=token_val,
+                password=True,
+                password_toggle_button=True,
+            ).classes("w-full")
+            token_input.tooltip("Your ngrok authtoken from https://dashboard.ngrok.com/")
+
+            def _save_tunnel_settings():
+                _ch_config.set("tunnel", "provider", provider_select.value)
+                raw = token_input.value
+                if isinstance(raw, str):
+                    raw = raw.strip()
+                set_key("NGROK_AUTHTOKEN", raw)
+                ui.notify("Tunnel settings saved", type="positive")
+                _refresh_active_tunnels()
+
+            ui.button("💾 Save", on_click=_save_tunnel_settings)
+
+            # Active tunnels display
+            tunnel_container = ui.column().classes("w-full q-mt-sm")
+
+            def _refresh_active_tunnels():
+                tunnel_container.clear()
+                with tunnel_container:
+                    active = tunnel_manager.active_tunnels()
+                    if active:
+                        ui.label("Active Tunnels:").classes(
+                            "text-weight-medium text-sm"
+                        )
+                        for port, url in active.items():
+                            with ui.row().classes("items-center gap-2"):
+                                ui.label(f"Port {port}").classes("text-sm")
+                                ui.label("→").classes("text-grey-6 text-sm")
+                                url_label = ui.label(url).classes(
+                                    "text-sm text-primary"
+                                )
+                                ui.button(
+                                    icon="content_copy",
+                                    on_click=lambda u=url: (
+                                        ui.run_javascript(
+                                            f"navigator.clipboard.writeText('{u}')"
+                                        ),
+                                        ui.notify("Copied!", type="info"),
+                                    ),
+                                ).props("flat dense size=xs")
+                    else:
+                        if tunnel_manager.is_available():
+                            ui.label(
+                                "No active tunnels — start a channel to open one."
+                            ).classes("text-grey-6 text-sm")
+                        else:
+                            ui.label(
+                                "Not configured — paste your authtoken above."
+                            ).classes("text-grey-6 text-sm")
+
+            _refresh_active_tunnels()
+
+            # Setup guide
+            with ui.expansion("ⓘ Setup Guide").classes("w-full q-mt-sm"):
+                ui.markdown(
+                    "1. Sign up at [ngrok.com](https://ngrok.com/) (free tier available)\n"
+                    "2. Copy your **authtoken** from the "
+                    "[dashboard](https://dashboard.ngrok.com/get-started/your-authtoken)\n"
+                    "3. Paste it above and click **Save**\n"
+                    "4. Start a channel — a tunnel activates automatically\n\n"
+                    "*The ngrok binary is downloaded automatically on first use.*",
+                    extras=["code-friendly", "fenced-code-blocks"],
+                ).classes("text-sm")
+
+            # Main-app tunnel toggle
+            ui.separator().classes("q-mt-sm")
+            main_app_val = _ch_config.get("tunnel", "tunnel_main_app", False)
+            main_app_switch = ui.switch(
+                "🌐 Expose task webhook endpoint",
+                value=main_app_val,
+            )
+            main_app_switch.tooltip(
+                "Tunnel the main Thoth port so external services can "
+                "trigger task webhooks via /api/webhook/{task_id}. "
+                "⚠️ This also exposes the web UI via the tunnel URL."
+            )
+
+            main_app_url_container = ui.column().classes("w-full")
+
+            async def _on_main_app_toggle(e):
+                _ch_config.set("tunnel", "tunnel_main_app", e.args)
+                if e.args and tunnel_manager.is_available():
+                    try:
+                        app_port = 8080
+                        url = tunnel_manager.start_tunnel(app_port, label="main_app")
+                        main_app_url_container.clear()
+                        with main_app_url_container:
+                            with ui.row().classes("items-center gap-2"):
+                                ui.label(f"{url}/api/webhook/{{task_id}}").classes(
+                                    "text-sm text-primary"
+                                )
+                                ui.button(
+                                    icon="content_copy",
+                                    on_click=lambda u=url: (
+                                        ui.run_javascript(
+                                            f"navigator.clipboard.writeText("
+                                            f"'{u}/api/webhook/{{task_id}}')"
+                                        ),
+                                        ui.notify("Copied!", type="info"),
+                                    ),
+                                ).props("flat dense size=xs")
+                        _refresh_active_tunnels()
+                    except Exception as exc:
+                        ui.notify(f"Tunnel error: {exc}", type="negative")
+                elif not e.args:
+                    try:
+                        app_port = 8080
+                        tunnel_manager.stop_tunnel(app_port)
+                    except Exception:
+                        pass
+                    main_app_url_container.clear()
+                    _refresh_active_tunnels()
+
+            main_app_switch.on("update:model-value", _on_main_app_toggle)
+
+        ui.separator()
+
+        # ── Messaging Channels ───────────────────────────────────
         ui.label("📱 Messaging Channels").classes("text-h6")
         ui.label("Connect Thoth to external messaging platforms.").classes("text-grey-6 text-sm")
 
         ui.separator()
 
-        # ── Telegram ────────────────────────────────────────────────
-        def _tg_status_text():
-            if tg_running():
+        channels = _ch_registry.all_channels()
+        if not channels:
+            ui.label("No channels registered.").classes("text-grey-6 text-sm")
+            return
+
+        for ch in channels:
+            _build_channel_panel(ch, _ch_config)
+
+    def _build_channel_panel(ch, _ch_config) -> None:
+        """Render a single channel's settings panel, auto-generated from its
+        config_fields, capabilities, and setup_guide properties."""
+
+        def _ch_status_text():
+            if ch.is_running():
                 return "✅ Running"
-            if tg_configured():
+            if ch.is_configured():
                 return "⏸️ Stopped"
             return "⚠️ Not configured"
 
+        icon = ch.icon or "chat"
         with ui.expansion(
-            f"🤖 Telegram Bot — {_tg_status_text()}",
-            icon="telegram",
-        ).classes("w-full") as tg_panel:
+            f"{ch.display_name} — {_ch_status_text()}",
+            icon=icon,
+        ).classes("w-full") as panel:
 
-            tg_token = get_key("TELEGRAM_BOT_TOKEN")
-            tg_user_id = get_key("TELEGRAM_USER_ID")
+            # ── Config field inputs ──────────────────────────────────
+            field_inputs: dict[str, Any] = {}
+            for cf in ch.config_fields:
+                if cf.storage == "env" and cf.env_key:
+                    val = get_key(cf.env_key) or cf.default
+                else:
+                    val = _ch_config.get(ch.name, cf.key, cf.default)
 
-            token_input = ui.input(
-                label="Bot Token", value=tg_token,
-                password=True, password_toggle_button=True,
-            ).classes("w-full")
+                if cf.field_type == "password":
+                    inp = ui.input(
+                        label=cf.label, value=val or "",
+                        password=True, password_toggle_button=True,
+                    ).classes("w-full")
+                elif cf.field_type == "number":
+                    inp = ui.number(
+                        label=cf.label, value=val or cf.default,
+                    ).classes("w-full")
+                elif cf.field_type == "slider":
+                    inp = ui.slider(
+                        min=cf.slider_min, max=cf.slider_max,
+                        step=cf.slider_step, value=val or cf.default,
+                    ).classes("w-full")
+                else:
+                    inp = ui.input(
+                        label=cf.label, value=val or "",
+                    ).classes("w-full")
 
-            user_id_input = ui.input(
-                label="Your Telegram User ID", value=tg_user_id,
-            ).classes("w-full")
+                if cf.help_text:
+                    inp.tooltip(cf.help_text)
+                field_inputs[cf.key] = (cf, inp)
 
+            # ── Status indicator ─────────────────────────────────────
             status_container = ui.row().classes("items-center gap-2 mt-2")
-            _update_tg_status(status_container, tg_configured, tg_running)
+            _update_channel_status(status_container, ch)
 
-            def _refresh_tg_header():
-                tg_panel._props["label"] = f"🤖 Telegram Bot — {_tg_status_text()}"
-                tg_panel.update()
+            def _refresh_header():
+                panel._props["label"] = f"{ch.display_name} — {_ch_status_text()}"
+                panel.update()
 
-            def _save_tg_creds():
-                set_key("TELEGRAM_BOT_TOKEN", token_input.value.strip())
-                set_key("TELEGRAM_USER_ID", user_id_input.value.strip())
-                _update_tg_status(status_container, tg_configured, tg_running)
-                _refresh_tg_header()
-                ui.notify("Telegram credentials saved", type="positive")
+            # ── Save credentials ─────────────────────────────────────
+            def _save_creds(ch=ch, inputs=field_inputs):
+                for key, (cf, inp) in inputs.items():
+                    raw = inp.value
+                    if isinstance(raw, str):
+                        raw = raw.strip()
+                    if cf.storage == "env" and cf.env_key:
+                        set_key(cf.env_key, str(raw))
+                    else:
+                        _ch_config.set(ch.name, cf.key, raw)
+                _update_channel_status(status_container, ch)
+                _refresh_header()
+                ui.notify(f"{ch.display_name} credentials saved", type="positive")
 
-            async def _start_tg():
-                if not tg_configured():
+            # ── Start / stop ─────────────────────────────────────────
+            async def _start_ch(ch=ch, _panel=panel):
+                if not ch.is_configured():
                     ui.notify("Please save your credentials first", type="warning")
                     return
                 try:
-                    ok = await _tg_start_bot()
+                    ok = await ch.start()
                     if ok:
-                        _ch_config.set("telegram", "auto_start", True)
-                        ui.notify("✅ Telegram bot started!", type="positive")
+                        _ch_config.set(ch.name, "auto_start", True)
+                        clear_agent_cache()
+                        ui.notify(f"✅ {ch.display_name} started!", type="positive")
                     else:
-                        ui.notify("⚠️ Could not start — check credentials", type="warning")
+                        ui.notify(f"⚠️ Could not start {ch.display_name}", type="warning")
                 except Exception as exc:
-                    ui.notify(f"Error starting bot: {exc}", type="negative")
-                _update_tg_status(status_container, tg_configured, tg_running)
-                _refresh_tg_header()
+                    ui.notify(f"Error starting {ch.display_name}: {exc}", type="negative")
+                _update_channel_status(status_container, ch)
+                _refresh_header()
+                # Keep expansion open so QR code / status is visible
+                _panel.open()
 
-            async def _stop_tg():
+            async def _stop_ch(ch=ch):
                 try:
-                    await _tg_stop_bot()
-                    _ch_config.set("telegram", "auto_start", False)
-                    ui.notify("Telegram bot stopped", type="info")
+                    await ch.stop()
+                    _ch_config.set(ch.name, "auto_start", False)
+                    clear_agent_cache()
+                    ui.notify(f"{ch.display_name} stopped", type="info")
                 except Exception as exc:
-                    ui.notify(f"Error stopping bot: {exc}", type="negative")
-                _update_tg_status(status_container, tg_configured, tg_running)
-                _refresh_tg_header()
+                    ui.notify(f"Error stopping {ch.display_name}: {exc}", type="negative")
+                _update_channel_status(status_container, ch)
+                _refresh_header()
 
             with ui.row().classes("gap-2 items-center"):
-                ui.button("💾 Save", on_click=_save_tg_creds)
-                ui.button("▶️ Start Bot", on_click=_start_tg).props("color=positive")
-                ui.button("⏹️ Stop Bot", on_click=_stop_tg).props("color=negative flat")
+                ui.button("💾 Save", on_click=_save_creds)
+                ui.button("▶️ Start", on_click=_start_ch).props("color=positive")
+                ui.button("⏹️ Stop", on_click=_stop_ch).props("color=negative flat")
 
-            # Telegram outbound tool
-            tg_tool = tool_registry.get_tool("telegram")
-            if tg_tool:
-                ui.switch(
-                    "Enable Telegram tool",
-                    value=tool_registry.is_enabled("telegram"),
-                    on_change=lambda e: (
-                        tool_registry.set_enabled("telegram", e.value),
-                        clear_agent_cache(),
-                    ),
-                ).tooltip(tg_tool.description).classes("mt-2")
+            # ── Tunnel toggle (webhook channels only) ────────────────
+            if ch.needs_tunnel:
+                tunnel_val = _ch_config.get(ch.name, "tunnel_enabled", True)
+                tunnel_switch = ui.switch(
+                    "🔗 Expose via tunnel",
+                    value=tunnel_val,
+                )
+                tunnel_switch.tooltip(
+                    "Automatically open a public tunnel for this channel's "
+                    "webhook port when it starts."
+                )
 
-            with ui.expansion("ⓘ Setup Guide").classes("w-full mt-2"):
-                ui.markdown(
-                    "1. Message [@BotFather](https://t.me/BotFather) → `/newbot`\n"
-                    "2. Copy the **Bot Token**\n"
-                    "3. Message [@userinfobot](https://t.me/userinfobot) for your **User ID**\n"
-                    "4. Paste both above and click **Save**\n"
-                    "5. Click **▶️ Start Bot**",
-                    extras=['code-friendly', 'fenced-code-blocks', 'tables'],
-                ).classes("text-sm")
+                def _on_tunnel_toggle(e, ch=ch):
+                    _ch_config.set(ch.name, "tunnel_enabled", e.value)
+                    ui.notify(
+                        f"Tunnel {'enabled' if e.value else 'disabled'} "
+                        f"for {ch.display_name}",
+                        type="info",
+                    )
+
+                tunnel_switch.on("update:model-value", _on_tunnel_toggle)
+
+                # Show live tunnel URL if active
+                from tunnel import tunnel_manager
+                t_url = tunnel_manager.get_url(ch.webhook_port or 0)
+                if t_url:
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label("🌐").classes("text-sm")
+                        ui.label(t_url).classes("text-sm text-primary")
+                        ui.button(
+                            icon="content_copy",
+                            on_click=lambda u=t_url: (
+                                ui.run_javascript(
+                                    f"navigator.clipboard.writeText('{u}')"
+                                ),
+                                ui.notify("Copied!", type="info"),
+                            ),
+                        ).props("flat dense size=xs")
+
+            # ── Custom UI hook ───────────────────────────────────────
+            ch.build_custom_ui(panel)
+
+            # ── DM Pairing Code ──────────────────────────────────────
+            with ui.expansion("🔑 DM Pairing Code").classes("w-full mt-2"):
+                ui.label(
+                    "Generate a one-time code, then DM it to the bot on "
+                    f"{ch.display_name} to authorise your account."
+                ).classes("text-sm text-grey-6")
+                _pair_code_label = ui.label("").classes(
+                    "text-h5 text-weight-bold text-center q-my-sm"
+                ).style("letter-spacing: 0.3em; user-select: all;")
+                _pair_code_label.visible = False
+
+                def _gen_pair_code(ch=ch, lbl=_pair_code_label):
+                    from channels.auth import generate_pairing_code
+                    code = generate_pairing_code(ch.name)
+                    lbl.text = code
+                    lbl.visible = True
+                    ui.notify(
+                        f"Pairing code: {code} — DM this to the bot on {ch.display_name}",
+                        type="info",
+                        timeout=10000,
+                    )
+
+                ui.button(
+                    "Generate Code", icon="vpn_key", on_click=_gen_pair_code,
+                ).props("flat dense")
+
+            # ── Paired Users ─────────────────────────────────────────
+            from channels.auth import get_approved_users, revoke_user, get_user_names
+            approved = get_approved_users(ch.name)
+            user_names = get_user_names(ch.name) if approved else {}
+            if approved:
+                with ui.expansion(f"👥 Paired Users ({len(approved)})").classes("w-full mt-2") as paired_exp:
+                    _paired_list = ui.column().classes("w-full gap-1")
+
+                    def _render_user_row(uid, container, exp, names):
+                        name = names.get(uid, "")
+                        with ui.row().classes("items-center w-full justify-between"):
+                            if name:
+                                ui.label(f"{name}").classes("text-sm")
+                                ui.label(f"({uid})").classes("text-xs text-grey-5 font-mono")
+                            else:
+                                ui.label(uid).classes("text-sm font-mono")
+
+                            def _revoke(
+                                ch_name=ch.name,
+                                user_id=uid,
+                                container=container,
+                                exp=exp,
+                            ):
+                                revoke_user(ch_name, user_id)
+                                remaining = get_approved_users(ch_name)
+                                updated_names = get_user_names(ch_name)
+                                container.clear()
+                                if remaining:
+                                    exp._props["label"] = f"👥 Paired Users ({len(remaining)})"
+                                    exp.update()
+                                    with container:
+                                        for u in remaining:
+                                            _render_user_row(u, container, exp, updated_names)
+                                else:
+                                    exp.set_visibility(False)
+                                ui.notify(f"Revoked {user_id}", type="warning")
+
+                            ui.button(
+                                icon="person_remove", on_click=_revoke,
+                            ).props("flat dense color=negative size=xs")
+
+                    with _paired_list:
+                        for uid in approved:
+                            _render_user_row(uid, _paired_list, paired_exp, user_names)
+
+            # ── Setup guide ──────────────────────────────────────────
+            guide = ch.setup_guide
+            if guide:
+                with ui.expansion("ⓘ Setup Guide").classes("w-full mt-2"):
+                    ui.markdown(
+                        guide,
+                        extras=['code-friendly', 'fenced-code-blocks', 'tables'],
+                    ).classes("text-sm")
 
     # ══════════════════════════════════════════════════════════════════
     # STATUS HELPERS (used by Channels tab)
     # ══════════════════════════════════════════════════════════════════
 
-    def _update_tg_status(container, tg_configured, tg_running):
+    def _update_channel_status(container, ch):
         container.clear()
         with container:
-            if tg_running():
+            if ch.is_running():
                 ui.icon("check_circle", color="green").classes("text-lg")
-                ui.label("Bot running — polling for messages").classes("text-green text-sm")
-            elif tg_configured():
+                ui.label(f"{ch.display_name} running").classes("text-green text-sm")
+            elif ch.is_configured():
                 ui.icon("pause_circle", color="blue").classes("text-lg")
                 ui.label("Configured — click Start to begin").classes("text-blue text-sm")
             else:
@@ -2133,7 +2705,7 @@ def open_settings(
                         tab_docs = ui.tab("Documents", icon="description")
                         tab_tools = ui.tab("Search", icon="search")
                         tab_skills = ui.tab("Skills", icon="auto_fix_high")
-                        tab_google = ui.tab("Google", icon="account_circle")
+                        tab_accounts = ui.tab("Accounts", icon="group")
                         tab_channels = ui.tab("Channels", icon="forum")
                         tab_utils = ui.tab("Utilities", icon="build")
                         tab_plugins = ui.tab("Plugins", icon="extension")
@@ -2144,8 +2716,9 @@ def open_settings(
                             "System": tab_fs, "Tracker": tab_tracker,
                             "Documents": tab_docs, "Search": tab_tools,
                             "Skills": tab_skills,
-                            "Google": tab_google,
-                            "Gmail": tab_google, "Calendar": tab_google,
+                            "Google": tab_accounts,
+                            "Gmail": tab_accounts, "Calendar": tab_accounts,
+                            "Accounts": tab_accounts,
                             "Channels": tab_channels, "Utilities": tab_utils,
                             "Plugins": tab_plugins,
                         }
@@ -2160,7 +2733,7 @@ def open_settings(
                     (tab_tools, "Search", _build_tools_tab),
                     (tab_skills, "Skills", _build_skills_tab),
                     (tab_fs, "System", _build_system_access_tab),
-                    (tab_google, "Google", _build_google_account_tab),
+                    (tab_accounts, "Accounts", _build_accounts_tab),
                     (tab_utils, "Utilities", _build_utilities_tab),
                     (tab_tracker, "Tracker", _build_tracker_tab),
                     (tab_knowledge, "Knowledge", _build_knowledge_tab),

@@ -1,5 +1,5 @@
 ; =============================================================================
-; Thoth v3.14.0 – Inno Setup Script
+; Thoth v3.15.0 – Inno Setup Script
 ; Self-contained installer: bundles embedded Python with all pip packages
 ; pre-installed.  No internet downloads at install time.
 ; =============================================================================
@@ -10,7 +10,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "3.14.0"
+#define MyAppVersion   "3.15.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -66,6 +66,7 @@ Source: "..\thoth.ico";                DestDir: "{app}\app"; Flags: ignoreversio
 Source: "..\logging_config.py";         DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\terminal_bridge.py";        DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\terminal_pty.py";           DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\tunnel.py";                DestDir: "{app}\app"; Flags: ignoreversion
 
 ; ── Static assets (JS libraries) ──────────────────────────────────────────────
 Source: "..\static\*";                 DestDir: "{app}\app\static"; Flags: ignoreversion
@@ -75,12 +76,25 @@ Source: "..\sounds\*.wav";              DestDir: "{app}\app\sounds"; Flags: igno
 
 ; ── Channels package ─────────────────────────────────────────────────────────
 Source: "..\channels\__init__.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\auth.py";          DestDir: "{app}\app\channels"; Flags: ignoreversion
 Source: "..\channels\base.py";          DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\commands.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
 Source: "..\channels\config.py";        DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\discord_channel.py"; DestDir: "{app}\app\channels"; Flags: ignoreversion
 Source: "..\channels\media.py";         DestDir: "{app}\app\channels"; Flags: ignoreversion
 Source: "..\channels\registry.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\slack.py";         DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\sms.py";           DestDir: "{app}\app\channels"; Flags: ignoreversion
 Source: "..\channels\telegram.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
 Source: "..\channels\tool_factory.py";  DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\approval.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\media_capture.py";  DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\thread_repair.py";  DestDir: "{app}\app\channels"; Flags: ignoreversion
+Source: "..\channels\whatsapp.py";      DestDir: "{app}\app\channels"; Flags: ignoreversion
+; WhatsApp Node.js bridge
+Source: "..\channels\whatsapp_bridge\bridge.js";    DestDir: "{app}\app\channels\whatsapp_bridge"; Flags: ignoreversion
+Source: "..\channels\whatsapp_bridge\package.json"; DestDir: "{app}\app\channels\whatsapp_bridge"; Flags: ignoreversion
+Source: "..\channels\whatsapp_bridge\package-lock.json"; DestDir: "{app}\app\channels\whatsapp_bridge"; Flags: ignoreversion
 
 ; ── Tools package ────────────────────────────────────────────────────────────
 Source: "..\tools\__init__.py";        DestDir: "{app}\app\tools"; Flags: ignoreversion
@@ -99,7 +113,6 @@ Source: "..\tools\memory_tool.py";     DestDir: "{app}\app\tools"; Flags: ignore
 Source: "..\tools\system_info_tool.py"; DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\tracker_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\task_tool.py";       DestDir: "{app}\app\tools"; Flags: ignoreversion
-Source: "..\tools\telegram_tool.py";   DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\url_reader_tool.py"; DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\vision_tool.py";     DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\weather_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
@@ -111,6 +124,7 @@ Source: "..\tools\shell_tool.py";      DestDir: "{app}\app\tools"; Flags: ignore
 Source: "..\tools\youtube_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\wiki_tool.py";      DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\image_gen_tool.py";  DestDir: "{app}\app\tools"; Flags: ignoreversion
+Source: "..\tools\x_tool.py";         DestDir: "{app}\app\tools"; Flags: ignoreversion
 
 ; ── Plugins package ──────────────────────────────────────────────────────────
 Source: "..\plugins\__init__.py";       DestDir: "{app}\app\plugins"; Flags: ignoreversion
@@ -128,6 +142,7 @@ Source: "..\plugins\ui_settings.py";    DestDir: "{app}\app\plugins"; Flags: ign
 
 ; ── Bundled Skills ───────────────────────────────────────────────────────────
 Source: "..\bundled_skills\*";         DestDir: "{app}\app\bundled_skills"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\tool_guides\*";           DestDir: "{app}\app\tool_guides"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\skills.py";                 DestDir: "{app}\app"; Flags: ignoreversion
 ; ── UI package (modular frontend) ─────────────────────────────────────────────────
 Source: "..\ui\__init__.py";            DestDir: "{app}\app\ui"; Flags: ignoreversion

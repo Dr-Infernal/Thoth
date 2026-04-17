@@ -36,6 +36,7 @@ USER_SKILLS_DIR = DATA_DIR / "skills"
 USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
 BUNDLED_SKILLS_DIR = pathlib.Path(__file__).resolve().parent / "bundled_skills"
+TOOL_GUIDES_DIR = pathlib.Path(__file__).resolve().parent / "tool_guides"
 
 CONFIG_PATH = DATA_DIR / "skills_config.json"
 
@@ -157,17 +158,18 @@ _skills_cache: dict[str, Skill] = {}  # name → Skill
 
 
 def _discover_skills() -> dict[str, Skill]:
-    """Scan bundled + user skill folders.  User skills override bundled."""
+    """Scan bundled + tool-guide + user skill folders.  User skills override bundled."""
     found: dict[str, Skill] = {}
 
     # 1. Bundled skills (lowest precedence)
-    if BUNDLED_SKILLS_DIR.is_dir():
-        for child in sorted(BUNDLED_SKILLS_DIR.iterdir()):
-            md = child / "SKILL.md" if child.is_dir() else None
-            if md and md.exists():
-                skill = _parse_skill_md(md, source="bundled")
-                if skill:
-                    found[skill.name] = skill
+    for base_dir in (BUNDLED_SKILLS_DIR, TOOL_GUIDES_DIR):
+        if base_dir.is_dir():
+            for child in sorted(base_dir.iterdir()):
+                md = child / "SKILL.md" if child.is_dir() else None
+                if md and md.exists():
+                    skill = _parse_skill_md(md, source="bundled")
+                    if skill:
+                        found[skill.name] = skill
 
     # 2. User skills (highest precedence — override bundled by name)
     if USER_SKILLS_DIR.is_dir():
@@ -220,6 +222,22 @@ def get_skill(name: str) -> Optional[Skill]:
     return _skills_cache.get(name)
 
 
+def is_tool_guide(skill: Skill) -> bool:
+    """True if the skill is a tool guide (has non-empty tools list)."""
+    return bool(skill.tools)
+
+
+def _is_tool_guide_active(skill: Skill) -> bool:
+    """True if a tool guide's linked tools are enabled in the tool registry."""
+    if not skill.tools:
+        return False
+    try:
+        from tools import registry
+        return any(registry.is_enabled(t) for t in skill.tools)
+    except Exception:
+        return False
+
+
 def is_enabled(name: str) -> bool:
     """Check if a skill is enabled."""
     return _enabled.get(name, False)
@@ -233,12 +251,25 @@ def set_enabled(name: str, value: bool):
 
 
 def get_enabled_skills() -> list[Skill]:
-    """Return only enabled skills, sorted by display_name."""
-    return [s for s in get_all_skills() if _enabled.get(s.name, False)]
+    """Return manually-enabled skills + auto-activated tool guides."""
+    result = []
+    for s in get_all_skills():
+        if is_tool_guide(s):
+            if _is_tool_guide_active(s):
+                result.append(s)
+        else:
+            if _enabled.get(s.name, False):
+                result.append(s)
+    return result
+
+
+def get_manual_skills() -> list[Skill]:
+    """Return only non-tool-guide skills (for the UI Skills tab)."""
+    return [s for s in get_all_skills() if not is_tool_guide(s)]
 
 
 def get_enabled_skill_names() -> list[str]:
-    """Return names of all globally-enabled skills."""
+    """Return names of all active skills (manual + auto tool guides)."""
     return [s.name for s in get_enabled_skills()]
 
 
@@ -253,23 +284,37 @@ def get_skills_prompt(skill_names: Optional[list[str]] = None) -> str:
 
     Returns an empty string when there are no skills to inject.
     """
-    if skill_names is not None:
-        skills = [_skills_cache[n] for n in skill_names if n in _skills_cache]
-    else:
-        skills = get_enabled_skills()
+    # Tool guides are ALWAYS injected based on which tools are enabled —
+    # they cannot be toggled off via skill overrides.
+    guides = [s for s in get_all_skills() if is_tool_guide(s) and _is_tool_guide_active(s)]
 
-    if not skills:
+    if skill_names is not None:
+        manual = [_skills_cache[n] for n in skill_names
+                  if n in _skills_cache and not is_tool_guide(_skills_cache[n])]
+    else:
+        manual = [s for s in get_enabled_skills() if not is_tool_guide(s)]
+
+    if not guides and not manual:
         return ""
 
-    parts = [
-        "## Skills\n\n"
-        "The following skills are user-configured workflows. When a user's "
-        "request closely matches a skill's trigger, follow the skill's "
-        "step-by-step instructions. For all other requests, use your standard "
-        "judgment and the guidelines above.\n"
-    ]
-    for skill in skills:
-        parts.append(f"\n### {skill.icon} {skill.display_name}\n{skill.instructions}\n")
+    parts: list[str] = []
+
+    # Tool guides are injected as plain tool guidance (no "Skills" header)
+    if guides:
+        for skill in guides:
+            parts.append(f"{skill.instructions}\n")
+
+    # Manual skills get the existing Skills header
+    if manual:
+        parts.append(
+            "## Skills\n\n"
+            "The following skills are user-configured workflows. When a user's "
+            "request closely matches a skill's trigger, follow the skill's "
+            "step-by-step instructions. For all other requests, use your standard "
+            "judgment and the guidelines above.\n"
+        )
+        for skill in manual:
+            parts.append(f"\n### {skill.icon} {skill.display_name}\n{skill.instructions}\n")
 
     return "\n".join(parts)
 
@@ -307,6 +352,8 @@ def create_skill(
         "author": "User",
         "enabled_by_default": enabled,
     }
+    if tools:
+        meta["tools"] = tools
     if tags:
         meta["tags"] = tags
 
@@ -351,6 +398,9 @@ def update_skill(
         "author": skill.author,
         "enabled_by_default": skill.enabled_by_default,
     }
+    new_tools = tools if tools is not None else skill.tools
+    if new_tools:
+        meta["tools"] = new_tools
     new_tags = tags if tags is not None else skill.tags
     if new_tags:
         meta["tags"] = new_tags
@@ -408,6 +458,7 @@ def duplicate_skill(name: str, new_name: Optional[str] = None) -> Optional[Skill
         icon=original.icon,
         description=original.description,
         instructions=original.instructions,
+        tools=list(original.tools) if original.tools else None,
         tags=list(original.tags),
         enabled=True,
     )
