@@ -160,8 +160,11 @@ $RequirementsFile = Join-Path (Split-Path $PSScriptRoot) "requirements.txt"
 Write-Host "      Installing packages from requirements.txt..." -ForegroundColor Yellow
 Write-Host "      (this may take several minutes)" -ForegroundColor Yellow
 & $PythonExe -m pip install --no-warn-script-location -r $RequirementsFile 2>&1 | ForEach-Object {
-    if ($_ -match 'Successfully installed|Installing collected') {
-        Write-Host "      $_" -ForegroundColor Green
+    $line = $_.ToString()
+    if ($line -match 'Successfully installed|Installing collected') {
+        Write-Host "      $line" -ForegroundColor Green
+    } elseif ($line -match 'ERROR:|error:|Could not|Failed') {
+        Write-Host "      $line" -ForegroundColor Red
     }
 }
 if ($LASTEXITCODE -ne 0) {
