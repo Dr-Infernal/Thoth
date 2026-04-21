@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./installer/build_mac_app.sh                  # local unsigned build
-#   ./installer/build_mac_app.sh 3.15.0            # specify version
+#   ./installer/build_mac_app.sh 3.16.0            # specify version
 #
 # For signed builds (CI), set environment variables:
 #   CODESIGN_IDENTITY="Developer ID Application: Name (TEAMID)"
@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-VERSION="${1:-3.15.0}"
+VERSION="${1:-3.16.0}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.12.13}"
 PBS_RELEASE="${PBS_RELEASE:-20260303}"
 
@@ -145,8 +145,8 @@ for f in "$PROJECT_DIR"/*.py; do
 done
 cp "$PROJECT_DIR/requirements.txt" "$APP_SRC/"
 
-# Sub-packages (tools, channels, bundled_skills, tool_guides, ui, plugins)
-for pkg in tools channels bundled_skills tool_guides ui plugins; do
+# Sub-packages (tools, channels, bundled_skills, tool_guides, ui, plugins, designer)
+for pkg in tools channels bundled_skills tool_guides ui plugins designer; do
     if [ -d "$PROJECT_DIR/$pkg" ]; then
         rsync -a \
               --exclude='__pycache__' --exclude='*.pyc' \

@@ -356,10 +356,13 @@ def _dedup_and_save(extracted: list[dict], source: str = "extraction") -> int:
                         else:
                             merged_content = f"{old_content}. {content}".replace(". . ", ". ")
                             content_changed = True
-                    except Exception:
-                        # On failure, proceed with merge (no false blocks)
-                        merged_content = f"{old_content}. {content}".replace(". . ", ". ")
-                        content_changed = True
+                    except Exception as exc:
+                        logger.warning(
+                            "Extraction contradiction check failed for '%s': %s — keeping existing content",
+                            subject, exc,
+                        )
+                        merged_content = old_content
+                        content_changed = False
 
                 if content_changed or update_kwargs:
                     try:

@@ -1,5 +1,5 @@
 ; =============================================================================
-; Thoth v3.15.0 – Inno Setup Script
+; Thoth v3.16.0 – Inno Setup Script
 ; Self-contained installer: bundles embedded Python with all pip packages
 ; pre-installed.  No internet downloads at install time.
 ; =============================================================================
@@ -10,7 +10,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "3.15.0"
+#define MyAppVersion   "3.16.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -48,6 +48,7 @@ Source: "..\memory_extraction.py";     DestDir: "{app}\app"; Flags: ignoreversio
 Source: "..\knowledge_graph.py";       DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\wiki_vault.py";             DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\dream_cycle.py";            DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\insights.py";              DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\document_extraction.py";    DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\tasks.py";                 DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\models.py";                DestDir: "{app}\app"; Flags: ignoreversion
@@ -67,9 +68,11 @@ Source: "..\logging_config.py";         DestDir: "{app}\app"; Flags: ignoreversi
 Source: "..\terminal_bridge.py";        DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\terminal_pty.py";           DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\tunnel.py";                DestDir: "{app}\app"; Flags: ignoreversion
-
+Source: "..\identity.py";              DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\self_knowledge.py";        DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\version.py";               DestDir: "{app}\app"; Flags: ignoreversion
 ; ── Static assets (JS libraries) ──────────────────────────────────────────────
-Source: "..\static\*";                 DestDir: "{app}\app\static"; Flags: ignoreversion
+Source: "..\static\*";                 DestDir: "{app}\app\static"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; ── Sounds ──────────────────────────────────────────────────────────────────────
 Source: "..\sounds\*.wav";              DestDir: "{app}\app\sounds"; Flags: ignoreversion
@@ -125,6 +128,7 @@ Source: "..\tools\youtube_tool.py";    DestDir: "{app}\app\tools"; Flags: ignore
 Source: "..\tools\wiki_tool.py";      DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\image_gen_tool.py";  DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\x_tool.py";         DestDir: "{app}\app\tools"; Flags: ignoreversion
+Source: "..\tools\thoth_status_tool.py"; DestDir: "{app}\app\tools"; Flags: ignoreversion
 
 ; ── Plugins package ──────────────────────────────────────────────────────────
 Source: "..\plugins\__init__.py";       DestDir: "{app}\app\plugins"; Flags: ignoreversion
@@ -140,6 +144,9 @@ Source: "..\plugins\ui_marketplace.py"; DestDir: "{app}\app\plugins"; Flags: ign
 Source: "..\plugins\ui_plugin_dialog.py"; DestDir: "{app}\app\plugins"; Flags: ignoreversion
 Source: "..\plugins\ui_settings.py";    DestDir: "{app}\app\plugins"; Flags: ignoreversion
 
+; ── Designer package ──────────────────────────────────────────────────────────
+Source: "..\designer\*";              DestDir: "{app}\app\designer"; Flags: ignoreversion recursesubdirs createallsubdirs
+
 ; ── Bundled Skills ───────────────────────────────────────────────────────────
 Source: "..\bundled_skills\*";         DestDir: "{app}\app\bundled_skills"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\tool_guides\*";           DestDir: "{app}\app\tool_guides"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -147,6 +154,7 @@ Source: "..\skills.py";                 DestDir: "{app}\app"; Flags: ignoreversi
 ; ── UI package (modular frontend) ─────────────────────────────────────────────────
 Source: "..\ui\__init__.py";            DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\chat.py";               DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\chat_components.py";    DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\constants.py";          DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\export.py";             DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\graph_panel.py";        DestDir: "{app}\app\ui"; Flags: ignoreversion

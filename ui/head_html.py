@@ -58,6 +58,11 @@ HEAD_HTML = """\
     }
     .thoth-avatar-user { background: #1976d2; color: white; }
     .thoth-avatar-bot { background: #37474f; color: gold !important; }
+    .thoth-avatar img {
+        width: 100%; height: 100%;
+        object-fit: cover;
+        border-radius: 50%;
+    }
     .thoth-msg-header {
         display: flex !important;
         align-items: baseline;
@@ -129,6 +134,82 @@ document.addEventListener('click', function(e) {
         window.open(href, '_blank', 'noopener');
     }
 });
+
+window.__thothManagedWindows = window.__thothManagedWindows || {};
+
+window.thothOpenManagedWindow = async function(options) {
+    options = options || {};
+    var rawUrl = options.url || '';
+    if (!rawUrl) return false;
+
+    var name = options.name || '_blank';
+    var title = options.title || 'Thoth';
+    var width = Number(options.width || 1600);
+    var height = Number(options.height || 900);
+    var href = new URL(rawUrl, window.location.origin).href;
+
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.open_window) {
+        try {
+            return !!(await window.pywebview.api.open_window(name, href, title, width, height));
+        } catch (err) {
+            console.warn('thothOpenManagedWindow failed via pywebview bridge', err);
+            return false;
+        }
+    }
+
+    try {
+        var existing = window.__thothManagedWindows[name];
+        if (existing && !existing.closed) {
+            existing.location.href = href;
+            if (existing.focus) existing.focus();
+            return true;
+        }
+    } catch (err) {
+        console.warn('thothOpenManagedWindow could not reuse existing browser window', err);
+    }
+
+    var features = [
+        'popup=yes',
+        'resizable=yes',
+        'scrollbars=yes',
+        'width=' + width,
+        'height=' + height,
+    ].join(',');
+    var opened = window.open(href, name, features);
+    if (!opened) return false;
+    window.__thothManagedWindows[name] = opened;
+    try {
+        if (opened.focus) opened.focus();
+    } catch (err) {
+        console.warn('thothOpenManagedWindow could not focus browser window', err);
+    }
+    return true;
+};
+
+window.thothCloseManagedWindow = async function(name) {
+    if (!name) return false;
+
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.close_window) {
+        try {
+            return !!(await window.pywebview.api.close_window(name));
+        } catch (err) {
+            console.warn('thothCloseManagedWindow failed via pywebview bridge', err);
+            return false;
+        }
+    }
+
+    try {
+        var existing = window.__thothManagedWindows[name];
+        if (existing && !existing.closed) {
+            existing.close();
+        }
+        delete window.__thothManagedWindows[name];
+        return true;
+    } catch (err) {
+        console.warn('thothCloseManagedWindow could not close browser window', err);
+        return false;
+    }
+};
 
 // ── pywebview-only right-click context menu ─────────────────────
 (function() {

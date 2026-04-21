@@ -33,6 +33,10 @@ _CONFIG_PATH = _DATA_DIR / "user_config.json"
 
 _RETENTION_DAYS = 7
 _file_handler: TimedRotatingFileHandler | None = None
+_SUPPRESSED_RECENT_LOG_SUBSTRINGS = (
+    "PyNaCl is not installed, voice will NOT be supported",
+    "davey is not installed, voice will NOT be supported",
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -157,6 +161,12 @@ def get_current_log_path() -> pathlib.Path | None:
     return None
 
 
+def _include_recent_log_entry(entry: dict) -> bool:
+    """Return whether a recent-log entry should be shown to the app."""
+    msg = str(entry.get("msg", ""))
+    return not any(text in msg for text in _SUPPRESSED_RECENT_LOG_SUBSTRINGS)
+
+
 def read_recent_logs(n: int = 20) -> list[dict]:
     """Read the last *n* log entries from the current log file.
 
@@ -182,9 +192,11 @@ def read_recent_logs(n: int = 20) -> list[dict]:
         if not line:
             continue
         try:
-            entries.append(json.loads(line))
+            entry = json.loads(line)
         except json.JSONDecodeError:
-            entries.append({"ts": "", "level": "?", "msg": line})
+            entry = {"ts": "", "level": "?", "msg": line}
+        if _include_recent_log_entry(entry):
+            entries.append(entry)
     return entries
 
 

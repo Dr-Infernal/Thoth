@@ -52,6 +52,8 @@ openpyxl
 
 # ── Export ───────────────────────────────────────────────────────────────────
 fpdf2
+python-pptx
+python-docx
 
 # ── Calculator ───────────────────────────────────────────────────────────────
 simpleeval
@@ -70,6 +72,7 @@ numpy
 requests
 pydantic
 pyyaml
+beautifulsoup4
 
 # ── Wolfram Alpha ───────────────────────────────────────────────────────────
 wolframalpha

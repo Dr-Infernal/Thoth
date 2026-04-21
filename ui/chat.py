@@ -253,13 +253,17 @@ def build_chat(
 
     # ── Reattach to running generation ───────────────────────────────
     if _reattach_gen and _reattach_gen.detached and _reattach_gen.status == "streaming":
+        from identity import get_assistant_name as _gan_ra
+        from ui.status_bar import get_bot_avatar_html as _gba_ra
+        _ra_avatar = _gba_ra()
+        _ra_name = _gan_ra()
         with p.chat_container:
             with ui.element("div").classes("thoth-msg-row"):
-                ui.html('<div class="thoth-avatar thoth-avatar-bot">\U00013041</div>', sanitize=False)
+                ui.html(f'<div class="thoth-avatar thoth-avatar-bot">{_ra_avatar}</div>', sanitize=False)
                 with ui.column().classes("thoth-msg-body gap-1") as _ra_wrapper:
                     ui.html(
                         '<div class="thoth-msg-header">'
-                        '<span class="thoth-msg-name">Thoth</span>'
+                        f'<span class="thoth-msg-name">{_ra_name}</span>'
                         f'<span class="thoth-msg-stamp">{datetime.now().strftime("%H:%M")}</span>'
                         '</div>',
                         sanitize=False,
@@ -317,13 +321,17 @@ def build_chat(
 
     # Onboarding
     if state.show_onboarding:
+        from identity import get_assistant_name as _gan_ob
+        from ui.status_bar import get_bot_avatar_html as _gba_ob
+        _ob_avatar = _gba_ob()
+        _ob_name = _gan_ob()
         with p.chat_container:
             with ui.element("div").classes("thoth-msg-row"):
-                ui.html('<div class="thoth-avatar thoth-avatar-bot">𓁟</div>', sanitize=False)
+                ui.html(f'<div class="thoth-avatar thoth-avatar-bot">{_ob_avatar}</div>', sanitize=False)
                 with ui.column().classes("thoth-msg-body gap-1"):
                     ui.html(
                         '<div class="thoth-msg-header">'
-                        '<span class="thoth-msg-name">Thoth</span>'
+                        f'<span class="thoth-msg-name">{_ob_name}</span>'
                         '</div>',
                         sanitize=False,
                     )

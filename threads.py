@@ -39,6 +39,8 @@ def _init_thread_db():
             conn.execute("ALTER TABLE thread_meta ADD COLUMN summary TEXT DEFAULT ''")
         if "summary_msg_count" not in cols:
             conn.execute("ALTER TABLE thread_meta ADD COLUMN summary_msg_count INTEGER DEFAULT 0")
+        if "project_id" not in cols:
+            conn.execute("ALTER TABLE thread_meta ADD COLUMN project_id TEXT DEFAULT ''")
         conn.commit()
         conn.close()
         logger.debug("Thread database initialised at %s", DB_PATH)
@@ -48,11 +50,34 @@ def _init_thread_db():
 def _list_threads():
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT thread_id, name, created_at, updated_at, COALESCE(model_override, '') "
+        "SELECT thread_id, name, created_at, updated_at, COALESCE(model_override, ''), "
+        "COALESCE(project_id, '') "
         "FROM thread_meta ORDER BY updated_at DESC"
     ).fetchall()
     conn.close()
     return rows
+
+def _set_thread_project_id(thread_id: str, project_id: str) -> None:
+    """Link a thread to a designer project."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE thread_meta SET project_id = ? WHERE thread_id = ?",
+        (project_id, thread_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _get_thread_project_id(thread_id: str) -> str:
+    """Return the project_id for a thread (empty string if none)."""
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT COALESCE(project_id, '') FROM thread_meta WHERE thread_id = ?",
+        (thread_id,),
+    ).fetchone()
+    conn.close()
+    return row[0] if row else ""
+
 
 def _thread_exists(thread_id: str) -> bool:
     """Return True if a thread_meta row exists for *thread_id*."""

@@ -35,3 +35,9 @@ When the user asks you to **review your memories**, **check what you know**, **c
 
 9. **Correction Logging** — When the user corrects you on a fact ("Actually, it's March 20, not March 15"), always update the existing memory. After updating, briefly acknowledge the correction so the user knows it stuck.
 10. **Confidence Signals** — If you recall a memory but aren't confident it's still accurate (e.g. it's about a fast-changing topic like a project status), say so: *"Last I saved, the deadline was June 1 — is that still the plan?"*
+
+## Insights Review
+
+11. **Check Automated Insights** — When performing a reflection, also check for pending insights from the dream cycle. Use `thoth_status` to see if there are active insights, then read the insights file at `~/.thoth/insights.json` to review them.
+12. **Present Insights** — For each active insight (status "new" or "pinned"), summarize it for the user with category, severity, and the suggestion. Group by category.
+13. **Act on Insights** — Ask the user what to do with each insight: dismiss it, investigate further, or apply the suggestion. For skill proposals with drafts, offer to create the skill. After the user decides, update the insight status accordingly by editing the insights file.

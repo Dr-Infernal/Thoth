@@ -334,8 +334,11 @@ async def consume_generation(
                         logger.debug("assistant_md already removed from DOM", exc_info=True)
                     gen.assistant_md = None
                 if gen.wrapper:
-                    with gen.wrapper:
-                        cb.render_text_with_embeds(gen.accumulated)
+                    try:
+                        with gen.wrapper:
+                            cb.render_text_with_embeds(gen.accumulated)
+                    except RuntimeError:
+                        logger.debug("Client deleted during render_text_with_embeds", exc_info=True)
 
             try:
                 ui.run_javascript(
@@ -381,9 +384,15 @@ async def consume_generation(
         if gen.interrupt_data:
             state.pending_interrupt = gen.interrupt_data
             cb.show_interrupt(gen.interrupt_data)
-        cb.update_token_counter()
+        try:
+            cb.update_token_counter()
+        except RuntimeError:
+            logger.debug("Client deleted during update_token_counter", exc_info=True)
 
-    cb.rebuild_thread_list()
+    try:
+        cb.rebuild_thread_list()
+    except RuntimeError:
+        logger.debug("Client deleted during rebuild_thread_list", exc_info=True)
 
 
 # ── Tool-done sub-handler ────────────────────────────────────────────
@@ -398,6 +407,9 @@ def _handle_tool_done(
     tool_name = payload["name"] if isinstance(payload, dict) else payload
     raw_tool_name = payload.get("raw_name", tool_name) if isinstance(payload, dict) else tool_name
     tool_content = payload.get("content", "") if isinstance(payload, dict) else ""
+    if not isinstance(tool_content, str):
+        # content may be a list of content-blocks (e.g. Anthropic cache_control format)
+        tool_content = " ".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in tool_content) if isinstance(tool_content, list) else str(tool_content)
 
     # Chart detection
     if tool_content and tool_content.startswith("__CHART__:"):
@@ -922,16 +934,20 @@ def build_interrupt_dialog(
 
 def _build_assistant_placeholder(gen: GenerationState, p: P) -> None:
     """Build the streaming assistant message placeholder in the chat."""
+    from identity import get_assistant_name
+    from ui.status_bar import get_bot_avatar_html
+    _ph_avatar = get_bot_avatar_html()
+    _ph_name = get_assistant_name()
     with p.chat_container:
         with ui.element("div").classes("thoth-msg-row"):
             ui.html(
-                '<div class="thoth-avatar thoth-avatar-bot">\U00013041</div>',
+                f'<div class="thoth-avatar thoth-avatar-bot">{_ph_avatar}</div>',
                 sanitize=False,
             )
             with ui.column().classes("thoth-msg-body gap-1") as _wrapper:
                 ui.html(
                     '<div class="thoth-msg-header">'
-                    '<span class="thoth-msg-name">Thoth</span>'
+                    f'<span class="thoth-msg-name">{_ph_name}</span>'
                     f'<span class="thoth-msg-stamp">{datetime.now().strftime("%H:%M")}</span>'
                     '</div>',
                     sanitize=False,
@@ -939,7 +955,7 @@ def _build_assistant_placeholder(gen: GenerationState, p: P) -> None:
                 gen.tool_col = ui.column().classes("w-full gap-1")
                 gen.thinking_label = ui.html(
                     '<span class="thoth-typing" style="font-size:0.9rem; opacity:0.6;">'
-                    'Thoth is thinking<span class="dots">'
+                    f'{_ph_name} is thinking<span class="dots">'
                     '<span>.</span><span>.</span><span>.</span></span></span>',
                     sanitize=False,
                 )

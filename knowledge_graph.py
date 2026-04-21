@@ -138,7 +138,7 @@ _VECTOR_DIR = _DATA_DIR / "memory_vectors"
 # LLM can use any of these, but we guide it toward the canonical set.
 VALID_ENTITY_TYPES = {
     "person", "preference", "fact", "event", "place", "project",
-    "organisation", "concept", "skill", "media",
+    "organisation", "concept", "skill", "media", "self_knowledge",
 }
 
 # Keep backward compat alias
@@ -1641,6 +1641,7 @@ _VIS_TYPE_COLORS: dict[str, str] = {
     "concept":      "#90A4AE",   # blue-grey
     "skill":        "#F06292",   # pink
     "media":        "#AED581",   # light green
+    "self_knowledge": "#7E57C2", # deep purple
 }
 _VIS_DEFAULT_COLOR = "#B0BEC5"  # grey fallback
 

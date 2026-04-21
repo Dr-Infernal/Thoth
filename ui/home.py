@@ -54,6 +54,13 @@ def build_home(
         tasks_tab = ui.tab("Workflows", icon="bolt")
         graph_tab = ui.tab("Knowledge", icon="psychology")
         activity_tab = ui.tab("Activity", icon="assessment")
+        designer_tab = ui.tab("Designer", icon="design_services")
+
+    # Choose initial tab (Designer after back / refresh, else Workflows)
+    _tab_map = {"Workflows": tasks_tab, "Knowledge": graph_tab,
+                "Activity": activity_tab, "Designer": designer_tab}
+    _initial_tab = _tab_map.get(state.preferred_home_tab or "", tasks_tab)
+    state.preferred_home_tab = None
 
     def _on_tab_change(e):
         if e.value == 'Knowledge':
@@ -63,7 +70,7 @@ def build_home(
                 '}, 50);'
             )
 
-    with ui.tab_panels(home_tabs, value=tasks_tab, on_change=_on_tab_change).classes(
+    with ui.tab_panels(home_tabs, value=_initial_tab, on_change=_on_tab_change).classes(
         "w-full flex-grow"
     ).style("overflow: hidden;"):
 
@@ -277,6 +284,55 @@ def build_home(
             activity_container = ui.column().classes("w-full h-full")
             with activity_container:
                 _build_activity_content(activity_container)
+
+        # ── Designer panel ───────────────────────────────────────────
+        with ui.tab_panel(designer_tab).classes("h-full").style("padding: 0;"):
+            from designer.home_tab import build_designer_tab
+
+            def _open_designer_project(project, initial_prompt: str | None = None):
+                from threads import _save_thread_meta, _set_thread_project_id
+                from designer.storage import save_project
+                from memory_extraction import set_active_thread
+
+                # Ensure project has its own thread
+                if not project.thread_id:
+                    import uuid as _uuid
+                    tid = _uuid.uuid4().hex[:12]
+                    _save_thread_meta(tid, f"🎨 {project.name}")
+                    _set_thread_project_id(tid, project.id)
+                    project.thread_id = tid
+                    save_project(project)
+
+                # Switch AppState to the project's thread
+                prev = state.thread_id
+                state.thread_id = project.thread_id
+                state.thread_name = f"🎨 {project.name}"
+                state.thread_model_override = ""
+                # Load existing messages from LangGraph checkpoint
+                from ui.helpers import load_thread_messages
+                state.messages = load_thread_messages(project.thread_id)
+                p.pending_files.clear()
+                set_active_thread(project.thread_id, previous_id=prev)
+
+                state.active_designer_project = project
+                rebuild_main()
+                rebuild_thread_list()
+
+                if initial_prompt:
+                    async def _start_initial_build() -> None:
+                        await asyncio.sleep(0)
+                        await send_message(initial_prompt)
+
+                    asyncio.create_task(_start_initial_build())
+
+            def _designer_refresh():
+                state.preferred_home_tab = "Designer"
+                rebuild_main()
+
+            build_designer_tab(
+                on_open_project=_open_designer_project,
+                on_refresh=_designer_refresh,
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════

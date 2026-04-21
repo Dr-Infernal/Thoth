@@ -3,7 +3,7 @@ import time
 
 from models import get_llm, get_llm_for, get_context_size, get_current_model, is_model_local, is_cloud_model, get_cloud_provider, get_model_max_context, set_active_model_override, _active_model_override
 from api_keys import apply_keys
-from prompts import AGENT_SYSTEM_PROMPT, SUMMARIZE_PROMPT
+from prompts import AGENT_SYSTEM_PROMPT, SUMMARIZE_PROMPT, get_agent_system_prompt
 from langchain_classic.retrievers import ContextualCompressionRetriever
 from langchain_classic.retrievers.document_compressors import LLMChainExtractor
 from langchain_core.messages import trim_messages, ToolMessage, AIMessage
@@ -273,6 +273,33 @@ def _scan_injection_patterns(text: str) -> str:
     )
 
 
+import hashlib as _hashlib
+
+
+def _summarize_tool_result(name: str, content: str) -> str:
+    """Create a compact 1-line summary of a tool result (zero-latency heuristic).
+
+    Returns ``[tool_name]: <summary>`` with the summary capped at ~200 chars.
+    """
+    if not content:
+        return f"[{name}]: (empty result)"
+    # Strip leading/trailing whitespace
+    content = content.strip()
+    # Try first meaningful line (skip blank lines)
+    for line in content.split("\n"):
+        line = line.strip()
+        if line:
+            if len(line) <= 200:
+                return f"[{name}]: {line}"
+            # First sentence within the line
+            for sep in (". ", ".\n", "! ", "? "):
+                idx = line.find(sep)
+                if 0 < idx <= 200:
+                    return f"[{name}]: {line[:idx + 1]}"
+            return f"[{name}]: {line[:200]}…"
+    return f"[{name}]: {content[:150]}…"
+
+
 def _pre_model_trim(state: dict) -> dict:
     """Trim conversation history to ~70% of the context window before each
     LLM call, and inject the current date/time so it is always accurate.
@@ -323,6 +350,50 @@ def _pre_model_trim(state: dict) -> dict:
                 name=m.name,
                 tool_call_id=m.tool_call_id,
             )
+
+    # ── Dedup identical tool results ─────────────────────────────────
+    # If the same tool returned byte-identical content multiple times
+    # (e.g. repeated web_search with the same query), keep only the
+    # LAST occurrence and replace earlier ones with a short note.
+    _tool_msg_indices = [
+        i for i, m in enumerate(messages)
+        if m.type == "tool" and not (getattr(m, "name", "") or "").startswith(_BROWSER_PREFIX)
+    ]
+    if _tool_msg_indices:
+        _seen_hashes: dict[str, list[int]] = {}  # hash → [indices]
+        for i in _tool_msg_indices:
+            _c = _content_to_str(messages[i].content)
+            if len(_c) > 200:  # only dedup substantial outputs
+                _h = _hashlib.md5(_c.encode(), usedforsecurity=False).hexdigest()
+                _seen_hashes.setdefault(_h, []).append(i)
+        for _indices in _seen_hashes.values():
+            if len(_indices) > 1:
+                for i in _indices[:-1]:  # keep the last, replace earlier
+                    _m = messages[i]
+                    messages[i] = ToolMessage(
+                        content=f"[Duplicate result from {getattr(_m, 'name', 'tool')} — see later occurrence]",
+                        name=_m.name,
+                        tool_call_id=_m.tool_call_id,
+                    )
+
+    # ── Summarize old tool results outside the protected window ──────
+    # For ToolMessages before the protected turn window that are large
+    # (>500 chars), replace with a heuristic 1-line summary so the model
+    # still knows *what happened* without the full raw output.
+    _human_indices = [i for i, m in enumerate(messages) if m.type == "human"]
+    if len(_human_indices) > _PROTECTED_TURNS:
+        _protect_from = _human_indices[-_PROTECTED_TURNS]
+        for i in _tool_msg_indices:
+            if i >= _protect_from:
+                break  # inside protected window — stop
+            _m = messages[i]
+            _c = _content_to_str(_m.content)
+            if len(_c) > 500:
+                messages[i] = ToolMessage(
+                    content=_summarize_tool_result(getattr(_m, "name", "tool"), _c),
+                    name=_m.name,
+                    tool_call_id=_m.tool_call_id,
+                )
 
     # ── Proportionally shrink oversized ToolMessages ─────────────────
     # Without this, trim_messages (strategy="last") may drop ALL context
@@ -406,17 +477,43 @@ def _pre_model_trim(state: dict) -> dict:
         cached = _summary_cache[_thread_id]
         _split = cached["msg_count"]
         if 0 < _split < len(messages):
-            # Keep the system prompt (position 0) if present
-            _sys = [messages[0]] if messages and messages[0].type == "system" else []
-            _summary_msg = _SM(
-                content=(
-                    "[Conversation Summary — the following condenses earlier "
-                    "messages that are no longer shown in full]\n"
-                    + cached["summary"]
-                    + "\n[End of summary — recent messages follow]"
-                )
+            # Build the summary block text
+            _summary_text = (
+                "\n\n[Conversation Summary — structured format with "
+                "## section headers, condensing earlier messages "
+                "that are no longer shown in full]\n"
+                + cached["summary"]
+                + "\n[End of summary — recent messages follow]"
             )
-            messages = _sys + [_summary_msg] + messages[_split:]
+            # Merge summary into the system prompt so it survives
+            # trim_messages (which only keeps the FIRST SystemMessage
+            # when include_system=True).
+            if messages and messages[0].type == "system":
+                _sys_content = _content_to_str(messages[0].content)
+                messages[0] = _SM(content=_sys_content + _summary_text)
+                messages = [messages[0]] + messages[_split:]
+            else:
+                # No system prompt — inject as standalone (rare)
+                messages = [_SM(content=_summary_text.lstrip())] + messages[_split:]
+            # Thrashing warning: if 3 consecutive compressions saved <10%,
+            # nudge the user to start a new thread.
+            _comps = cached.get("compressions", [])
+            if len(_comps) >= 3 and all(
+                (c["before"] - c["after"]) / max(c["before"], 1) < 0.10
+                for c in _comps[-3:]
+            ):
+                # Pick the right command name for the channel
+                _new_cmd = "/newthread" if (_thread_id or "").startswith("tg_") else "/new"
+                messages.append(
+                    _SM(
+                        content=(
+                            "[System notice: This conversation's context is nearly full "
+                            "and re-summarisation is no longer freeing meaningful space. "
+                            f"Suggest the user start a new thread ({_new_cmd}) to "
+                            "maintain response quality.]"
+                        )
+                    )
+                )
 
     trimmed = trim_messages(
         messages,
@@ -471,53 +568,87 @@ def _pre_model_trim(state: dict) -> dict:
                     ))
         trimmed = _patched
 
-    # Inject current date & time right after the system message so the
-    # model always has an up-to-date reference.  This runs on every LLM
-    # call, so even after days of uptime the date stays correct.
-    from langchain_core.messages import SystemMessage
-    now = _datetime.now()
-    time_msg = SystemMessage(
-        content=(
-            f"Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}."
+    # ── Drop orphaned leading ToolMessages after trim ────────────────
+    # trim_messages may leave ToolMessages at the front (after system
+    # messages) that belong to a tool_call group whose AIMessage was
+    # trimmed away.  These orphans confuse providers.  Strip them.
+    _first_nonsys = 0
+    for _i, _m in enumerate(trimmed):
+        if _m.type != "system":
+            _first_nonsys = _i
+            break
+    if _first_nonsys < len(trimmed) and trimmed[_first_nonsys].type == "tool":
+        _drop_end = _first_nonsys
+        while _drop_end < len(trimmed) and trimmed[_drop_end].type == "tool":
+            _drop_end += 1
+        logger.debug(
+            "_pre_model_trim: dropping %d orphaned leading ToolMessage(s)",
+            _drop_end - _first_nonsys,
         )
-    )
-    # Insert after the first system message (the main prompt)
+        trimmed = trimmed[:_first_nonsys] + trimmed[_drop_end:]
+
+    # ── Inject system metadata messages ─────────────────────────────
+    # Build a list of SystemMessages to insert after the main system
+    # prompt, then batch-insert them.  This avoids fragile index
+    # arithmetic (insert_idx+1, +2, …) that breaks when optional
+    # injections are skipped.
+    from langchain_core.messages import SystemMessage
+
+    # Find insertion point — right after the first SystemMessage
     insert_idx = 1  # default: after position 0
     for i, m in enumerate(trimmed):
         if isinstance(m, SystemMessage):
             insert_idx = i + 1
             break
-    trimmed.insert(insert_idx, time_msg)
 
-    # ── Inject platform / shell context ──────────────────────────────
+    _injections: list[SystemMessage] = []
+
+    # Date/time — always present
+    now = _datetime.now()
+    _injections.append(SystemMessage(
+        content=f"Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}."
+    ))
+
+    # Platform / shell context
     try:
         from prompts import get_platform_context
-        platform_msg = SystemMessage(content=get_platform_context())
-        trimmed.insert(insert_idx + 1, platform_msg)
+        _injections.append(SystemMessage(content=get_platform_context()))
     except Exception:
-        pass  # non-critical — agent works without it
+        pass
 
-    # ── Inject background-mode override when running as a BG task ────
+    # Self-knowledge
+    try:
+        from self_knowledge import build_self_knowledge_block
+        _sk_text = build_self_knowledge_block()
+        if _sk_text:
+            _injections.append(SystemMessage(content=_sk_text))
+    except Exception:
+        pass
+
+    # Designer mode prompt — injected when a designer project is active
+    try:
+        from designer.tool import get_active_project
+        _dp = get_active_project()
+        if _dp is not None:
+            from designer.prompt import build_designer_prompt
+            _injections.append(SystemMessage(content=build_designer_prompt(_dp)))
+    except Exception:
+        pass
+
+    # Background-mode override
     if is_background_workflow():
         from prompts import AGENT_BG_OVERRIDE
-        bg_msg = SystemMessage(content=AGENT_BG_OVERRIDE)
-        trimmed.insert(insert_idx + 2, bg_msg)
-
-        # Continuation awareness for persistent-thread tasks
+        _injections.append(SystemMessage(content=AGENT_BG_OVERRIDE))
         if _persistent_thread_var.get():
-            cont_msg = SystemMessage(content=(
+            _injections.append(SystemMessage(content=(
                 "PERSISTENT THREAD: This task uses a persistent conversation thread. "
                 "Earlier messages in this thread are from PREVIOUS runs of the same task. "
                 "Use them to compare against prior results, track changes over time, "
                 "and avoid repeating work already done."
-            ))
-            trimmed.insert(insert_idx + 3, cont_msg)
+            )))
 
-    # ── Inject enabled skill instructions ────────────────────────────
-    # Skills are user-configured workflows (SKILL.md files) whose
-    # instructions are appended as an extra SystemMessage right after the
-    # date/time message.  The prompt text is built from an in-memory
-    # cache, so this adds zero I/O latency.
+    # Skill instructions
+    skills_text = ""
     try:
         from skills import get_skills_prompt
         from threads import get_thread_skills_override
@@ -527,25 +658,29 @@ def _pre_model_trim(state: dict) -> dict:
         if _thread_id:
             skills_override = get_thread_skills_override(_thread_id)
 
+        # In designer mode, suppress manual skills — only tool guides
+        # (like designer_guide) are injected automatically.
+        if _dp is not None:
+            skills_override = []
+
         skills_text = get_skills_prompt(skills_override)
         if skills_text:
-            skills_msg = SystemMessage(content=skills_text)
-            # Insert right after time_msg (which is at insert_idx)
-            trimmed.insert(insert_idx + 1, skills_msg)
+            _injections.append(SystemMessage(content=skills_text))
     except Exception as exc:
         logger.debug("Skill injection skipped (non-fatal): %s", exc)
 
-    # Plugin skills — appended after built-in skills
+    # Plugin skills
     try:
         from plugins import registry as _plugin_reg
         plugin_skills_text = _plugin_reg.get_skills_prompt()
         if plugin_skills_text:
-            plugin_skills_msg = SystemMessage(content=plugin_skills_text)
-            # Insert after the skills msg (or after time_msg if no skills)
-            _ins_idx = insert_idx + (2 if skills_text else 1)
-            trimmed.insert(_ins_idx, plugin_skills_msg)
+            _injections.append(SystemMessage(content=plugin_skills_text))
     except Exception as exc:
         logger.debug("Plugin skill injection skipped: %s", exc)
+
+    # Batch-insert all injections at insert_idx
+    for _ii, _inj_msg in enumerate(_injections):
+        trimmed.insert(insert_idx + _ii, _inj_msg)
 
     # ── Auto-recall: inject relevant memories before the last user msg ───
     # Embed the latest human message and pull the top-5 most relevant
@@ -670,6 +805,59 @@ def _pre_model_trim(state: dict) -> dict:
             _sys = [m for m in trimmed if isinstance(m, SystemMessage)]
             _rest = [m for m in trimmed if not isinstance(m, SystemMessage)]
             trimmed = _sys + _rest
+
+            # ── Anthropic prompt caching ─────────────────────────────
+            # Mark the merged system block and early conversation turns
+            # with cache_control so Anthropic caches them across requests.
+            # langchain-anthropic passes cache_control through on content
+            # blocks.  We place up to 2 cache breakpoints:
+            #   1. The last SystemMessage (covers system prompt + metadata)
+            #   2. The 3rd non-system message (covers early conversation)
+            _CACHE_MARKER = {"type": "ephemeral"}
+            # Breakpoint 1: last system message
+            _last_sys_idx = -1
+            for _ci in range(len(trimmed) - 1, -1, -1):
+                if isinstance(trimmed[_ci], SystemMessage):
+                    _last_sys_idx = _ci
+                    break
+            if _last_sys_idx >= 0:
+                _sm = trimmed[_last_sys_idx]
+                _sc = _sm.content
+                if isinstance(_sc, str):
+                    _sc = [{"type": "text", "text": _sc, "cache_control": _CACHE_MARKER}]
+                elif isinstance(_sc, list) and _sc:
+                    _sc = list(_sc)  # shallow copy
+                    _last_block = _sc[-1]
+                    if isinstance(_last_block, dict):
+                        _sc[-1] = {**_last_block, "cache_control": _CACHE_MARKER}
+                    else:
+                        _sc.append({"type": "text", "text": "", "cache_control": _CACHE_MARKER})
+                trimmed[_last_sys_idx] = SystemMessage(content=_sc)
+
+            # Breakpoint 2: 3rd non-system message (early conversation)
+            _nonsys_count = 0
+            for _ci, _cm in enumerate(trimmed):
+                if isinstance(_cm, SystemMessage):
+                    continue
+                _nonsys_count += 1
+                if _nonsys_count == 3:
+                    _cc = _cm.content
+                    if isinstance(_cc, str):
+                        _cc = [{"type": "text", "text": _cc, "cache_control": _CACHE_MARKER}]
+                    elif isinstance(_cc, list) and _cc:
+                        _cc = list(_cc)
+                        _lb = _cc[-1]
+                        if isinstance(_lb, dict):
+                            _cc[-1] = {**_lb, "cache_control": _CACHE_MARKER}
+                        else:
+                            _cc.append({"type": "text", "text": "", "cache_control": _CACHE_MARKER})
+                    # Reconstruct message preserving type
+                    _new_msg = _cm.model_copy(update={"content": _cc})
+                    trimmed[_ci] = _new_msg
+                    break
+            logger.debug("Anthropic prompt caching: applied breakpoints "
+                         "(sys=%d, conv=%s)", _last_sys_idx >= 0,
+                         _nonsys_count >= 3)
     except Exception:
         pass  # Non-fatal
 
@@ -701,6 +889,12 @@ _persistent_thread_var: _contextvars.ContextVar[bool] = _contextvars.ContextVar(
 _current_thread_id_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
     "current_thread_id", default=""
 )
+
+
+def get_current_thread_id() -> str:
+    """Return the current agent thread id for the active invocation."""
+
+    return _current_thread_id_var.get("")
 
 # ContextVar for model override — propagates to tool executor threads so
 # the contextual compressor uses the same model as the agent graph.
@@ -790,7 +984,25 @@ def _should_summarize(agent, config: dict, user_input: str) -> bool:
                 _message_tokens(m) for m in msgs[old_split:new_split]
             )
             _MIN_GAP_TOKENS = 600  # don't waste an LLM call for trivial gaps
-            return gap_tokens >= _MIN_GAP_TOKENS
+            if gap_tokens < _MIN_GAP_TOKENS:
+                return False
+
+            # Anti-thrashing: if last 2 compressions each saved <10%,
+            # skip — re-summarizing won't materially help.
+            _compressions = cached.get("compressions", [])
+            if len(_compressions) >= 2:
+                _last_two = _compressions[-2:]
+                if all(
+                    (c["before"] - c["after"]) / max(c["before"], 1) < 0.10
+                    for c in _last_two
+                ):
+                    logger.warning(
+                        "Summarization thrashing detected for thread %s "
+                        "(last 2 compressions saved <10%% each) — skipping",
+                        thread_id,
+                    )
+                    return False
+            return True
         else:
             estimated_tokens = sum(_message_tokens(m) for m in msgs)
 
@@ -879,9 +1091,20 @@ def _do_summarize(agent, config: dict, model_override: str | None = None) -> Non
         summary_text = _re.sub(r"</?think>", "", summary_text).strip()
 
         if summary_text:
+            # Record compression stats for anti-thrashing detection
+            import time as _time_mod
+            _before_tokens = sum(_message_tokens(m) for m in old_msgs)
+            _after_tokens = _count_tokens(summary_text)
+            _prev_compressions = _summary_cache.get(thread_id, {}).get("compressions", [])
+            _prev_compressions.append({
+                "before": _before_tokens,
+                "after": _after_tokens,
+                "ts": _time_mod.time(),
+            })
             _summary_cache[thread_id] = {
                 "summary": summary_text,
                 "msg_count": split_idx,
+                "compressions": _prev_compressions[-3:],  # ring buffer of 3
             }
             # Persist to DB so summary survives restart
             try:
@@ -1189,7 +1412,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
         agent = create_react_agent(
             model=llm,
             tools=lc_tools,
-            prompt=AGENT_SYSTEM_PROMPT,
+            prompt=get_agent_system_prompt(),
             pre_model_hook=_pre_model_trim,
             checkpointer=checkpointer,
             name="thoth_agent",

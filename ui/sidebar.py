@@ -32,6 +32,7 @@ _SIDEBAR_AVATAR_CSS = """
     border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     font-size: 4.5rem;
+    color: gold;
     border: 2px solid transparent;
     cursor: pointer;
     user-select: none;
@@ -212,7 +213,7 @@ def build_sidebar(
     p: P,
     *,
     rebuild_main: Callable[[], None],
-    open_settings: Callable[[], None],
+    open_settings: Callable[..., None],
     load_thread_messages: Callable[[str], list[dict]],
 ) -> Callable[[], None]:
     """Build the left drawer and return ``rebuild_thread_list`` so the
@@ -228,7 +229,7 @@ def build_sidebar(
         ``load_thread_messages(thread_id) -> list[dict]`` used to hydrate
         a thread when the user clicks it.
     """
-    from threads import _list_threads, _save_thread_meta, _delete_thread
+    from threads import _list_threads, _save_thread_meta, _delete_thread, _get_thread_project_id
     from tasks import get_running_tasks, stop_task
     from models import is_cloud_model, get_current_model
     from memory_extraction import set_active_thread
@@ -237,10 +238,20 @@ def build_sidebar(
     # Keep a reference the caller can use
     _rebuild_thread_list_ref: list[Callable[[], None]] = [lambda: None]
 
-    with ui.left_drawer(value=True, fixed=True).style("width: 280px"):
-        # Logo
-        ui.html('<h2 style="margin: 0; color: gold;">𓁟 Thoth</h2>', sanitize=False)
-        ui.label("Personal AI Sovereignty").classes("text-xs text-grey-6")
+    with ui.left_drawer(value=True, fixed=True).style(
+        "width: 280px;"
+    ).classes("thoth-panel-card"):
+        # Logo — always Thoth branding, independent of identity settings
+        ui.html(
+            '<div style="display:flex; align-items:center; gap:8px;">'
+            '<span style="font-size:1.6rem; color:gold;">𓁟</span>'
+            '<span style="font-size:1.25rem; font-weight:600; color:gold;'
+            ' letter-spacing:0.5px;">Thoth</span></div>',
+            sanitize=False,
+        )
+        ui.label("Personal AI Sovereignty").classes("text-xs text-grey-6").style(
+            "margin-top: -2px;"
+        )
         ui.separator()
 
         # Home + New buttons
@@ -253,6 +264,7 @@ def build_sidebar(
                     if prev_gen.tts_active:
                         state.tts_service.stop()
                         prev_gen.tts_active = False
+                state.active_designer_project = None
                 state.thread_id = None
                 state.thread_name = None
                 state.messages = []
@@ -263,10 +275,10 @@ def build_sidebar(
 
             _home_btn = ui.button("🏠 Home", on_click=_go_home).classes("flex-grow").props("flat")
 
-            def _new_thread():
+            async def _new_thread():
                 tid = uuid.uuid4().hex[:12]
                 name = f"💻 Thread {datetime.now().strftime('%b %d, %H:%M')}"
-                _save_thread_meta(tid, name)
+                await run.io_bound(_save_thread_meta, tid, name)
                 prev = state.thread_id
                 prev_gen = _active_generations.get(prev) if prev else None
                 if prev_gen and prev_gen.status == "streaming":
@@ -274,6 +286,7 @@ def build_sidebar(
                     if prev_gen.tts_active:
                         state.tts_service.stop()
                         prev_gen.tts_active = False
+                state.active_designer_project = None
                 state.thread_id = tid
                 state.thread_name = name
                 state.messages = []
@@ -285,8 +298,9 @@ def build_sidebar(
 
             ui.button("＋ New", on_click=_new_thread).classes("flex-grow").props("color=primary")
 
-        ui.label("Conversations").classes("text-subtitle2 mt-2")
-        p.thread_container = ui.column().classes("w-full gap-0")
+        with ui.column().classes("w-full gap-1 q-mt-sm thoth-inner-panel"):
+            ui.label("Conversations").classes("text-subtitle2")
+            p.thread_container = ui.column().classes("w-full gap-0")
 
         # ── Channel monitor panel ────────────────────────────────────
         _ch_icon_map = {
@@ -311,7 +325,8 @@ def build_sidebar(
                 return f"{delta // 3600}h ago"
             return f"{delta // 86400}d ago"
 
-        _ch_monitor_container = ui.column().classes("w-full gap-0 q-mt-sm")
+        with ui.column().classes("w-full gap-0 q-mt-sm thoth-inner-panel"):
+            _ch_monitor_container = ui.column().classes("w-full gap-0")
 
         def _build_channel_monitor() -> None:
             from channels.registry import all_channels
@@ -323,7 +338,6 @@ def build_sidebar(
                 return
 
             with _ch_monitor_container:
-                ui.separator().classes("q-my-xs")
                 ui.label("Channels").classes("text-subtitle2")
 
                 for ch in channels:
@@ -343,7 +357,7 @@ def build_sidebar(
                     icon_name = _ch_icon_map.get(ch.name, "chat")
 
                     def _ch_click(e, _ch=ch):
-                        open_settings()
+                        open_settings("Channels")
 
                     with ui.row().classes(
                         "w-full items-center no-wrap cursor-pointer q-py-xs q-px-sm rounded"
@@ -679,6 +693,10 @@ def build_sidebar(
             ui.button(icon="settings", on_click=lambda: open_settings()).props(
                 "flat dense round size=sm"
             ).classes("text-grey-5").style("font-size: 1.25rem;")
+        from version import __version__ as _v
+        ui.label(f"v{_v}").classes("text-xs text-grey-7 w-full text-center").style(
+            "margin-top: -4px; letter-spacing: 0.3px; opacity: 0.5;"
+        )
 
     # ── Thread list builder ──────────────────────────────────────────
 
@@ -707,13 +725,15 @@ def build_sidebar(
             visible = threads[:SIDEBAR_MAX_THREADS]
             for tid, name, created, updated, *_rest in visible:
                 _thread_model_ov = _rest[0] if _rest else ""
+                _thread_project_id = _rest[1] if len(_rest) > 1 else ""
                 name = name or ""
                 is_active = tid == state.thread_id
                 is_running = tid in running_tids
                 is_generating_tid = tid in _active_generations
                 is_cloud_thread = is_cloud_model(_thread_model_ov or get_current_model())
+                is_designer_thread = bool(_thread_project_id)
 
-                def _select(t=tid, n=name, mo=_thread_model_ov):
+                async def _select(t=tid, n=name, mo=_thread_model_ov, pid=_thread_project_id):
                     prev = state.thread_id
                     prev_gen = _active_generations.get(prev) if prev else None
                     if prev_gen and prev_gen.status == "streaming":
@@ -721,10 +741,30 @@ def build_sidebar(
                         if prev_gen.tts_active:
                             state.tts_service.stop()
                             prev_gen.tts_active = False
+
+                    if pid:
+                        # Designer thread — open the associated project
+                        from designer.storage import load_project
+                        proj = load_project(pid)
+                        if proj:
+                            state.thread_id = t
+                            state.thread_name = n
+                            state.thread_model_override = mo or ""
+                            state.messages = await run.io_bound(load_thread_messages, t)
+                            p.pending_files.clear()
+                            set_active_thread(t, previous_id=prev)
+                            state.active_designer_project = proj
+                            rebuild_main()
+                            _rebuild_thread_list_ref[0]()
+                            return
+                        # Project missing — fall through to normal thread behaviour
+
+                    # Non-designer thread (or missing project) — close designer if open
+                    state.active_designer_project = None
                     state.thread_id = t
                     state.thread_name = n
                     state.thread_model_override = mo or ""
-                    state.messages = load_thread_messages(t)
+                    state.messages = await run.io_bound(load_thread_messages, t)
                     p.pending_files.clear()
                     set_active_thread(t, previous_id=prev)
                     rebuild_main()
@@ -762,6 +802,8 @@ def build_sidebar(
                             _thr_icon = "autorenew"
                         elif is_running:
                             _thr_icon = "hourglass_top"
+                        elif is_designer_thread:
+                            _thr_icon = "brush"
                         elif is_cloud_thread:
                             _thr_icon = "cloud"
                         elif name.startswith("✈️"):

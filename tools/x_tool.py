@@ -298,7 +298,17 @@ def _run_oauth_flow(client_id: str, client_secret: str) -> dict:
         auth=(client_id, client_secret),
         timeout=15,
     )
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        body = resp.text
+        logger.error("X token exchange failed (HTTP %d): %s", resp.status_code, body)
+        # Provide a human-friendly error for common cases
+        if resp.status_code == 400:
+            raise RuntimeError(
+                "X token exchange failed (400 Bad Request). "
+                "This usually means the Client ID or Client Secret is wrong, "
+                "or the callback URL doesn't match. Check your X Developer Portal settings."
+            )
+        raise RuntimeError(f"X token exchange failed (HTTP {resp.status_code}): {body}")
     token = resp.json()
     token["expires_at"] = time.time() + token.get("expires_in", 7200)
     _save_token(token)
@@ -689,27 +699,42 @@ class XTool(BaseTool):
         """Probe the OAuth token and attempt silent refresh if needed.
 
         Returns (status, detail) where status is one of:
-        - "valid"     — token is fresh
+        - "valid"     — token is fresh and verified against API
         - "refreshed" — token was expired, silently refreshed
         - "expired"   — refresh token failed; re-authenticate
         - "missing"   — no token file
-        - "error"     — unexpected error
+        - "error"     — unexpected error (e.g. bad credentials)
         """
         token = _load_token()
         if not token:
             return ("missing", "No token file found")
 
-        if not _token_expired(token):
-            return ("valid", "Token is valid")
+        if _token_expired(token):
+            # Try silent refresh
+            new_token = _refresh_token(
+                token, self._get_client_id(), self._get_client_secret()
+            )
+            if new_token:
+                return ("refreshed", "Token refreshed successfully")
+            return ("expired", "Token expired — re-authenticate in Settings")
 
-        # Try silent refresh
-        new_token = _refresh_token(
-            token, self._get_client_id(), self._get_client_secret()
-        )
-        if new_token:
-            return ("refreshed", "Token refreshed successfully")
-
-        return ("expired", "Token expired — re-authenticate in Settings")
+        # Token not expired — verify it actually works
+        try:
+            import httpx
+            resp = httpx.get(
+                f"{_API_BASE}/users/me",
+                headers={"Authorization": f"Bearer {token['access_token']}"},
+                params={"user.fields": "username"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return ("valid", "Token is valid")
+            if resp.status_code == 401:
+                return ("expired", "Token rejected by X API — re-authenticate in Settings")
+            return ("error", f"X API returned {resp.status_code}")
+        except Exception as exc:
+            logger.warning("X token health check failed: %s", exc)
+            return ("error", f"Could not verify token: {exc}")
 
     def authenticate(self):
         """Run the OAuth 2.0 PKCE flow (opens browser)."""

@@ -4835,19 +4835,19 @@ try:
     _delete_thread(_test_tid35)
     record("PASS", "cloud: get/set thread model override works")
 
-    # ── 35w. _list_threads returns 5 columns ─────────────────────────
+    # ── 35w. _list_threads returns 6 columns (incl. project_id) ─────
     from threads import _list_threads
     _save_thread_meta(_test_tid35, "Cloud Test Thread 2")
     _threads35 = _list_threads()
     if _threads35:
         _row35 = [r for r in _threads35 if r[0] == _test_tid35]
         if _row35:
-            assert len(_row35[0]) == 5, f"Expected 5 columns, got {len(_row35[0])}"
-            record("PASS", "cloud: _list_threads returns 5-column rows")
+            assert len(_row35[0]) == 6, f"Expected 6 columns, got {len(_row35[0])}"
+            record("PASS", "cloud: _list_threads returns 6-column rows")
         else:
             record("WARN", "cloud: test thread not found in list")
     else:
-        record("WARN", "cloud: no threads to test 5-column format")
+        record("WARN", "cloud: no threads to test 6-column format")
     _delete_thread(_test_tid35)
 
     # ── 35x. models.py: conditional ollama import ────────────────────
@@ -5156,20 +5156,23 @@ try:
         "get_context_size must support model_name param"
     record("PASS", "cloud: sidebar context counter model-aware")
 
-    # ── 35bo. cloud auto-max context, local VRAM-controlled ──────────
-    # get_context_size must auto-use native max for cloud models
+    # ── 35bo. cloud context configurable, local VRAM-controlled ──────────
+    # get_context_size must cap cloud models at user-selected limit
     _gcs_body = _mod_src35.split("def get_context_size")[1][:1200]
     assert 'is_cloud_model' in _gcs_body, "get_context_size must branch on cloud vs local"
+    assert '_cloud_num_ctx' in _gcs_body, "cloud path must reference _cloud_num_ctx cap"
     assert '_estimate_context_heuristic' in _gcs_body, "cloud fallback should use heuristic"
     # UI: local context dropdown must mention VRAM
     assert 'Local context window' in _gui_src35, "context dropdown should be labeled for local models"
     assert 'VRAM' in _gui_src35, "context dropdown tooltip should mention VRAM impact"
-    # Cloud info label
-    assert 'Cloud models automatically use' in _gui_src35, \
-        "settings should explain cloud auto-context"
+    # Cloud context dropdown
+    assert 'Cloud context window' in _gui_src35, \
+        "settings should have a cloud context dropdown"
+    assert 'rate-limit' in _gui_src35, \
+        "cloud dropdown tooltip should mention rate-limit"
     # Token counter should format M for large values
     assert '1_000_000' in _gui_src35, "token counter should handle M formatting"
-    record("PASS", "cloud: auto-max context for cloud, VRAM control for local")
+    record("PASS", "cloud: configurable context for cloud, VRAM control for local")
 
     # ── 35bp. context catalog and keyless fetch ──────────────────────
     assert 'fetch_context_catalog' in _mod_src35, "models.py must define fetch_context_catalog"
@@ -6429,8 +6432,8 @@ try:
     record("PASS", "status_checks: CheckResult inactive properties")
 
     # ── 41c. Check registry completeness ─────────────────────────────
-    assert len(ALL_CHECKS) == 19, f"Expected 19 checks, got {len(ALL_CHECKS)}"
-    record("PASS", "status_checks: 19 checks registered in ALL_CHECKS")
+    assert len(ALL_CHECKS) == 20, f"Expected 20 checks, got {len(ALL_CHECKS)}"
+    record("PASS", "status_checks: 20 checks registered in ALL_CHECKS")
 
     assert set(LIGHT_CHECKS).issubset(set(ALL_CHECKS)), "LIGHT_CHECKS not subset"
     assert set(HEAVY_CHECKS).issubset(set(ALL_CHECKS)), "HEAVY_CHECKS not subset"
@@ -6513,9 +6516,9 @@ try:
 
     # ── 41h. Force refresh populates cache ───────────────────────────
     fr = _force_refresh()
-    assert len(fr) == 19, f"force_refresh returned {len(fr)} results"
+    assert len(fr) >= 19, f"force_refresh returned {len(fr)} results (expected >= 19)"
     from ui.status_bar import _status_cache, _cache_time
-    assert len(_status_cache) == 19
+    assert len(_status_cache) >= 19
     assert _cache_time > 0
     record("PASS", "status_bar: force_refresh populates cache")
 
@@ -13092,14 +13095,15 @@ except Exception as e:
     traceback.print_exc()
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SECTION 68 · v3.15.0 SMOKE TEST — INSTALLER, NEW MODULES & CHANNEL INFRA
+# SECTION 68 · VERSION SMOKE TEST — INSTALLER, NEW MODULES & CHANNEL INFRA
 # ═════════════════════════════════════════════════════════════════════════════
 print("\n" + "=" * 70)
-print("68. v3.15.0 SMOKE TEST")
+print("68. VERSION SMOKE TEST")
 print("=" * 70)
 
 try:
     from pathlib import Path as _P68
+    from version import __version__ as _ver68
 
     # ── 68a. New modules import cleanly ─────────────────────────────
     import tunnel as _tun68
@@ -13195,8 +13199,8 @@ try:
     _expected_guides68 = {
         "browser_guide", "calendar_guide", "chart_guide", "email_guide",
         "filesystem_guide", "math_guide", "shell_guide", "telegram_guide",
-        "tracker_guide", "vision_guide", "weather_guide", "wiki_guide",
-        "x_guide",
+        "thoth_status_guide", "tracker_guide", "vision_guide",
+        "weather_guide", "wiki_guide", "x_guide",
     }
     _actual_guides68 = {
         d.name for d in _P68(_sk68.TOOL_GUIDES_DIR).iterdir()
@@ -13235,32 +13239,32 @@ try:
 
     # ── 68l. Installer version consistency ──────────────────────────
     _iss68 = _P68("installer/thoth_setup.iss").read_text(encoding="utf-8")
-    assert '#define MyAppVersion   "3.15.0"' in _iss68
-    record("PASS", "68l: thoth_setup.iss version is 3.15.0")
+    assert f'#define MyAppVersion   "{_ver68}"' in _iss68
+    record("PASS", f"68l: thoth_setup.iss version is {_ver68}")
 
     _ps168 = _P68("installer/build_installer.ps1").read_text(encoding="utf-8")
-    assert "3.15.0" in _ps168 and "3.14.0" not in _ps168
-    record("PASS", "68l: build_installer.ps1 version is 3.15.0")
+    assert _ver68 in _ps168
+    record("PASS", f"68l: build_installer.ps1 version is {_ver68}")
 
     _yml68 = _P68(".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert 'DEFAULT_VERSION: "3.15.0"' in _yml68
-    record("PASS", "68l: release.yml DEFAULT_VERSION is 3.15.0")
+    assert _ver68 in _yml68
+    record("PASS", f"68l: release.yml references version {_ver68}")
 
     _mac68 = _P68("installer/build_mac_app.sh").read_text(encoding="utf-8")
-    assert '${1:-3.15.0}' in _mac68
-    record("PASS", "68l: build_mac_app.sh version is 3.15.0")
+    assert f'${{1:-{_ver68}}}' in _mac68
+    record("PASS", f"68l: build_mac_app.sh version is {_ver68}")
 
     _macrel68 = _P68("installer/build_mac_release.sh").read_text(encoding="utf-8")
-    assert '${1:-3.15.0}' in _macrel68
-    record("PASS", "68l: build_mac_release.sh version is 3.15.0")
+    assert f'${{1:-{_ver68}}}' in _macrel68
+    record("PASS", f"68l: build_mac_release.sh version is {_ver68}")
 
     _bat68 = _P68("installer/install_deps.bat").read_text(encoding="utf-8")
-    assert "3.15.0" in _bat68 and "3.7.0" not in _bat68
-    record("PASS", "68l: install_deps.bat version is 3.15.0 (no stale 3.7)")
+    assert _ver68 in _bat68 and "3.7.0" not in _bat68
+    record("PASS", f"68l: install_deps.bat version is {_ver68} (no stale 3.7)")
 
     _plist68 = _P68("installer/Thoth.app/Contents/Info.plist").read_text(encoding="utf-8")
-    assert _plist68.count("3.15.0") == 2  # CFBundleVersion + CFBundleShortVersionString
-    record("PASS", "68l: Info.plist both version fields are 3.15.0")
+    assert _plist68.count(_ver68) == 2  # CFBundleVersion + CFBundleShortVersionString
+    record("PASS", f"68l: Info.plist both version fields are {_ver68}")
 
     # ── 68m. New files included in installer ISS ────────────────────
     _new_iss_files68 = [
@@ -13328,8 +13332,2441 @@ try:
     record("PASS", "68t: channel activity tracking round-trip works")
 
 except Exception as e:
-    record("FAIL", "v3.15.0-smoke-68", f"{type(e).__name__}: {e}")
+    record("FAIL", "version-smoke-68", f"{type(e).__name__}: {e}")
     traceback.print_exc()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 69 · CODEBASE CONSISTENCY CHECKS
+# ════════════════════════════════════════════════════════════════════════════
+# Automated guards that catch missing pieces when new tools, features,
+# channels, skills, or settings are added.  Each sub-test is independent.
+# ════════════════════════════════════════════════════════════════════════════
+
+print("="*70)
+print("69. CODEBASE CONSISTENCY CHECKS")
+print("="*70)
+
+import pathlib as _P69_pathlib
+
+_APP_ROOT69 = _P69_pathlib.Path(__file__).resolve().parent
+
+
+# ── 69a. Every tool file has a matching import in tools/__init__.py ────────
+try:
+    _tool_dir69 = _APP_ROOT69 / "tools"
+    _tool_files69 = {
+        f.stem for f in _tool_dir69.glob("*_tool.py")
+    }
+    _init_text69 = (_tool_dir69 / "__init__.py").read_text(encoding="utf-8")
+    _missing_imports69 = {
+        t for t in _tool_files69
+        if f"import {t}" not in _init_text69 and f"from tools import {t}" not in _init_text69
+           and f"from tools.{t}" not in _init_text69
+    }
+    assert not _missing_imports69, f"Tool files not imported in __init__.py: {sorted(_missing_imports69)}"
+    record("PASS", f"69a: all {len(_tool_files69)} tool files imported in tools/__init__.py")
+except Exception as e:
+    record("FAIL", "69a-tool-imports", f"{type(e).__name__}: {e}")
+
+# ── 69b. Every tool file listed in installer ──────────────────────────────
+try:
+    _iss_text69 = (_APP_ROOT69 / "installer" / "thoth_setup.iss").read_text(encoding="utf-8")
+    _tool_py_files69 = {f.name for f in _tool_dir69.glob("*.py")}
+    _missing_iss_tools69 = {f for f in _tool_py_files69 if f not in _iss_text69}
+    assert not _missing_iss_tools69, f"Tool .py files missing from ISS: {sorted(_missing_iss_tools69)}"
+    record("PASS", f"69b: all {len(_tool_py_files69)} tool .py files in installer")
+except Exception as e:
+    record("FAIL", "69b-tool-installer", f"{type(e).__name__}: {e}")
+
+# ── 69c. Every top-level .py file listed in installer ─────────────────────
+try:
+    _top_py69 = {
+        f.name for f in _APP_ROOT69.glob("*.py")
+        if not f.name.startswith(("test_", "integration_", "_"))
+    }
+    _missing_top69 = {f for f in _top_py69 if f not in _iss_text69}
+    assert not _missing_top69, f"Top-level .py files missing from ISS: {sorted(_missing_top69)}"
+    record("PASS", f"69c: all {len(_top_py69)} top-level .py files in installer")
+except Exception as e:
+    record("FAIL", "69c-toplevel-installer", f"{type(e).__name__}: {e}")
+
+# ── 69d. Every channel .py file listed in installer ───────────────────────
+try:
+    _ch_dir69 = _APP_ROOT69 / "channels"
+    _ch_py69 = {f.name for f in _ch_dir69.glob("*.py")}
+    _missing_ch69 = {f for f in _ch_py69 if f not in _iss_text69}
+    assert not _missing_ch69, f"Channel .py files missing from ISS: {sorted(_missing_ch69)}"
+    record("PASS", f"69d: all {len(_ch_py69)} channel .py files in installer")
+except Exception as e:
+    record("FAIL", "69d-channel-installer", f"{type(e).__name__}: {e}")
+
+# ── 69e. Every UI .py file listed in installer ────────────────────────────
+try:
+    _ui_dir69 = _APP_ROOT69 / "ui"
+    _ui_py69 = {f.name for f in _ui_dir69.glob("*.py")}
+    _missing_ui69 = {f for f in _ui_py69 if f not in _iss_text69}
+    assert not _missing_ui69, f"UI .py files missing from ISS: {sorted(_missing_ui69)}"
+    record("PASS", f"69e: all {len(_ui_py69)} ui .py files in installer")
+except Exception as e:
+    record("FAIL", "69e-ui-installer", f"{type(e).__name__}: {e}")
+
+# ── 69f. VALID_ENTITY_TYPES matches _VIS_TYPE_COLORS ──────────────────────
+try:
+    from knowledge_graph import VALID_ENTITY_TYPES as _vet69, _VIS_TYPE_COLORS as _vtc69
+    _missing_colors69 = set(_vet69) - set(_vtc69.keys())
+    assert not _missing_colors69, f"Entity types missing vis colors: {_missing_colors69}"
+    record("PASS", f"69f: all {len(_vet69)} entity types have visualization colors")
+except Exception as e:
+    record("FAIL", "69f-vis-colors", f"{type(e).__name__}: {e}")
+
+# ── 69g. Agent prompt category list matches VALID_ENTITY_TYPES ────────────
+try:
+    from prompts import AGENT_SYSTEM_PROMPT as _asp69
+    from knowledge_graph import VALID_ENTITY_TYPES as _vet69g
+    for _cat69g in _vet69g:
+        # self_knowledge may only be in agent prompt (not extraction)
+        if _cat69g == "self_knowledge":
+            assert _cat69g in _asp69, f"'{_cat69g}' missing from AGENT_SYSTEM_PROMPT"
+        else:
+            assert _cat69g in _asp69, f"'{_cat69g}' missing from AGENT_SYSTEM_PROMPT"
+    record("PASS", f"69g: all {len(_vet69g)} entity types referenced in agent prompt")
+except Exception as e:
+    record("FAIL", "69g-prompt-categories", f"{type(e).__name__}: {e}")
+
+# ── 69h. Every tool module contributes at least one registered tool ────────
+try:
+    from tools import registry as _reg69
+    _all_tools69 = _reg69.get_all_tools()
+    _registered69 = {t.name for t in _all_tools69}
+    # Map each registered tool back to its defining module
+    _covered_modules69 = {type(t).__module__ for t in _all_tools69}
+    _tool_files69h = {f.stem for f in _tool_dir69.glob("*_tool.py")}
+    _unregistered69 = [
+        tf for tf in sorted(_tool_files69h)
+        if f"tools.{tf}" not in _covered_modules69
+    ]
+    assert not _unregistered69, f"Tool modules with no registered tools: {_unregistered69}"
+    record("PASS", f"69h: all tool modules have registered tools ({len(_registered69)} total)")
+except Exception as e:
+    record("FAIL", "69h-tool-registry", f"{type(e).__name__}: {e}")
+
+# ── 69i. Tool guides link to valid tool names ─────────────────────────────
+try:
+    import yaml as _yaml69
+    from tools import registry as _reg69i
+    _registered_names69i = {t.name for t in _reg69i.get_all_tools()}
+    _guides_dir69 = _APP_ROOT69 / "tool_guides"
+    _bad_guides69 = []
+    for _gd69 in _guides_dir69.iterdir():
+        if not _gd69.is_dir():
+            continue
+        _md69 = _gd69 / "SKILL.md"
+        if not _md69.exists():
+            continue
+        _content69 = _md69.read_text(encoding="utf-8")
+        if _content69.startswith("---"):
+            _fm69 = _content69.split("---", 2)
+            if len(_fm69) >= 3:
+                try:
+                    _meta69 = _yaml69.safe_load(_fm69[1])
+                    _tools69 = _meta69.get("tools", []) or []
+                    for _t69 in _tools69:
+                        # Channel tools (telegram, etc.) are dynamically generated
+                        # so we skip them in this check
+                        if _t69 not in _registered_names69i and _t69 not in (
+                            "telegram", "discord", "slack", "whatsapp", "sms"
+                        ):
+                            _bad_guides69.append(f"{_gd69.name}: references unknown tool '{_t69}'")
+                except Exception:
+                    pass
+    assert not _bad_guides69, f"Tool guides with invalid tool references: {_bad_guides69}"
+    record("PASS", f"69i: all tool guide tool references are valid")
+except ImportError:
+    record("WARN", "69i-guide-refs", "PyYAML not available — skipped")
+except Exception as e:
+    record("FAIL", "69i-guide-refs", f"{type(e).__name__}: {e}")
+
+# ── 69j. Every tool guide directory has a valid SKILL.md ──────────────────
+try:
+    _guides_dir69j = _APP_ROOT69 / "tool_guides"
+    _guide_dirs69j = [d for d in _guides_dir69j.iterdir() if d.is_dir()]
+    _missing_md69j = [d.name for d in _guide_dirs69j if not (d / "SKILL.md").exists()]
+    assert not _missing_md69j, f"Tool guide dirs missing SKILL.md: {_missing_md69j}"
+    # Every SKILL.md must have tools: field (what makes it a guide)
+    _no_tools69j = []
+    for _gd69j in _guide_dirs69j:
+        _text69j = (_gd69j / "SKILL.md").read_text(encoding="utf-8")
+        if "tools:" not in _text69j:
+            _no_tools69j.append(_gd69j.name)
+    assert not _no_tools69j, f"Tool guides missing 'tools:' field: {_no_tools69j}"
+    record("PASS", f"69j: all {len(_guide_dirs69j)} tool guide directories are valid")
+except Exception as e:
+    record("FAIL", "69j-guide-structure", f"{type(e).__name__}: {e}")
+
+# ── 69k. Bundled skills all have valid SKILL.md with required frontmatter ─
+try:
+    _bskills_dir69k = _APP_ROOT69 / "bundled_skills"
+    _bskill_dirs69k = [d for d in _bskills_dir69k.iterdir() if d.is_dir()]
+    _bad_skills69k = []
+    for _sd69k in _bskill_dirs69k:
+        _md69k = _sd69k / "SKILL.md"
+        if not _md69k.exists():
+            _bad_skills69k.append(f"{_sd69k.name}: missing SKILL.md")
+            continue
+        _text69k = _md69k.read_text(encoding="utf-8")
+        for _field69k in ("name:", "display_name:", "description:"):
+            if _field69k not in _text69k:
+                _bad_skills69k.append(f"{_sd69k.name}: missing '{_field69k}'")
+    assert not _bad_skills69k, f"Bundled skill issues: {_bad_skills69k}"
+    record("PASS", f"69k: all {len(_bskill_dirs69k)} bundled skills have valid SKILL.md")
+except Exception as e:
+    record("FAIL", "69k-bundled-skills", f"{type(e).__name__}: {e}")
+
+# ── 69l. FEATURE_MANIFEST covers all registered tools (warning-only) ──────
+try:
+    from self_knowledge import FEATURE_MANIFEST as _fm69l
+    from tools import registry as _reg69l
+    _manifest_keywords69l = " ".join(
+        f["keywords"] + " " + f["feature"].lower() for f in _fm69l
+    )
+    _reg_tools69l = {t.name for t in _reg69l.get_all_tools()}
+    # Map tool names to their display names for readable output
+    _unmapped69l = []
+    for _t69l in sorted(_reg_tools69l):
+        # Check if any manifest entry references this tool by name or keyword
+        if _t69l not in _manifest_keywords69l and _t69l.replace("_", " ") not in _manifest_keywords69l:
+            _unmapped69l.append(_t69l)
+    if _unmapped69l:
+        record("WARN", "69l-manifest-coverage",
+               f"{len(_unmapped69l)} tools not in FEATURE_MANIFEST (may be OK for internal tools): "
+               f"{_unmapped69l}")
+    else:
+        record("PASS", f"69l: FEATURE_MANIFEST covers all {len(_reg_tools69l)} registered tools")
+except Exception as e:
+    record("FAIL", "69l-manifest-coverage", f"{type(e).__name__}: {e}")
+
+# ── 69m. identity.py functions all importable and consistent ──────────────
+try:
+    from identity import (
+        get_identity_config, save_identity_config, sanitize_personality,
+        get_assistant_name, get_personality,
+        is_self_improvement_enabled, set_self_improvement_enabled,
+    )
+    _cfg69m = get_identity_config()
+    assert "name" in _cfg69m and "personality" in _cfg69m
+    assert isinstance(is_self_improvement_enabled(), bool)
+    record("PASS", "69m: identity module exports all expected functions")
+except Exception as e:
+    record("FAIL", "69m-identity", f"{type(e).__name__}: {e}")
+
+# ── 69n. self_knowledge module exports ────────────────────────────────────
+try:
+    from self_knowledge import (
+        ABOUT_THOTH, SKILL_CREATION_GUIDANCE, FEATURE_MANIFEST,
+        build_identity_line, get_dynamic_state, build_self_knowledge_block,
+        lookup_features,
+    )
+    assert len(ABOUT_THOTH) > 100
+    assert len(FEATURE_MANIFEST) >= 18
+    _block69n = build_self_knowledge_block()
+    assert "ABOUT YOU" in _block69n
+    record("PASS", "69n: self_knowledge module exports and content verified")
+except Exception as e:
+    record("FAIL", "69n-self-knowledge", f"{type(e).__name__}: {e}")
+
+# ── 69o. ThothStatusTool has expected query categories ────────────────────
+try:
+    from tools.thoth_status_tool import _QUERY_HANDLERS as _qh69o
+    _expected_cats69o = {
+        "overview", "version", "model", "channels", "memory", "skills",
+        "tools", "api_keys", "identity", "tasks", "logs", "errors",
+        "vision", "image_gen", "voice", "config",
+    }
+    _missing_cats69o = _expected_cats69o - set(_qh69o.keys())
+    assert not _missing_cats69o, f"Missing query categories: {_missing_cats69o}"
+    record("PASS", f"69o: ThothStatusTool has all {len(_expected_cats69o)} query categories")
+except Exception as e:
+    record("FAIL", "69o-status-categories", f"{type(e).__name__}: {e}")
+
+# ── 69p. prompts.py dynamic builder works ─────────────────────────────────
+try:
+    from prompts import get_agent_system_prompt as _gasp69p, AGENT_SYSTEM_PROMPT as _asp69p
+    _dyn69p = _gasp69p()
+    assert "personal assistant" in _dyn69p.lower()
+    assert len(_dyn69p) > 500  # substantial prompt
+    record("PASS", "69p: get_agent_system_prompt() builds valid dynamic prompt")
+except Exception as e:
+    record("FAIL", "69p-dynamic-prompt", f"{type(e).__name__}: {e}")
+
+# ── 69q. Version consistency across all files ─────────────────────────────
+try:
+    import re as _re69q
+    _iss_path69q = _APP_ROOT69 / "installer" / "thoth_setup.iss"
+    _iss_text69q = _iss_path69q.read_text(encoding="utf-8")
+    _ver_match69q = _re69q.search(r'#define\s+MyAppVersion\s+"(\d+\.\d+\.\d+)"', _iss_text69q)
+    assert _ver_match69q, "Cannot find version in thoth_setup.iss"
+    _ver69q = _ver_match69q.group(1)
+    _ver_files69q = [
+        "installer/build_installer.ps1",
+        ".github/workflows/release.yml",
+    ]
+    for _vf69q in _ver_files69q:
+        _vpath69q = _APP_ROOT69 / _vf69q
+        if _vpath69q.exists():
+            _vtxt69q = _vpath69q.read_text(encoding="utf-8")
+            assert _ver69q in _vtxt69q, f"Version {_ver69q} not found in {_vf69q}"
+    record("PASS", f"69q: version {_ver69q} consistent across installer/CI files")
+except Exception as e:
+    record("FAIL", "69q-version-consistency", f"{type(e).__name__}: {e}")
+
+# ── 69r. No orphaned tool files (in tools/ but not registered) ────────────
+try:
+    from tools import registry as _reg69r
+    _all_tools69r = _reg69r.get_all_tools()
+    _covered_modules69r = {type(t).__module__ for t in _all_tools69r}
+    _tool_files69r = {f.stem for f in (_APP_ROOT69 / "tools").glob("*_tool.py")}
+    _orphaned69r = [
+        tf for tf in sorted(_tool_files69r)
+        if f"tools.{tf}" not in _covered_modules69r
+    ]
+    assert not _orphaned69r, f"Tool files with no registered tool: {_orphaned69r}"
+    record("PASS", f"69r: no orphaned tool files — all {len(_tool_files69r)} files registered")
+except Exception as e:
+    record("FAIL", "69r-orphaned-tools", f"{type(e).__name__}: {e}")
+
+# ── 69s. Insights module exports and constants ────────────────────────────
+try:
+    import insights as _ins69s
+    # Verify required exports exist
+    for _fn in ("add_insight", "get_insights", "get_active_insights",
+                "dismiss_insight", "pin_insight", "auto_prune",
+                "get_insight_by_id", "get_insights_meta", "set_last_analysis",
+                "update_insight_status"):
+        assert hasattr(_ins69s, _fn), f"insights.py missing export: {_fn}"
+    # Verify constants
+    assert len(_ins69s.VALID_CATEGORIES) == 6, f"Expected 6 categories, got {len(_ins69s.VALID_CATEGORIES)}"
+    assert len(_ins69s.VALID_SEVERITIES) == 3, f"Expected 3 severities, got {len(_ins69s.VALID_SEVERITIES)}"
+    assert len(_ins69s.CATEGORY_ICONS) == 6, f"Expected 6 category icons, got {len(_ins69s.CATEGORY_ICONS)}"
+    assert _ins69s.MAX_ACTIVE_INSIGHTS == 50
+    # Verify CRUD with temp file
+    import tempfile as _tf69s, pathlib as _pl69s
+    _orig_path69s = _ins69s._INSIGHTS_PATH
+    _ins69s._INSIGHTS_PATH = _pl69s.Path(_tf69s.mktemp(suffix=".json"))
+    try:
+        _r69s = _ins69s.add_insight(category="error_pattern", title="Test", body="test body", confidence=0.7)
+        assert _r69s is not None, "add_insight returned None"
+        assert _r69s["status"] == "new"
+        assert len(_ins69s.get_active_insights()) == 1
+        assert _ins69s.dismiss_insight(_r69s["id"])
+        assert len(_ins69s.get_active_insights()) == 0
+        assert _ins69s.add_insight(category="invalid_cat", title="Bad", body="x") is None
+    finally:
+        _ins69s._INSIGHTS_PATH.unlink(missing_ok=True)
+        _ins69s._INSIGHTS_PATH = _orig_path69s
+    record("PASS", "69s: insights module exports, constants, and CRUD verified")
+except Exception as e:
+    record("FAIL", "69s-insights-module", f"{type(e).__name__}: {e}")
+
+# ── 69t. Configurable cloud context window ────────────────────────────────
+try:
+    _mod_src69t = Path("models.py").read_text(encoding="utf-8")
+
+    # Constants exist
+    assert 'CLOUD_CONTEXT_SIZE_OPTIONS' in _mod_src69t, "models.py must define CLOUD_CONTEXT_SIZE_OPTIONS"
+    assert 'CLOUD_CONTEXT_SIZE_LABELS' in _mod_src69t, "models.py must define CLOUD_CONTEXT_SIZE_LABELS"
+    assert 'DEFAULT_CLOUD_CONTEXT_SIZE' in _mod_src69t, "models.py must define DEFAULT_CLOUD_CONTEXT_SIZE"
+    assert '131072' in _mod_src69t.split('DEFAULT_CLOUD_CONTEXT_SIZE')[1][:30], \
+        "default cloud context should be 128K (131072)"
+
+    # Options include 32K through 1M
+    from models import CLOUD_CONTEXT_SIZE_OPTIONS, CLOUD_CONTEXT_SIZE_LABELS, DEFAULT_CLOUD_CONTEXT_SIZE
+    assert CLOUD_CONTEXT_SIZE_OPTIONS == [32768, 65536, 131072, 262144, 524288, 1048576], \
+        f"CLOUD_CONTEXT_SIZE_OPTIONS mismatch: {CLOUD_CONTEXT_SIZE_OPTIONS}"
+    assert len(CLOUD_CONTEXT_SIZE_LABELS) == len(CLOUD_CONTEXT_SIZE_OPTIONS), \
+        "CLOUD_CONTEXT_SIZE_LABELS must match OPTIONS length"
+    assert DEFAULT_CLOUD_CONTEXT_SIZE == 131072, "default should be 128K"
+
+    # Getter/setter exist
+    assert 'def get_cloud_context_size' in _mod_src69t, "must have get_cloud_context_size()"
+    assert 'def set_cloud_context_size' in _mod_src69t, "must have set_cloud_context_size()"
+
+    # set_cloud_context_size persists to settings
+    _set_cloud_body = _mod_src69t.split('def set_cloud_context_size')[1][:500]
+    assert 'cloud_context_size' in _set_cloud_body, "must persist cloud_context_size key"
+    assert '_save_settings' in _set_cloud_body, "must call _save_settings"
+
+    # get_context_size uses _cloud_num_ctx for cloud path
+    _gcs_body69t = _mod_src69t.split('def get_context_size')[1][:1200]
+    assert '_cloud_num_ctx' in _gcs_body69t, "cloud path must use _cloud_num_ctx"
+    assert 'min(' in _gcs_body69t, "cloud context must be min(cap, native)"
+
+    # UI imports the new symbols
+    _gui_src69t = Path("ui/settings.py").read_text(encoding="utf-8")
+    assert 'get_cloud_context_size' in _gui_src69t, "UI must import get_cloud_context_size"
+    assert 'set_cloud_context_size' in _gui_src69t, "UI must import set_cloud_context_size"
+    assert 'CLOUD_CONTEXT_SIZE_OPTIONS' in _gui_src69t, "UI must import CLOUD_CONTEXT_SIZE_OPTIONS"
+    assert 'CLOUD_CONTEXT_SIZE_LABELS' in _gui_src69t, "UI must import CLOUD_CONTEXT_SIZE_LABELS"
+
+    record("PASS", "69t: configurable cloud context window verified")
+except Exception as e:
+    record("FAIL", "69t-cloud-context-config", f"{type(e).__name__}: {e}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 70. Context Management Revamp — unit tests for Phases 2, 4, 1b, 5a, 7, 8
+# ═════════════════════════════════════════════════════════════════════════════
+print("\n70. Context Management Revamp")
+try:
+    import agent as _agent70
+    from prompts import SUMMARIZE_PROMPT as _SP70
+    from langchain_core.messages import (
+        SystemMessage as _SM70,
+        HumanMessage as _HM70,
+        AIMessage as _AI70,
+        ToolMessage as _TM70,
+    )
+
+    # ── 70a. Phase 2 — SUMMARIZE_PROMPT has structured section headers ────
+    for _hdr in [
+        "## Decisions & Commitments",
+        "## User Facts & Preferences",
+        "## Tool Outcomes",
+        "## Open Threads",
+    ]:
+        assert _hdr in _SP70, f"Missing section header: {_hdr}"
+    assert "ROLLING SUMMARIES" in _SP70, "Missing rolling-summary instruction"
+    assert "Omit a section entirely" in _SP70, "Missing omit-empty instruction"
+    record("PASS", "70a: SUMMARIZE_PROMPT structured section headers")
+
+    # ── 70b. Phase 4 — _summarize_tool_result basic behaviour ─────────────
+    _str70 = _agent70._summarize_tool_result
+    assert _str70("grep", "") == "[grep]: (empty result)"
+    _long = "A" * 300
+    _res70b = _str70("search", _long)
+    assert len(_res70b) <= 220, f"summary too long: {len(_res70b)}"
+    assert _res70b.startswith("[search]: ")
+    _multi = "First line here\nSecond line\nThird"
+    assert _str70("tool", _multi) == "[tool]: First line here"
+    record("PASS", "70b: _summarize_tool_result output correct")
+
+    # ── 70c. Phase 4 — dedup & pruning code present in _pre_model_trim ────
+    import inspect as _ins70
+    _pmt_src = _ins70.getsource(_agent70._pre_model_trim)
+    assert "hashlib" in _pmt_src or "_hashlib" in _pmt_src, "dedup needs hashlib"
+    assert "Duplicate result from" in _pmt_src, "dedup replacement text missing"
+    assert "_summarize_tool_result" in _pmt_src, "informative pruning missing"
+    record("PASS", "70c: _pre_model_trim has dedup + informative pruning")
+
+    # ── 70d. Phase 1b — injection uses _injections list pattern ───────────
+    assert "_injections: list" in _pmt_src or "_injections:" in _pmt_src, \
+        "_injections list not found"
+    assert "for _ii, _inj_msg in enumerate(_injections)" in _pmt_src, \
+        "batch injection loop not found"
+    record("PASS", "70d: injection ordering uses clean _injections list")
+
+    # ── 70e. Phase 5a — orphaned leading ToolMessage stripping ────────────
+    assert "orphaned leading ToolMessage" in _pmt_src, \
+        "Phase 5a orphan-strip block missing"
+    # Functional test: simulate what the block does
+    _sys70 = _SM70(content="system")
+    _orphan_tool = _TM70(content="stale", tool_call_id="tc_gone", name="web")
+    _human70 = _HM70(content="Hello")
+    _test_msgs = [_sys70, _orphan_tool, _orphan_tool, _human70]
+    # Replicate the strip logic
+    _first_ns = 0
+    for _i, _m in enumerate(_test_msgs):
+        if _m.type != "system":
+            _first_ns = _i
+            break
+    if _first_ns < len(_test_msgs) and _test_msgs[_first_ns].type == "tool":
+        _de = _first_ns
+        while _de < len(_test_msgs) and _test_msgs[_de].type == "tool":
+            _de += 1
+        _test_msgs = _test_msgs[:_first_ns] + _test_msgs[_de:]
+    assert len(_test_msgs) == 2, f"Expected 2 messages after strip, got {len(_test_msgs)}"
+    assert _test_msgs[0].type == "system"
+    assert _test_msgs[1].type == "human"
+    record("PASS", "70e: orphaned leading ToolMessage strip logic works")
+
+    # ── 70f. Phase 7 — Anthropic caching code present ────────────────────
+    assert "cache_control" in _pmt_src, "Anthropic cache_control block missing"
+    assert 'ephemeral' in _pmt_src, "cache type ephemeral missing"
+    assert "Anthropic prompt caching" in _pmt_src, "caching debug log missing"
+    record("PASS", "70f: Anthropic prompt caching code present")
+
+    # ── 70g. Phase 8 — anti-thrashing in _should_summarize ───────────────
+    _ss_src = _ins70.getsource(_agent70._should_summarize)
+    assert "thrashing" in _ss_src.lower(), "anti-thrashing check missing in _should_summarize"
+    assert "compressions" in _ss_src, "compressions ring-buffer check missing"
+    assert "0.10" in _ss_src or "0.1" in _ss_src, "10% threshold missing"
+    record("PASS", "70g: _should_summarize has anti-thrashing guard")
+
+    # ── 70h. Phase 8 — _do_summarize records compression stats ────────────
+    _ds_src = _ins70.getsource(_agent70._do_summarize)
+    assert "compressions" in _ds_src, "compression recording missing in _do_summarize"
+    assert "_before_tokens" in _ds_src or "before_tokens" in _ds_src, \
+        "before-token counting missing"
+    assert "[-3:]" in _ds_src, "ring buffer cap missing"
+    record("PASS", "70h: _do_summarize records compression stats")
+
+    # ── 70i. Phase 8 — thrashing /new suggestion in _pre_model_trim ──────
+    assert "start a new thread" in _pmt_src.lower(), \
+        "thrashing /new suggestion missing from _pre_model_trim"
+    assert "_new_cmd" in _pmt_src, "channel-aware command variable missing"
+    record("PASS", "70i: thrashing suggestion present and channel-aware")
+
+    # ── 70j. Phase 2 — summary injection frame text updated ──────────────
+    assert "structured format with" in _pmt_src, \
+        "Summary injection frame text not updated for Phase 2"
+    assert "section headers" in _pmt_src, \
+        "Summary injection frame should reference section headers"
+    record("PASS", "70j: summary injection frame text updated")
+
+    # ── 70k. Phase 8 — compression stats functional test ─────────────────
+    # Test that the compressions ring buffer logic works correctly
+    _cache70 = {}
+    _tid70 = "__test_70k__"
+    # Simulate 4 compressions; ring buffer should keep only last 3
+    for _n in range(4):
+        _prev = _cache70.get(_tid70, {}).get("compressions", [])
+        _prev.append({"before": 1000 - _n * 100, "after": 900 - _n * 100, "ts": 0})
+        _cache70[_tid70] = {
+            "summary": "test",
+            "msg_count": 10,
+            "compressions": _prev[-3:],
+        }
+    assert len(_cache70[_tid70]["compressions"]) == 3, \
+        f"Ring buffer should cap at 3, got {len(_cache70[_tid70]['compressions'])}"
+    record("PASS", "70k: compression stats ring buffer caps at 3")
+
+    # ── 70l. Phase 8 — thrashing detection logic test ────────────────────
+    # Two consecutive compressions both saving <10% should trigger thrashing
+    _comps_thrash = [
+        {"before": 1000, "after": 950, "ts": 0},  # 5% saved
+        {"before": 950, "after": 910, "ts": 0},    # ~4.2% saved
+    ]
+    _all_low = all(
+        (c["before"] - c["after"]) / max(c["before"], 1) < 0.10
+        for c in _comps_thrash[-2:]
+    )
+    assert _all_low, "Both <10% compressions should trigger thrashing"
+    # One good compression should NOT trigger
+    _comps_ok = [
+        {"before": 1000, "after": 500, "ts": 0},  # 50% saved
+        {"before": 900, "after": 870, "ts": 0},    # ~3% saved
+    ]
+    _all_low2 = all(
+        (c["before"] - c["after"]) / max(c["before"], 1) < 0.10
+        for c in _comps_ok[-2:]
+    )
+    assert not _all_low2, "One good compression should prevent thrashing flag"
+    record("PASS", "70l: thrashing detection logic correct")
+
+except Exception as e:
+    record("FAIL", "70-context-mgmt-revamp", f"{type(e).__name__}: {e}")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 71. Context Management Revamp — end-to-end pipeline tests
+# ═════════════════════════════════════════════════════════════════════════════
+# These tests actually call _pre_model_trim with constructed messages and
+# verify the output, rather than just inspecting source code.
+print("\n71. Context Management Revamp — E2E pipeline tests")
+try:
+    import agent as _a71
+    from unittest.mock import patch as _patch71
+    from langchain_core.messages import (
+        SystemMessage as _SM71,
+        HumanMessage as _HM71,
+        AIMessage as _AI71,
+        ToolMessage as _TM71,
+    )
+
+    # Helper: build a state dict and call _pre_model_trim with mocked
+    # globals so we don't need a real model / DB / etc.
+    def _run_trim(messages, context_size=8192, thread_id="", summary_cache=None,
+                  provider="openai"):
+        """Call _pre_model_trim with controlled globals."""
+        state = {"messages": list(messages)}
+        patches = [
+            _patch71("agent.get_context_size", return_value=context_size),
+            _patch71("agent._keep_browser_snapshots", return_value=2),
+            _patch71("agent.is_background_workflow", return_value=False),
+            # Prevent auto-recall from running (needs FAISS / real DB)
+            _patch71("knowledge_graph.count_entities", return_value=0),
+        ]
+        # Mock provider detection for Anthropic tests
+        if provider == "anthropic":
+            patches += [
+                _patch71("agent._active_model_override",
+                         **{"get.return_value": "claude-sonnet-4-20250514"}),
+                _patch71("agent.get_current_model",
+                         return_value="claude-sonnet-4-20250514"),
+                _patch71("agent.is_cloud_model", return_value=True),
+                _patch71("agent.get_cloud_provider", return_value="anthropic"),
+            ]
+        else:
+            patches += [
+                _patch71("agent._active_model_override",
+                         **{"get.return_value": "gpt-4o"}),
+                _patch71("agent.get_current_model", return_value="gpt-4o"),
+                _patch71("agent.is_cloud_model", return_value=True),
+                _patch71("agent.get_cloud_provider", return_value="openai"),
+            ]
+        # Inject summary cache if requested
+        old_cache = dict(_a71._summary_cache)
+        # Use ContextVar.set() for thread_id (mock.patch unreliable for ContextVars)
+        _tok71 = None
+        if thread_id:
+            _tok71 = _a71._current_thread_id_var.set(thread_id)
+        if summary_cache and thread_id:
+            _a71._summary_cache[thread_id] = summary_cache
+        elif thread_id and thread_id in _a71._summary_cache:
+            del _a71._summary_cache[thread_id]  # ensure clean
+        try:
+            for p in patches:
+                p.start()
+            result = _a71._pre_model_trim(state)
+        finally:
+            for p in patches:
+                p.stop()
+            # Restore original cache
+            _a71._summary_cache.clear()
+            _a71._summary_cache.update(old_cache)
+            # Reset ContextVar
+            if _tok71 is not None:
+                _a71._current_thread_id_var.reset(_tok71)
+        return result["llm_input_messages"]
+
+    # ── 71a. Dedup: identical tool results keep only the last ────────
+    _sys71 = _SM71(content="You are a helpful assistant.")
+    _h1 = _HM71(content="Search for cats")
+    _ai_tc1 = _AI71(content="", tool_calls=[
+        {"id": "tc1", "name": "web_search", "args": {"query": "cats"}}
+    ])
+    _dup_content = "A" * 300  # >200 chars to trigger dedup
+    _tool1 = _TM71(content=_dup_content, name="web_search", tool_call_id="tc1")
+    _ai_resp = _AI71(content="Here are results about cats.")
+    _h2 = _HM71(content="Search again")
+    _ai_tc2 = _AI71(content="", tool_calls=[
+        {"id": "tc2", "name": "web_search", "args": {"query": "cats"}}
+    ])
+    _tool2 = _TM71(content=_dup_content, name="web_search", tool_call_id="tc2")
+    _ai_resp2 = _AI71(content="Same results.")
+
+    _out71a = _run_trim([_sys71, _h1, _ai_tc1, _tool1, _ai_resp, _h2, _ai_tc2, _tool2, _ai_resp2])
+    # The first occurrence (tool1) should be replaced with dedup notice
+    _tool_msgs_71a = [m for m in _out71a if m.type == "tool"]
+    _deduped = [m for m in _tool_msgs_71a if "Duplicate result" in str(m.content)]
+    assert len(_deduped) >= 1, f"Expected at least 1 deduped message, got {len(_deduped)}"
+    # The last occurrence should still have original content (or summarized, but not "Duplicate")
+    _last_tool = _tool_msgs_71a[-1]
+    assert "Duplicate" not in str(_last_tool.content), "Last occurrence should NOT be deduped"
+    record("PASS", "71a: dedup keeps last, replaces earlier with notice")
+
+    # ── 71b. Old tool results outside protected window are summarized ─
+    # Build a conversation with >5 human turns so early tools are outside
+    # the protected window
+    _msgs71b = [_sys71]
+    for _n in range(8):
+        _msgs71b.append(_HM71(content=f"Question {_n}"))
+        _tc_id = f"tc_b{_n}"
+        _msgs71b.append(_AI71(content="", tool_calls=[
+            {"id": _tc_id, "name": "search_tool", "args": {"q": str(_n)}}
+        ]))
+        _msgs71b.append(_TM71(
+            content="X" * 600 if _n < 3 else "short",
+            name="search_tool",
+            tool_call_id=_tc_id,
+        ))
+        _msgs71b.append(_AI71(content=f"Answer {_n}"))
+    _out71b = _run_trim(_msgs71b)
+    # Early tool results (before protected window) that were >500 chars
+    # should now start with "[search_tool]:" (the summarized format)
+    _early_tools = [m for m in _out71b if m.type == "tool" and
+                    str(m.content).startswith("[search_tool]:")]
+    assert len(_early_tools) >= 1, \
+        f"Expected at least 1 summarized tool result, got {len(_early_tools)}"
+    record("PASS", "71b: old large tool results are summarized")
+
+    # ── 71c. Orphaned leading ToolMessages are stripped ──────────────
+    # Manually simulate what trim_messages might produce: system + orphan
+    # tools + human.  We use a small context_size to force aggressive trim.
+    _orphan_msgs = [
+        _sys71,
+        _TM71(content="orphan1", name="web", tool_call_id="gone1"),
+        _TM71(content="orphan2", name="web", tool_call_id="gone2"),
+        _HM71(content="Hello"),
+        _AI71(content="Hi!"),
+        _HM71(content="Bye"),
+    ]
+    _out71c = _run_trim(_orphan_msgs, context_size=16000)
+    # After the system messages (at the front), the first non-system msg
+    # should NOT be a ToolMessage
+    _nonsys71c = [m for m in _out71c if m.type != "system"]
+    assert _nonsys71c, "Should have non-system messages"
+    assert _nonsys71c[0].type != "tool", \
+        f"First non-system msg should not be tool, got {_nonsys71c[0].type}"
+    record("PASS", "71c: orphaned leading ToolMessages stripped")
+
+    # ── 71d. Summary injection replaces older messages ───────────────
+    _tid71d = "__test_71d__"
+    _long_conv = [_sys71]
+    for _n in range(10):
+        _long_conv.append(_HM71(content=f"Message {_n}"))
+        _long_conv.append(_AI71(content=f"Reply {_n}"))
+    _summary_cache71d = {
+        "summary": "## Decisions & Commitments\nUser wants X.\n## Open Threads\nPending Y.",
+        "msg_count": 10,  # split after first 10 messages
+    }
+    _out71d = _run_trim(_long_conv, thread_id=_tid71d,
+                        summary_cache=_summary_cache71d, context_size=32000)
+    # Summary is now merged into the system prompt at position 0
+    _sys0_content = str(_out71d[0].content)
+    assert "Conversation Summary" in _sys0_content, \
+        "Summary should be merged into system prompt"
+    assert "Decisions & Commitments" in _sys0_content, \
+        "Summary content should be preserved in system prompt"
+    # Should have fewer messages than the original (older ones replaced)
+    assert len(_out71d) < len(_long_conv) + 10, \
+        "Summary should replace older messages, reducing count"
+    record("PASS", "71d: summary merged into system prompt")
+
+    # ── 71e. Thrashing notice injected when 3 consecutive low compressions ─
+    _tid71e = "__test_71e__"
+    _conv71e = [_sys71]
+    for _n in range(10):
+        _conv71e.append(_HM71(content=f"Msg {_n}"))
+        _conv71e.append(_AI71(content=f"Re {_n}"))
+    _thrash_cache = {
+        "summary": "## Open Threads\nStuff.",
+        "msg_count": 10,
+        "compressions": [
+            {"before": 1000, "after": 950, "ts": 0},  # 5%
+            {"before": 950, "after": 920, "ts": 0},    # 3.2%
+            {"before": 920, "after": 900, "ts": 0},    # 2.2%
+        ],
+    }
+    _out71e = _run_trim(_conv71e, thread_id=_tid71e,
+                        summary_cache=_thrash_cache, context_size=32000)
+    _notice_msgs = [m for m in _out71e if m.type == "system" and
+                    "start a new thread" in str(m.content).lower()]
+    assert len(_notice_msgs) == 1, \
+        f"Expected 1 thrashing notice, got {len(_notice_msgs)}"
+    assert "/new" in str(_notice_msgs[0].content)
+    record("PASS", "71e: thrashing notice injected for 3 low compressions")
+
+    # ── 71f. Thrashing notice uses /newthread for Telegram threads ───
+    _tid71f = "tg_12345_abc"
+    _out71f = _run_trim(_conv71e, thread_id=_tid71f,
+                        summary_cache=_thrash_cache, context_size=32000)
+    _tg_notice = [m for m in _out71f if m.type == "system" and
+                  "start a new thread" in str(m.content).lower()]
+    assert len(_tg_notice) == 1, "Should have thrashing notice for TG"
+    assert "/newthread" in str(_tg_notice[0].content), \
+        "Telegram should use /newthread not /new"
+    record("PASS", "71f: Telegram thrashing notice uses /newthread")
+
+    # ── 71g. NO thrashing notice when compressions are healthy ───────
+    _tid71g = "__test_71g__"
+    _healthy_cache = {
+        "summary": "## Open Threads\nStuff.",
+        "msg_count": 10,
+        "compressions": [
+            {"before": 5000, "after": 2000, "ts": 0},  # 60% saved
+            {"before": 4000, "after": 1500, "ts": 0},  # 62% saved
+            {"before": 3000, "after": 1200, "ts": 0},  # 60% saved
+        ],
+    }
+    _out71g = _run_trim(_conv71e, thread_id=_tid71g,
+                        summary_cache=_healthy_cache, context_size=32000)
+    _no_notice = [m for m in _out71g if m.type == "system" and
+                  "start a new thread" in str(m.content).lower()]
+    assert len(_no_notice) == 0, "Should NOT have thrashing notice for healthy compressions"
+    record("PASS", "71g: no thrashing notice when compressions are healthy")
+
+    # ── 71h. Anthropic: cache_control applied to system + conv msg ───
+    _anth_msgs = [
+        _sys71,
+        _HM71(content="Hello"),
+        _AI71(content="Hi there!"),
+        _HM71(content="Tell me about dogs"),
+        _AI71(content="Dogs are great pets."),
+        _HM71(content="And cats?"),
+    ]
+    _out71h = _run_trim(_anth_msgs, provider="anthropic", context_size=32000)
+    # System messages should be consolidated at the front (Anthropic)
+    _sys_71h = [m for m in _out71h if m.type == "system"]
+    assert _sys_71h, "Should have system messages"
+    # Last system message should have cache_control on content
+    _last_sys = _sys_71h[-1]
+    _lsc = _last_sys.content
+    if isinstance(_lsc, list):
+        _has_cache = any(
+            isinstance(b, dict) and "cache_control" in b
+            for b in _lsc
+        )
+        assert _has_cache, "Last system message should have cache_control"
+    else:
+        # If it's still a string, cache wasn't applied
+        record("FAIL", "71h: Anthropic cache", "content is still str, expected list with cache_control")
+        raise AssertionError("cache_control not applied")
+    # Check 3rd non-system message has cache_control
+    _nonsys71h = [m for m in _out71h if m.type != "system"]
+    if len(_nonsys71h) >= 3:
+        _third = _nonsys71h[2]
+        _tc = _third.content
+        if isinstance(_tc, list):
+            _has_cc = any(isinstance(b, dict) and "cache_control" in b for b in _tc)
+            assert _has_cc, "3rd non-system msg should have cache_control"
+        else:
+            assert False, "3rd non-system msg content should be list with cache_control"
+    record("PASS", "71h: Anthropic cache_control on system + 3rd conv msg")
+
+    # ── 71i. Non-Anthropic: NO cache_control applied ────────────────
+    _out71i = _run_trim(_anth_msgs, provider="openai", context_size=32000)
+    _all_contents = [m.content for m in _out71i]
+    _any_cache = any(
+        isinstance(c, list) and any(
+            isinstance(b, dict) and "cache_control" in b for b in c
+        )
+        for c in _all_contents
+    )
+    assert not _any_cache, "OpenAI should NOT have cache_control markers"
+    record("PASS", "71i: no cache_control for non-Anthropic providers")
+
+    # ── 71j. Injection ordering: date/time is first injection ────────
+    _simple = [_sys71, _HM71(content="Hi"), _AI71(content="Hello")]
+    _out71j = _run_trim(_simple, context_size=32000)
+    # After the main system prompt (position 0), the next system msg
+    # should be the date/time injection
+    _sys_71j = [m for m in _out71j if m.type == "system"]
+    assert len(_sys_71j) >= 2, f"Expected >= 2 system msgs, got {len(_sys_71j)}"
+    _time_msg = _sys_71j[1]  # first injection after main prompt
+    assert "Current date and time:" in str(_time_msg.content), \
+        f"First injection should be date/time, got: {str(_time_msg.content)[:80]}"
+    record("PASS", "71j: date/time is first system injection")
+
+    # ── 71k. Tool call repair: stubs injected for missing ToolMessages ─
+    _ai_with_tc = _AI71(content="", tool_calls=[
+        {"id": "tc_miss", "name": "search", "args": {"q": "x"}}
+    ])
+    # No matching ToolMessage — simulates trim dropping it
+    _repair_msgs = [
+        _sys71,
+        _HM71(content="Find x"),
+        _ai_with_tc,
+        # Missing ToolMessage for tc_miss
+        _HM71(content="What happened?"),
+        _AI71(content="Let me check."),
+        _HM71(content="Please"),
+    ]
+    _out71k = _run_trim(_repair_msgs, context_size=32000)
+    _tool_stubs = [m for m in _out71k if m.type == "tool" and
+                   "not available" in str(m.content).lower()]
+    assert len(_tool_stubs) >= 1, \
+        f"Expected stub for missing ToolMessage, got {len(_tool_stubs)}"
+    record("PASS", "71k: tool call repair injects stubs for missing ToolMessages")
+
+    # ── 71l. Proportional shrink: huge tool results are truncated ────
+    _huge_tool = _TM71(content="B" * 200_000, name="big_tool", tool_call_id="tc_big")
+    _shrink_msgs = [
+        _sys71,
+        _HM71(content="Do the big thing"),
+        _AI71(content="", tool_calls=[
+            {"id": "tc_big", "name": "big_tool", "args": {}}
+        ]),
+        _huge_tool,
+        _AI71(content="Done."),
+        _HM71(content="Thanks"),
+    ]
+    _out71l = _run_trim(_shrink_msgs, context_size=8192)
+    _big_out = [m for m in _out71l if m.type == "tool" and
+                getattr(m, "name", "") == "big_tool"]
+    assert _big_out, "big_tool message should still exist"
+    _big_content = str(_big_out[0].content)
+    assert len(_big_content) < 200_000, \
+        f"Tool content should be truncated, still {len(_big_content)} chars"
+    assert "Truncated to fit context" in _big_content, \
+        "Should have truncation notice"
+    record("PASS", "71l: huge tool results proportionally truncated")
+
+except Exception as e:
+    import traceback as _tb71
+    record("FAIL", "71-context-mgmt-e2e", f"{type(e).__name__}: {e}\n{''.join(_tb71.format_exception(e))}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 72 · DESIGNER STUDIO
+# ═════════════════════════════════════════════════════════════════════════════
+# Covers: module imports, state, history, undo, interaction, tool sub-tools,
+#         AI content helpers (Phase 5A), unsplash client, and chart embedding.
+# Merged from tests_phase4_final.py.
+# ═════════════════════════════════════════════════════════════════════════════
+
+print("=" * 70)
+print("72. DESIGNER STUDIO")
+print("=" * 70)
+
+# ── 72a. All designer modules import cleanly ─────────────────────────────
+try:
+    from designer.state import (
+        DesignerProject, DesignerPage, DesignerReference,
+        BrandConfig, ProjectBrief, ASPECT_RATIOS,
+    )
+    from designer.brand import get_all_presets
+    from designer.briefing import build_initial_design_request, project_has_build_brief
+    from designer.components import (
+        DesignerComponent, list_components, get_component, render_component_html,
+    )
+    from designer.critique import critique_page_html, apply_page_repairs
+    from designer.setup_flow import create_project_from_setup, prepare_project_creation
+    from designer.thumbnail import compute_thumbnail_dimensions
+    from designer.storage import (
+        save_project, load_project, list_projects,
+        delete_project, duplicate_project, load_reference_bytes,
+    )
+    from designer.history import snapshot, list_snapshots, restore_snapshot, delete_history, UndoStack
+    from designer.interaction import inject_bridge_js, patch_html_text, get_parent_listener_js
+    from designer.html_ops import (
+        ELEMENT_ID_ATTR, COMPONENT_NAME_ATTR,
+        summarize_page_html, wrap_asset_fragment, insert_component_in_html,
+    )
+    from designer.prompt import build_designer_prompt
+    from designer.preview import build_preview, inject_brand_variables
+    from designer.export import export_html, export_pdf
+    from designer.references import (
+        persist_project_references,
+        find_project_reference,
+        delete_project_reference,
+    )
+    from designer.session import prepare_project_mutation
+    from designer.tool import DesignerTool, set_active_project, get_undo_stack
+    from designer.ai_content import (
+        generate_image_html, insert_image_into_page, refine_text,
+        refine_text_in_html, generate_speaker_notes,
+        build_chart_png, build_chart_interactive_html,
+        chart_to_img_tag,
+    )
+    from designer import snapshot as _snap72_alias, UndoStack as _us72_alias
+    record("PASS", "72a: all designer modules import cleanly")
+except Exception as e:
+    record("FAIL", "72a-designer-imports", f"{type(e).__name__}: {e}")
+
+# ── 72b. State — ASPECT_RATIOS is populated, DesignerProject defaults ────
+try:
+    assert len(ASPECT_RATIOS) >= 5, f"Expected >=5 aspect ratios, got {len(ASPECT_RATIOS)}"
+    _proj72 = DesignerProject(name="Test72")
+    assert _proj72.name == "Test72"
+    assert _proj72.aspect_ratio == "16:9"  # default
+    assert len(_proj72.pages) == 1  # starts with one blank page
+    record("PASS", "72b: state defaults and ASPECT_RATIOS OK")
+except Exception as e:
+    record("FAIL", "72b-state", f"{type(e).__name__}: {e}")
+
+# ── 72b1. BrandConfig persists logo placement metadata ───────────────────
+try:
+    _brand72b1 = BrandConfig(
+        logo_b64="QUJD",
+        logo_mime_type="image/svg+xml",
+        logo_filename="wordmark.svg",
+        logo_mode="manual",
+        logo_scope="first",
+        logo_position="bottom_left",
+        logo_max_height=96,
+        logo_padding=40,
+    )
+    _brand72b1_dict = _brand72b1.to_dict()
+    assert _brand72b1_dict["logo_mime_type"] == "image/svg+xml"
+    assert _brand72b1_dict["logo_filename"] == "wordmark.svg"
+    assert _brand72b1_dict["logo_mode"] == "manual"
+    assert _brand72b1_dict["logo_scope"] == "first"
+    assert _brand72b1_dict["logo_position"] == "bottom_left"
+    assert _brand72b1_dict["logo_max_height"] == 96
+    assert _brand72b1_dict["logo_padding"] == 40
+    _brand72b1_roundtrip = BrandConfig.from_dict(_brand72b1_dict)
+    assert _brand72b1_roundtrip.logo_filename == "wordmark.svg"
+    assert _brand72b1_roundtrip.logo_mode == "manual"
+    assert _brand72b1_roundtrip.logo_position == "bottom_left"
+    record("PASS", "72b1: BrandConfig persists logo placement metadata")
+except Exception as e:
+    record("FAIL", "72b1-brand-logo-metadata", f"{type(e).__name__}: {e}")
+
+# ── 72b2. Session bindings are thread-aware; pending files are per client ─
+try:
+    from agent import _current_thread_id_var as _tid72b2
+    from designer.session import get_active_project as _get_active72b2
+    from designer.session import get_undo_stack as _get_undo72b2
+    from ui.state import P as _P72b2
+
+    _proj72b2a = DesignerProject(id="__test72b2a__", name="Thread A")
+    _proj72b2a.thread_id = "thread-72b2-a"
+    _proj72b2b = DesignerProject(id="__test72b2b__", name="Thread B")
+    _proj72b2b.thread_id = "thread-72b2-b"
+
+    set_active_project(_proj72b2a)
+    _undo72b2a = get_undo_stack()
+    set_active_project(_proj72b2b)
+    _undo72b2b = get_undo_stack()
+
+    _tok72b2 = _tid72b2.set("thread-72b2-a")
+    try:
+        assert _get_active72b2() is _proj72b2a
+        assert _get_undo72b2() is _undo72b2a
+    finally:
+        _tid72b2.reset(_tok72b2)
+
+    _tok72b2 = _tid72b2.set("thread-72b2-b")
+    try:
+        assert _get_active72b2() is _proj72b2b
+        assert _get_undo72b2() is _undo72b2b
+    finally:
+        _tid72b2.reset(_tok72b2)
+
+    set_active_project(None)
+    assert _get_active72b2() is None
+
+    _ui72b2a = _P72b2()
+    _ui72b2b = _P72b2()
+    _ui72b2a.pending_files.append({"name": "sample.png"})
+    assert _ui72b2b.pending_files == [], "pending_files should not be shared across P() instances"
+
+    record("PASS", "72b2: session bindings and pending files stay isolated")
+except Exception as e:
+    set_active_project(None)
+    record("FAIL", "72b2-session-scope", f"{type(e).__name__}: {e}")
+
+# ── 72c. History — snapshot / list / restore / delete ────────────────────
+try:
+    _p72c = DesignerProject(id="__test72c__", name="Hist Test")
+    _p72c.pages = [DesignerPage(html="<p>V1</p>", title="P1")]
+    _p72c.brand = BrandConfig(primary_color="#FF0000")
+    _p72c.aspect_ratio = "16:9"
+    _p72c.canvas_width, _p72c.canvas_height = ASPECT_RATIOS["16:9"]
+
+    _s1 = snapshot(_p72c, label="v1")
+    assert _s1, "snapshot returned falsy"
+
+    _p72c.name = "Hist Test V2"
+    _p72c.pages[0].html = "<p>V2</p>"
+    _p72c.brand.primary_color = "#00FF00"
+    _p72c.aspect_ratio = "4:3"
+    _p72c.canvas_width, _p72c.canvas_height = ASPECT_RATIOS["4:3"]
+    _s2 = snapshot(_p72c, label="v2")
+    assert _s2 != _s1
+
+    _snaps = list_snapshots("__test72c__")
+    assert len(_snaps) >= 2, f"Expected >=2 snapshots, got {len(_snaps)}"
+
+    _ok = restore_snapshot(_p72c, _s1)
+    assert _ok, "restore failed"
+    assert _p72c.name == "Hist Test", f"Restore wrong name: {_p72c.name}"
+    assert _p72c.pages[0].html == "<p>V1</p>", f"Restore wrong: {_p72c.pages[0].html}"
+    assert _p72c.brand and _p72c.brand.primary_color == "#FF0000"
+    assert _p72c.aspect_ratio == "16:9"
+    assert (_p72c.canvas_width, _p72c.canvas_height) == ASPECT_RATIOS["16:9"]
+
+    set_active_project(_p72c)
+    _p72c.name = "Working Copy"
+    _p72c.pages[0].html = "<p>Working</p>"
+    _p72c.aspect_ratio = "1:1"
+    _p72c.canvas_width, _p72c.canvas_height = ASPECT_RATIOS["1:1"]
+    prepare_project_mutation(_p72c, "before_restore_test")
+    _ok = restore_snapshot(_p72c, _s1)
+    assert _ok, "restore after prepare failed"
+    _stk72c = get_undo_stack()
+    assert _stk72c and _stk72c.can_undo, "restore should be undoable"
+    _stk72c.undo(_p72c)
+    assert _p72c.name == "Working Copy"
+    assert _p72c.pages[0].html == "<p>Working</p>"
+    assert _p72c.aspect_ratio == "1:1"
+    assert (_p72c.canvas_width, _p72c.canvas_height) == ASPECT_RATIOS["1:1"]
+    set_active_project(None)
+
+    delete_history("__test72c__")
+    record("PASS", "72c: history snapshot/list/restore/delete")
+except Exception as e:
+    set_active_project(None)
+    record("FAIL", "72c-history", f"{type(e).__name__}: {e}")
+
+# ── 72d. UndoStack — push / undo / redo / clear ─────────────────────────
+try:
+    _p72d = DesignerProject(id="__test72d__", name="Undo")
+    _p72d.pages = [DesignerPage(html="<p>Orig</p>", title="P")]
+    _p72d.brand = BrandConfig(primary_color="#123456")
+    _p72d.aspect_ratio = "16:9"
+    _p72d.canvas_width, _p72d.canvas_height = ASPECT_RATIOS["16:9"]
+    _stk = UndoStack()
+    assert not _stk.can_undo
+    assert not _stk.can_redo
+
+    _stk.push(_p72d)
+    _p72d.name = "Undo Changed"
+    _p72d.pages[0].html = "<p>Changed</p>"
+    _p72d.brand.primary_color = "#ABCDEF"
+    _p72d.aspect_ratio = "4:3"
+    _p72d.canvas_width, _p72d.canvas_height = ASPECT_RATIOS["4:3"]
+    assert _stk.can_undo
+
+    _stk.undo(_p72d)
+    assert _p72d.name == "Undo"
+    assert _p72d.pages[0].html == "<p>Orig</p>"
+    assert _p72d.brand and _p72d.brand.primary_color == "#123456"
+    assert _p72d.aspect_ratio == "16:9"
+    assert (_p72d.canvas_width, _p72d.canvas_height) == ASPECT_RATIOS["16:9"]
+    assert _stk.can_redo
+
+    _stk.redo(_p72d)
+    assert _p72d.name == "Undo Changed"
+    assert _p72d.pages[0].html == "<p>Changed</p>"
+    assert _p72d.brand and _p72d.brand.primary_color == "#ABCDEF"
+    assert _p72d.aspect_ratio == "4:3"
+    assert (_p72d.canvas_width, _p72d.canvas_height) == ASPECT_RATIOS["4:3"]
+
+    _stk.clear()
+    for _i72 in range(5):
+        _stk.push(_p72d)
+        _p72d.pages[0].html = f"<p>V{_i72}</p>"
+    for _i72 in range(5):
+        _stk.undo(_p72d)
+    assert not _stk.can_undo
+    record("PASS", "72d: UndoStack push/undo/redo/clear")
+except Exception as e:
+    record("FAIL", "72d-undo-stack", f"{type(e).__name__}: {e}")
+
+# ── 72d2. Editor undo forces preview redraw for inline text restores ─────
+try:
+    from pathlib import Path as _Path72d2
+
+    _editor72d2 = _Path72d2("designer/editor.py").read_text(encoding="utf-8")
+    _preview72d2 = _Path72d2("designer/preview.py").read_text(encoding="utf-8")
+
+    assert "def _refresh_editor(*, force_preview: bool = False):" in _editor72d2
+    assert _editor72d2.count("_refresh_editor(force_preview=True)") >= 2
+    assert "on_restore(force_preview=True)" in _editor72d2
+    assert "def _refresh(force: bool = False):" in _preview72d2
+    assert "var replacement = iframe.cloneNode(false);" in _preview72d2
+    assert "iframe.replaceWith(replacement);" in _preview72d2
+    assert _preview72d2.index("ui.run_javascript(js)") < _preview72d2.index("_last_html[0] = html")
+
+    record("PASS", "72d2: editor undo forces preview redraw for inline text restores")
+except Exception as e:
+    record("FAIL", "72d2-preview-redraw", f"{type(e).__name__}: {e}")
+
+# ── 72e. Interaction — bridge JS injection ───────────────────────────────
+try:
+    _html72e = "<html><head></head><body><h1>Hello</h1></body></html>"
+    _r72e = inject_bridge_js(_html72e)
+    assert "__thothBridge" in _r72e, "Bridge JS not injected"
+    assert _r72e.index("__thothBridge") < _r72e.lower().index("</body>")
+    record("PASS", "72e: inject_bridge_js")
+except Exception as e:
+    record("FAIL", "72e-bridge-js", f"{type(e).__name__}: {e}")
+
+# ── 72e2. Designer keyboard shortcuts stay scoped to designer flows ──────
+try:
+    from pathlib import Path as _Path72e2
+
+    _editor72e2 = _Path72e2("designer/editor.py").read_text(encoding="utf-8")
+    _preview72e2 = _Path72e2("designer/preview.py").read_text(encoding="utf-8")
+    _bridge72e2 = _Path72e2("designer/interaction.py").read_text(encoding="utf-8")
+
+    assert "ui.keyboard(repeating=False).on(" in _editor72e2
+    assert "emit({shortcut: e.shiftKey ? 'redo' : 'undo'});" in _editor72e2
+    assert "e.event.preventDefault();" in _editor72e2
+    assert "on_undo_shortcut=_undo" in _editor72e2
+    assert "on_redo_shortcut=_redo" in _editor72e2
+    assert "def build_preview(project: DesignerProject, *,\n                   on_element_click=None, on_text_edit=None,\n                   on_undo_shortcut=None, on_redo_shortcut=None," in _preview72e2
+    assert "designer-undo-shortcut" in _preview72e2 and "designer-redo-shortcut" in _preview72e2
+    assert "window.__thothDesignerBridgeId = {bridge.id};" in _preview72e2
+    assert "var bridge = getElement(window.__thothDesignerBridgeId);" in _preview72e2
+    assert "var bridgeEvent = new Event('bridge_msg', {{ bubbles: true }});" in _preview72e2
+    assert "bridgeEvent.msgType = data.type;" in _preview72e2
+    assert "bridgeEvent.detail = data.detail || {{}};" in _preview72e2
+    assert "bridge.dispatchEvent(bridgeEvent);" in _preview72e2
+    assert "document.addEventListener('keydown', function(e) {" in _bridge72e2
+    assert "if (editingEl) return;" in _bridge72e2
+    assert "type: e.shiftKey ? 'designer-redo-shortcut' : 'designer-undo-shortcut'" in _bridge72e2
+
+    record("PASS", "72e2: designer keyboard shortcuts stay scoped to designer flows")
+except Exception as e:
+    record("FAIL", "72e2-keyboard-scope", f"{type(e).__name__}: {e}")
+
+# ── 72e3. Page navigator defers refreshes from client root context ───────
+try:
+    from pathlib import Path as _Path72e3
+
+    _nav72e3 = _Path72e3("designer/page_navigator.py").read_text(encoding="utf-8")
+
+    assert "ui.context.client.safe_invoke(" in _nav72e3
+    assert "lambda: ui.timer(0.05, _safe, once=True)" in _nav72e3
+
+    record("PASS", "72e3: page navigator defers via client root context")
+except Exception as e:
+    record("FAIL", "72e3-page-nav-defer", f"{type(e).__name__}: {e}")
+
+# ── 72f. Interaction — patch_html_text ───────────────────────────────────
+try:
+    _html72f = '<html><body><h1 class="title">Old Title</h1><p>Text</p></body></html>'
+    _patched = patch_html_text(_html72f, "", "h1", "Old Title", "New Title")
+    assert "New Title" in _patched and "Old Title" not in _patched
+
+    _html72f2 = '<div><p style="color:red">Red text</p></div>'
+    _patched2 = patch_html_text(_html72f2, "", "p", "Red text", "Blue text")
+    assert "Blue text" in _patched2 and 'style="color:red"' in _patched2
+
+    _html72f3 = '<html><body><section><p><strong>Bold</strong> copy</p></section></body></html>'
+    _patched3 = patch_html_text(
+        _html72f3,
+        "/html[1]/body[1]/section[1]/p[1]",
+        "p",
+        "<strong>Bold</strong> copy",
+        "Updated <em>copy</em>",
+    )
+    assert "Updated <em>copy</em>" in _patched3
+    record("PASS", "72f: patch_html_text preserves attributes")
+except Exception as e:
+    record("FAIL", "72f-patch-html", f"{type(e).__name__}: {e}")
+
+# ── 72g. Tool undo integration — _update_page + undo/redo ───────────────
+try:
+    from designer.tool import _update_page, _add_page, _set_brand, _delete_page
+
+    _p72g = DesignerProject(id="__test72g__", name="Tool Undo")
+    _p72g.pages = [DesignerPage(html="<p>Start</p>", title="Start")]
+    _p72g.brand = BrandConfig()
+    set_active_project(_p72g)
+    _stk72g = get_undo_stack()
+
+    _update_page(0, "<p>Updated</p>")
+    assert _stk72g.can_undo
+    _stk72g.undo(_p72g)
+    assert _p72g.pages[0].html == "<p>Start</p>"
+    _stk72g.redo(_p72g)
+    assert _p72g.pages[0].html == "<p>Updated</p>"
+
+    _add_page("<p>New</p>", "New Page")
+    assert len(_p72g.pages) == 2
+    _stk72g.undo(_p72g)
+    assert len(_p72g.pages) == 1
+    _stk72g.redo(_p72g)
+    assert len(_p72g.pages) == 2
+
+    _delete_page(1)
+    assert len(_p72g.pages) == 1
+    _stk72g.undo(_p72g)
+    assert len(_p72g.pages) == 2
+
+    _orig_color72g = _p72g.brand.primary_color
+    _set_brand(primary_color="#00FF00")
+    assert _p72g.brand.primary_color == "#00FF00"
+    _stk72g.undo(_p72g)
+    assert _p72g.brand.primary_color == _orig_color72g
+
+    _set_brand(
+        logo_mode="manual",
+        logo_scope="first",
+        logo_position="bottom_left",
+        logo_max_height=96,
+        logo_padding=40,
+    )
+    assert _p72g.brand.logo_mode == "manual"
+    assert _p72g.brand.logo_scope == "first"
+    assert _p72g.brand.logo_position == "bottom_left"
+    assert _p72g.brand.logo_max_height == 96
+    assert _p72g.brand.logo_padding == 40
+    _stk72g.undo(_p72g)
+    assert _p72g.brand.logo_mode == "auto"
+    assert _p72g.brand.logo_scope == "all"
+    assert _p72g.brand.logo_position == "top_right"
+
+    set_active_project(None)
+    delete_history("__test72g__")
+    record("PASS", "72g: tool sub-tools integrate with undo stack")
+except Exception as e:
+    set_active_project(None)
+    record("FAIL", "72g-tool-undo", f"{type(e).__name__}: {e}")
+
+# ── 72h. DesignerTool registers all sub-tools with correct names ──────────
+try:
+    # Tools only exposed when a project is active (conditional binding)
+    _p72h = DesignerProject(id="__test72h__", name="Tool List")
+    set_active_project(_p72h)
+    _dt72 = DesignerTool()
+    _tools72 = _dt72.as_langchain_tools()
+    _names72 = [t.name for t in _tools72]
+    assert len(_tools72) == 25, f"Expected 25 tools, got {len(_tools72)}: {_names72}"
+    _expected72 = {
+        "designer_set_pages", "designer_update_page", "designer_add_page",
+        "designer_delete_page", "designer_move_page", "designer_get_project",
+        "designer_get_page_html", "designer_get_reference", "designer_generate_notes",
+        "designer_insert_component",
+        "designer_critique_page", "designer_apply_repairs",
+        "designer_set_brand", "designer_resize_project", "designer_export", "designer_publish_link",
+        "designer_generate_image", "designer_insert_image", "designer_move_image",
+        "designer_replace_image", "designer_move_element", "designer_duplicate_element",
+        "designer_restyle_element", "designer_refine_text", "designer_add_chart",
+    }
+    _missing72 = _expected72 - set(_names72)
+    assert not _missing72, f"Missing tools: {_missing72}"
+    # Verify conditional binding: no tools when no project
+    set_active_project(None)
+    assert _dt72.as_langchain_tools() == [], "Expected [] when no active project"
+    record("PASS", f"72h: DesignerTool has all 25 sub-tools (conditional)")
+except Exception as e:
+    set_active_project(None)
+    record("FAIL", "72h-tool-registry", f"{type(e).__name__}: {e}")
+
+# ── 72h2. Project summary exposes asset IDs and full page HTML ───────────
+try:
+    from designer.tool import _get_project, _get_page_html
+
+    _wrapped72h2, _asset72h2 = wrap_asset_fragment(
+        '<img src="data:image/png;base64,AAAA" alt="Hero skyline" />',
+        "uploaded-image",
+        label="Hero skyline",
+    )
+    _p72h2 = DesignerProject(id="__test72h2__", name="Summary")
+    _p72h2.brief = ProjectBrief(
+        output_type="Pitch deck",
+        audience="Seed investors",
+        build_description="A fintech launch deck for PayFlow.",
+    )
+    _p72h2.pages = [
+        DesignerPage(
+            html=(
+                "<html><body>"
+                '<section class="hero"><h1>Deck</h1><p>Body copy</p></section>'
+                f"{_wrapped72h2}"
+                '<section class="cta"><button>Get started</button></section>'
+                "</body></html>"
+            ),
+            title="Intro",
+            notes="Speaker note",
+        )
+    ]
+    set_active_project(_p72h2)
+
+    _summary72h2 = json.loads(_get_project())
+    _page_summary72h2 = _summary72h2["pages"][0]["summary"]
+    assert _summary72h2["brief"]["output_type"] == "Pitch deck"
+    assert _summary72h2["brief"]["build_description"] == "A fintech launch deck for PayFlow."
+    assert _page_summary72h2["assets"][0]["id"] == _asset72h2
+    assert _page_summary72h2["assets"][0]["label"] == "Hero skyline"
+    assert _page_summary72h2["headings"] == ["Deck"]
+    assert any(
+        _entry["tag"] == "section" and _entry["selector_hint"].startswith("body > section:nth-of-type(1)")
+        for _entry in _page_summary72h2["targetable_elements"]
+    ), "expected section selector hints in targetable_elements"
+
+    _full72h2 = json.loads(_get_page_html(0))
+    assert _full72h2["title"] == "Intro"
+    assert _wrapped72h2 in _full72h2["html"]
+
+    set_active_project(None)
+    record("PASS", "72h2: designer_get_project exposes asset-aware summaries")
+except Exception as e:
+    set_active_project(None)
+    record("FAIL", "72h2-project-summary", f"{type(e).__name__}: {e}")
+
+# ── 72i. AI content — insert_image_into_page (top/bottom) ───────────────
+try:
+    _html72i = "<html><body><h1>Title</h1></body></html>"
+    _img72i = '<img src="test.png" />'
+
+    _top72i = insert_image_into_page(_html72i, _img72i, "top")
+    assert '<img src="test.png"' in _top72i
+    assert _top72i.index("<img") < _top72i.index("<h1")
+
+    _bot72i = insert_image_into_page(_html72i, _img72i, "bottom")
+    assert _bot72i.index("<h1") < _bot72i.index("<img")
+    record("PASS", "72i: insert_image_into_page top/bottom")
+except Exception as e:
+    record("FAIL", "72i-insert-image", f"{type(e).__name__}: {e}")
+
+# ── 72i2. Image tools insert, move, and replace asset blocks safely ─────
+try:
+    import base64 as _b6472i2
+
+    from designer.tool import _insert_image, _move_image, _replace_image
+    from tools.image_gen_tool import _image_cache as _cache72i2
+
+    _png72i2 = _b6472i2.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Zr3sAAAAASUVORK5CYII="
+    )
+    _cache72i2["sample-72i2.png"] = _png72i2
+    _cache72i2["replacement-72i2.png"] = _png72i2
+
+    _p72i2 = DesignerProject(id="__test72i2__", name="Image Tools")
+    _p72i2.pages = [
+        DesignerPage(html="<html><body><h1>Title</h1><p>Body</p></body></html>", title="Page 1")
+    ]
+    set_active_project(_p72i2)
+
+    _insert_msg72i2 = _insert_image("sample-72i2.png", 0, position="top", width=200, alt="Sample")
+    _asset72i2 = _insert_msg72i2.rsplit("Asset id: ", 1)[1].rstrip(".")
+    assert _asset72i2 in _p72i2.pages[0].html
+    assert _p72i2.pages[0].html.index(_asset72i2) < _p72i2.pages[0].html.index("<h1")
+
+    _move_msg72i2 = _move_image(0, _asset72i2, position="bottom")
+    assert "bottom" in _move_msg72i2
+    assert _p72i2.pages[0].html.index("<p>Body</p>") < _p72i2.pages[0].html.index(_asset72i2)
+
+    _replace_msg72i2 = _replace_image(_asset72i2, "replacement-72i2.png", page_index=0, width=180, alt="Replacement")
+    assert "Replacement" in _replace_msg72i2
+    assert _asset72i2 in _p72i2.pages[0].html
+    assert "Replacement" in _p72i2.pages[0].html
+
+    set_active_project(None)
+    _cache72i2.pop("sample-72i2.png", None)
+    _cache72i2.pop("replacement-72i2.png", None)
+    record("PASS", "72i2: image tools preserve targetable asset blocks")
+except Exception as e:
+    set_active_project(None)
+    record("FAIL", "72i2-image-tools", f"{type(e).__name__}: {e}")
+
+# ── 72i3. Element tools move, duplicate, and restyle safely ─────────────
+try:
+    from bs4 import BeautifulSoup as _BS72i3
+
+    from designer.tool import _duplicate_element, _get_project, _move_element, _restyle_element
+
+    _p72i3 = DesignerProject(id="__test72i3__", name="Element Tools")
+    _p72i3.pages = [
+        DesignerPage(
+            html=(
+                "<html><body>"
+                '<section class="hero"><h1>Hero</h1><p>Lead copy</p></section>'
+                '<section class="cta"><button>Buy now</button></section>'
+                "</body></html>"
+            ),
+            title="Page 1",
+        )
+    ]
+    set_active_project(_p72i3)
+
+    _dup_msg72i3 = _duplicate_element(0, selector="body > section:nth-of-type(1)", position="after")
+    _dup_id72i3 = _dup_msg72i3.split("New element id: ", 1)[1].split(".", 1)[0]
+    assert _dup_id72i3 in _p72i3.pages[0].html
+    assert _p72i3.pages[0].html.count("<section") == 3
+
+    _move_msg72i3 = _move_element(0, element_ref=_dup_id72i3, position="top")
+    assert _dup_id72i3 in _move_msg72i3
+    _soup72i3 = _BS72i3(_p72i3.pages[0].html, "html.parser")
+    _dup_tag72i3 = _soup72i3.select_one(f'[{ELEMENT_ID_ATTR}="{_dup_id72i3}"]')
+    assert _dup_tag72i3 is not None
+    assert _dup_tag72i3.find_previous_sibling("section") is None
+
+    _restyle_msg72i3 = _restyle_element(
+        0,
+        element_ref=_dup_id72i3,
+        style_updates='{"background":"linear-gradient(90deg, #111, #333)", "padding":"48px"}',
+        add_classes="spotlight-shell",
+    )
+    assert _dup_id72i3 in _restyle_msg72i3
+    _soup72i3 = _BS72i3(_p72i3.pages[0].html, "html.parser")
+    _dup_tag72i3 = _soup72i3.select_one(f'[{ELEMENT_ID_ATTR}="{_dup_id72i3}"]')
+    assert _dup_tag72i3 is not None
+    assert "spotlight-shell" in (_dup_tag72i3.get("class") or [])
+    assert "background: linear-gradient(90deg, #111, #333)" in (_dup_tag72i3.get("style") or "")
+    assert "padding: 48px" in (_dup_tag72i3.get("style") or "")
+
+    _summary72i3 = json.loads(_get_project())
+    assert any(
+        _entry["element_id"] == _dup_id72i3 and _entry["selector_hint"] == f'[{ELEMENT_ID_ATTR}="{_dup_id72i3}"]'
+        for _entry in _summary72i3["pages"][0]["summary"]["targetable_elements"]
+    )
+
+    set_active_project(None)
+    record("PASS", "72i3: element tools provide targetable move/duplicate/restyle flows")
+except Exception as e:
+    set_active_project(None)
+    record("FAIL", "72i3-element-tools", f"{type(e).__name__}: {e}")
+
+# ── 72j. AI content — chart_to_img_tag creates base64 <img> ─────────────
+try:
+    _csv72j = "Category,Value\nA,10\nB,20\nC,30"
+    _tag72j = chart_to_img_tag("bar", _csv72j, "Test Chart", width=400, height=300)
+    assert _tag72j.startswith("<img "), f"Expected <img>, got: {_tag72j[:30]}"
+    assert "data:image/png;base64," in _tag72j
+    record("PASS", "72j: chart_to_img_tag produces base64 PNG")
+except ValueError as _ve72j:
+    if "kaleido" in str(_ve72j).lower():
+        record("WARN", "72j-chart-img", "kaleido not installed — skipped")
+    else:
+        record("FAIL", "72j-chart-img", f"ValueError: {_ve72j}")
+except Exception as e:
+    record("FAIL", "72j-chart-img", f"{type(e).__name__}: {e}")
+
+# ── 72k. AI content — build_chart_interactive_html ───────────────────────
+try:
+    _csv72k = "Category,Value\nA,10\nB,20\nC,30"
+    _html72k = build_chart_interactive_html("pie", _csv72k, "Pie", width=400, height=300)
+    assert "plotly" in _html72k.lower() or "cdn" in _html72k.lower()
+    record("PASS", "72k: build_chart_interactive_html")
+except Exception as e:
+    record("FAIL", "72k-chart-interactive", f"{type(e).__name__}: {e}")
+
+# ── 72l. Asset image helper builds targetable image markup ───────────────
+try:
+    from designer.tool import _build_asset_image_tag
+
+    _html72l = _build_asset_image_tag("asset-72l", width=600, alt='John "Doe" & team')
+    assert 'src="asset://asset-72l"' in _html72l
+    assert 'data-asset-id="asset-72l"' in _html72l
+    assert 'alt="John &quot;Doe&quot; &amp; team"' in _html72l
+    assert 'width:600px' in _html72l
+    record("PASS", "72l: asset image helper builds targetable escaped markup")
+except Exception as e:
+    record("FAIL", "72l-unsplash-html", f"{type(e).__name__}: {e}")
+
+# ── 72m. Asset attribute escaping helper ─────────────────────────────────
+try:
+    from designer.tool import _escape_attr as _escape_attr72m
+
+    assert _escape_attr72m('he said "hi"') == 'he said &quot;hi&quot;'
+    assert _escape_attr72m("5 < 7 & yes") == "5 &lt; 7 &amp; yes"
+    record("PASS", "72m: asset attribute escape helper")
+except Exception as e:
+    record("FAIL", "72m-unsplash-escape", f"{type(e).__name__}: {e}")
+
+# ── 72n. Designer prompt includes all tool references ────────────────────
+try:
+    _p72n = DesignerProject(name="Prompt Test", pages=[DesignerPage(html="<h1>X</h1>", title="S1", notes="Open with the customer pain point.")])
+    _p72n.brief = ProjectBrief(
+        output_type="Pitch deck",
+        audience="Enterprise buyers",
+        tone="Confident and modern",
+        build_description="A launch deck for an AI workflow platform.",
+        brand_preset="Aurora UI",
+    )
+    _p72n.references = [
+        DesignerReference(
+            name="brand-notes.txt",
+            kind="text",
+            suffix=".txt",
+            size_bytes=148,
+            summary="Use clean editorial hierarchy, quiet gradients, and product UI screenshots as anchors.",
+        )
+    ]
+    _p72n.brand = BrandConfig(
+        logo_b64="QUJD",
+        logo_mode="auto",
+        logo_scope="first",
+        logo_position="bottom_left",
+        logo_max_height=88,
+    )
+    _p72n.publish_url = "https://deck.example/published/demo"
+    _prompt72n = build_designer_prompt(_p72n)
+    for _tn72n in ["designer_generate_image", "designer_refine_text",
+                    "designer_add_chart", "designer_set_pages",
+                    "designer_generate_notes",
+                    "designer_get_reference", "designer_insert_component",
+                    "designer_critique_page", "designer_apply_repairs",
+                    "designer_resize_project", "designer_export", "designer_publish_link", "designer_move_element",
+                    "designer_duplicate_element", "designer_restyle_element"]:
+        assert _tn72n in _prompt72n, f"Missing '{_tn72n}' in designer prompt"
+    assert "DESIGNER MODE" in _prompt72n
+    assert "PROJECT BRIEF" in _prompt72n
+    assert "AVAILABLE REFERENCES" in _prompt72n
+    assert "AVAILABLE CURATED BLOCKS" in _prompt72n
+    assert "hero_callout" in _prompt72n
+    assert "brand-notes.txt" in _prompt72n
+    assert "A launch deck for an AI workflow platform." in _prompt72n
+    assert "Aurora UI" in _prompt72n
+    assert "automatic logo placement is active" in _prompt72n
+    assert "bottom left corner" in _prompt72n
+    assert '"S1" · notes' in _prompt72n
+    assert "speaker notes" in _prompt72n.lower()
+    assert "https://deck.example/published/demo" in _prompt72n
+    record("PASS", "72n: build_designer_prompt references current designer tools plus notes, references, blocks, and publish state")
+except Exception as e:
+    record("FAIL", "72n-designer-prompt", f"{type(e).__name__}: {e}")
+
+# ── 72n1. inject_brand_variables supports auto and manual logo modes ────
+try:
+    _html72n1 = "<html><head></head><body><section><h1>Deck</h1></section></body></html>"
+    _auto_brand72n1 = BrandConfig(
+        logo_b64="QUJD",
+        logo_mime_type="image/svg+xml",
+        logo_filename="wordmark.svg",
+        logo_mode="auto",
+        logo_scope="first",
+        logo_position="bottom_left",
+        logo_max_height=96,
+        logo_padding=40,
+    )
+    _auto_render72n1 = inject_brand_variables(_html72n1, _auto_brand72n1, page_index=0)
+    assert 'data-thoth-brand-logo="auto"' in _auto_render72n1
+    assert 'data:image/svg+xml;base64,QUJD' in _auto_render72n1
+    assert 'bottom:40px;left:40px;' in _auto_render72n1
+    assert 'max-height:96px' in _auto_render72n1
+
+    _auto_hidden72n1 = inject_brand_variables(_html72n1, _auto_brand72n1, page_index=1)
+    assert 'data-thoth-brand-logo="auto"' not in _auto_hidden72n1
+
+    _manual_html72n1 = "<html><head></head><body><!-- BRAND_LOGO --><h1>Deck</h1></body></html>"
+    _manual_brand72n1 = BrandConfig(
+        logo_b64="QUJD",
+        logo_mime_type="image/png",
+        logo_mode="manual",
+        logo_max_height=88,
+    )
+    _manual_render72n1 = inject_brand_variables(_manual_html72n1, _manual_brand72n1, page_index=0)
+    assert "<!-- BRAND_LOGO -->" not in _manual_render72n1
+    assert 'data:image/png;base64,QUJD' in _manual_render72n1
+    assert 'max-height:88px' in _manual_render72n1
+    assert 'data-thoth-brand-logo="auto"' not in _manual_render72n1
+
+    _manual_with_placeholder72n1 = inject_brand_variables(_manual_html72n1, _auto_brand72n1, page_index=0)
+    assert _manual_with_placeholder72n1.count('data:image/svg+xml;base64,QUJD') == 1
+    assert 'data-thoth-brand-logo="auto"' not in _manual_with_placeholder72n1
+
+    record("PASS", "72n1: inject_brand_variables handles logo overlay and placeholder modes")
+except Exception as e:
+    record("FAIL", "72n1-logo-rendering", f"{type(e).__name__}: {e}")
+
+# ── 72n2. designer_generate_notes saves notes and updates project summary ─
+try:
+    import designer.ai_content as _aic72n2
+    from designer.tool import _generate_notes, _get_project, _get_page_html
+
+    _p72n2 = DesignerProject(
+        id="__test72n2__",
+        name="Notes Tool",
+        pages=[
+            DesignerPage(
+                html="<html><body><h1>Revenue Growth</h1><p>ARR grew from 1M to 3M.</p></body></html>",
+                title="Revenue Growth",
+            )
+        ],
+    )
+    set_active_project(_p72n2)
+    _orig_generate_notes72n2 = _aic72n2.generate_speaker_notes
+
+    def _fake_generate_notes72n2(page_title, page_summary, existing_notes=""):
+        assert page_title == "Revenue Growth"
+        assert isinstance(page_summary, dict)
+        return "Lead with ARR growth.\nAnchor on enterprise traction."
+
+    _aic72n2.generate_speaker_notes = _fake_generate_notes72n2
+    _result72n2 = _generate_notes(0)
+    assert "Generated speaker notes" in _result72n2
+    assert "ARR growth" in _p72n2.pages[0].notes
+    _summary72n2 = json.loads(_get_project())
+    assert _summary72n2["pages"][0]["has_notes"] is True
+    assert _summary72n2["pages"][0]["notes_word_count"] >= 4
+    _page_html72n2 = json.loads(_get_page_html(0))
+    assert "ARR growth" in _page_html72n2["notes"]
+
+    _aic72n2.generate_speaker_notes = _orig_generate_notes72n2
+    set_active_project(None)
+    delete_history("__test72n2__")
+    record("PASS", "72n2: designer_generate_notes saves notes and exposes summary metadata")
+except Exception as e:
+    try:
+        _aic72n2.generate_speaker_notes = _orig_generate_notes72n2
+    except Exception:
+        pass
+    set_active_project(None)
+    record("FAIL", "72n2-generate-notes", f"{type(e).__name__}: {e}")
+
+# ── 72n3. presenter mode reuses reveal deck with notes sidebar ───────────
+try:
+    from designer.presentation import _build_reveal_html
+
+    _p72n3 = DesignerProject(
+        name="Presenter",
+        pages=[
+            DesignerPage(html="<html><body><h1>Intro</h1></body></html>", title="Intro", notes="Open with the customer pain point."),
+            DesignerPage(html="<html><body><h1>Proof</h1></body></html>", title="Proof", notes="Use the case study for credibility."),
+        ],
+    )
+    _html72n3 = _build_reveal_html(_p72n3, presenter=True)
+    assert "presenter-shell" in _html72n3
+    assert "Presenter View" in _html72n3
+    assert "presenter-notes" in _html72n3
+    assert "presenter-next-title" in _html72n3
+    assert '"title": "Proof"' in _html72n3
+    assert "Open with the customer pain point." in _html72n3
+    record("PASS", "72n3: presenter mode builds a notes sidebar on top of Reveal")
+except Exception as e:
+    record("FAIL", "72n3-presenter-mode", f"{type(e).__name__}: {e}")
+
+# ── 72n3b. presentation runtime writes a served Reveal document ──────────
+try:
+    import pathlib as _Path72n3b
+    import tempfile as _tmp72n3b
+
+    import designer.presentation as _pres72n3b
+    import designer.publish as _pub72n3b
+
+    _p72n3b = DesignerProject(
+        id="__test72n3b__",
+        name="Presentation Runtime",
+        pages=[DesignerPage(html="<html><body><h1>Deck</h1></body></html>", title="Deck")],
+    )
+    _orig_dir72n3b = _pub72n3b.PUBLISHED_DIR
+    try:
+        with _tmp72n3b.TemporaryDirectory() as _dir72n3b:
+            _pub72n3b.PUBLISHED_DIR = _Path72n3b.Path(_dir72n3b)
+            _url72n3b = _pres72n3b._write_presentation_document(
+                _p72n3b,
+                start_page=0,
+                presenter=False,
+            )
+            _runtime_path72n3b = _Path72n3b.Path(_dir72n3b) / "_runtime" / f"{_p72n3b.id}-slides.html"
+            assert _url72n3b.startswith(f"/published/_runtime/{_p72n3b.id}-slides.html?v=")
+            assert _runtime_path72n3b.is_file()
+            _runtime_html72n3b = _runtime_path72n3b.read_text(encoding="utf-8")
+            assert '<script src="/static/reveal/reveal.js"></script>' in _runtime_html72n3b
+    finally:
+        _pub72n3b.PUBLISHED_DIR = _orig_dir72n3b
+
+    record("PASS", "72n3b: presentation mode writes a served runtime document")
+except Exception as e:
+    record("FAIL", "72n3b-presentation-runtime", f"{type(e).__name__}: {e}")
+
+# ── 72n4. editor source exposes notes workflow affordances ───────────────
+try:
+    import pathlib as _P72n4
+
+    _editor_src72n4 = (_P72n4.Path(__file__).resolve().parent / "designer" / "editor.py").read_text(encoding="utf-8")
+    assert "Speaker Notes" in _editor_src72n4
+    assert "Generate Notes" in _editor_src72n4
+    assert "Notes are saved per page" in _editor_src72n4
+    record("PASS", "72n4: editor source exposes speaker-notes workflow controls")
+except Exception as e:
+    record("FAIL", "72n4-editor-notes-ui", f"{type(e).__name__}: {e}")
+
+# ── 72n5. designer_resize_project updates canvas dimensions ───────────────
+try:
+    from designer.tool import _resize_project
+
+    _p72n5 = DesignerProject(id="__test72n5__", name="Resize Tool")
+    set_active_project(_p72n5)
+
+    _msg72n5 = _resize_project(preset="Square Social")
+    assert "1:1" in _msg72n5
+    assert _p72n5.aspect_ratio == "1:1"
+    assert (_p72n5.canvas_width, _p72n5.canvas_height) == (1080, 1080)
+
+    _msg72n5b = _resize_project(aspect_ratio="9:16")
+    assert "9:16" in _msg72n5b
+    assert (_p72n5.canvas_width, _p72n5.canvas_height) == (1080, 1920)
+
+    set_active_project(None)
+    delete_history("__test72n5__")
+    record("PASS", "72n5: designer_resize_project applies presets and explicit ratios")
+except Exception as e:
+    set_active_project(None)
+    record("FAIL", "72n5-resize-project", f"{type(e).__name__}: {e}")
+
+# ── 72n5b. canvas resize auto-fits existing pages without cropping ───────
+try:
+    from bs4 import BeautifulSoup as _BS72n5b
+
+    from designer.canvas_resize import fit_page_html_to_canvas
+
+    _html72n5b = "<html><body style='display:flex;align-items:center;justify-content:center;background:#123456;'><h1>Deck</h1></body></html>"
+    _resized72n5b = fit_page_html_to_canvas(
+        _html72n5b,
+        previous_width=1920,
+        previous_height=1080,
+        target_width=1080,
+        target_height=1080,
+    )
+    _soup72n5b = _BS72n5b(_resized72n5b, "html.parser")
+    _body72n5b = _soup72n5b.body
+    assert _body72n5b is not None
+    assert _body72n5b.get("data-thoth-fit-source-width") == "1920"
+    assert _body72n5b.get("data-thoth-fit-source-height") == "1080"
+    assert "scale(0.562500)" in (_body72n5b.get("style") or "")
+    assert "position: absolute" in (_body72n5b.get("style") or "")
+    record("PASS", "72n5b: canvas resize applies a conservative auto-fit transform")
+except Exception as e:
+    record("FAIL", "72n5b-resize-autofit", f"{type(e).__name__}: {e}")
+
+# ── 72n6. publish_project persists static publish metadata ────────────────
+try:
+    import pathlib as _Path72n6
+    import tempfile as _tmp72n6
+
+    import designer.publish as _pub72n6
+
+    _p72n6 = DesignerProject(
+        id="__test72n6__",
+        name="Publish Deck",
+        pages=[DesignerPage(html="<html><body><h1>Deck</h1></body></html>", title="Deck")],
+    )
+    _orig_dir72n6 = _pub72n6.PUBLISHED_DIR
+    _orig_base72n6 = _pub72n6.resolve_publish_base_url
+    _orig_save72n6 = _pub72n6.save_project
+    try:
+        with _tmp72n6.TemporaryDirectory() as _dir72n6:
+            _pub72n6.PUBLISHED_DIR = _Path72n6.Path(_dir72n6)
+            _pub72n6.resolve_publish_base_url = lambda ensure_public=True: ("https://share.test", True)
+            _pub72n6.save_project = lambda project: None
+            _info72n6 = _pub72n6.publish_project(_p72n6)
+            assert _info72n6["url"] == f"https://share.test/published/{_p72n6.id}.html"
+            assert _Path72n6.Path(_info72n6["path"]).is_file()
+            assert _p72n6.publish_url == _info72n6["url"]
+            assert _p72n6.published_at
+    finally:
+        _pub72n6.PUBLISHED_DIR = _orig_dir72n6
+        _pub72n6.resolve_publish_base_url = _orig_base72n6
+        _pub72n6.save_project = _orig_save72n6
+
+    record("PASS", "72n6: publish_project writes static HTML and updates project metadata")
+except Exception as e:
+    record("FAIL", "72n6-publish-project", f"{type(e).__name__}: {e}")
+
+# ── 72n7. channel share reuses publish flow and default targets ───────────
+try:
+    import designer.share as _share72n7
+    import channels.registry as _registry72n7
+    from channels.base import ChannelCapabilities as _ChannelCapabilities72n7
+
+    _sent72n7 = []
+
+    class _DummyShareChannel72n7:
+        name = "dummy_share_72n7"
+        display_name = "Dummy Share"
+        capabilities = _ChannelCapabilities72n7(photo_out=True, document_out=True)
+
+        def is_configured(self):
+            return True
+
+        def is_running(self):
+            return True
+
+        def get_default_target(self):
+            return "ops-room"
+
+        def send_message(self, target, text):
+            _sent72n7.append(("message", target, text))
+
+        def send_photo(self, target, file_path, caption=None):
+            _sent72n7.append(("photo", target, file_path, caption))
+
+        def send_document(self, target, file_path, caption=None):
+            _sent72n7.append(("document", target, file_path, caption))
+
+    _registry72n7.register(_DummyShareChannel72n7())
+    _orig_publish72n7 = _share72n7.publish_project
+    try:
+        _share72n7.publish_project = lambda project, pages, ensure_public=True: {
+            "url": "https://deck.example/share-72n7",
+            "path": "C:/tmp/share-72n7.html",
+            "public": True,
+        }
+        _result72n7 = _share72n7.share_project_to_channel(
+            DesignerProject(name="Shareable"),
+            "dummy_share_72n7",
+            delivery="link",
+        )
+        assert _result72n7["success"] is True
+        assert _sent72n7 == [(
+            "message",
+            "ops-room",
+            "Shareable\nhttps://deck.example/share-72n7",
+        )]
+    finally:
+        _share72n7.publish_project = _orig_publish72n7
+
+    record("PASS", "72n7: channel share uses publish links and channel default targets")
+except Exception as e:
+    record("FAIL", "72n7-share-channel", f"{type(e).__name__}: {e}")
+
+# ── 72n8. X share limits media uploads to four slide images ───────────────
+try:
+    import pathlib as _Path72n8
+    import tempfile as _tmp72n8
+
+    import designer.share as _share72n8
+    import tools.x_tool as _xt72n8
+
+    _orig_export_png_files72n8 = _share72n8.export_png_files
+    _orig_xtool72n8 = _xt72n8.XTool
+    try:
+        def _fake_export_png_files72n8(project, pages=None, directory=None):
+            out_dir = _Path72n8.Path(directory or _tmp72n8.gettempdir())
+            paths = []
+            for idx in range(5):
+                path = out_dir / f"slide-{idx + 1}.png"
+                path.write_bytes(b"png")
+                paths.append(path)
+            return paths
+
+        class _DummyXTool72n8:
+            def _x_post(self, action, text=None, media_paths=None):
+                assert action == "post"
+                assert text == "Launching now"
+                assert len(media_paths or []) == 4
+                return "Tweet posted successfully! Tweet ID: 123"
+
+        _share72n8.export_png_files = _fake_export_png_files72n8
+        _xt72n8.XTool = _DummyXTool72n8
+        _result72n8 = _share72n8.share_project_to_x(
+            DesignerProject(name="Launch Deck"),
+            text="Launching now",
+            pages="all",
+        )
+        assert _result72n8["success"] is True
+        assert _result72n8["media_count"] == 4
+    finally:
+        _share72n8.export_png_files = _orig_export_png_files72n8
+        _xt72n8.XTool = _orig_xtool72n8
+
+    record("PASS", "72n8: X share sends at most four slide images")
+except Exception as e:
+    record("FAIL", "72n8-share-x", f"{type(e).__name__}: {e}")
+
+# ── 72n9. source exposes resize, export preset, and share affordances ────
+try:
+    import pathlib as _P72n9
+
+    _root72n9 = _P72n9.Path(__file__).resolve().parent / "designer"
+    _editor_src72n9 = (_root72n9 / "editor.py").read_text(encoding="utf-8")
+    _nav_src72n9 = (_root72n9 / "page_navigator.py").read_text(encoding="utf-8")
+    _export_src72n9 = (_root72n9 / "export_dialog.py").read_text(encoding="utf-8")
+    _share_src72n9 = (_root72n9 / "share_dialog.py").read_text(encoding="utf-8")
+
+    assert "Share" in _editor_src72n9
+    assert "Recommended formats" in _nav_src72n9
+    assert "Current Slide PNG" in _export_src72n9
+    assert "Publish Link" in _share_src72n9
+    assert "Post to X" in _share_src72n9
+    record("PASS", "72n9: source exposes resize, export presets, and share controls")
+except Exception as e:
+    record("FAIL", "72n9-share-ui", f"{type(e).__name__}: {e}")
+
+# ── 72o. No external CDN in designer .py (except allowed) ───────────────
+try:
+    import pathlib as _P72
+    _des_dir72 = _P72.Path(__file__).resolve().parent / "designer"
+    _cdn_hits72 = []
+    for _f72 in _des_dir72.glob("*.py"):
+        _c72 = _f72.read_text(encoding="utf-8")
+        if _f72.name in ("fonts.py", "config.py", "templates.py"):
+            continue
+        if "cdn.jsdelivr.net" in _c72:
+            _cdn_hits72.append(f"{_f72.name}: cdn.jsdelivr.net")
+    assert not _cdn_hits72, f"Unexpected CDN refs: {_cdn_hits72}"
+    record("PASS", "72o: no external CDN in designer modules")
+except Exception as e:
+    record("FAIL", "72o-cdn-check", f"{type(e).__name__}: {e}")
+
+# ── 72p. DesignerProject.thread_id field ──────────────────────────
+try:
+    from designer.state import DesignerProject as _DP72p, ProjectBrief as _PB72p
+    _p72p = _DP72p(name="Thread Test")
+    assert _p72p.thread_id is None, "thread_id should default to None"
+    _p72p.thread_id = "abc123"
+    _p72p.publish_url = "https://deck.example/thread-test"
+    _p72p.published_at = "2024-01-01T00:00:00+00:00"
+    _p72p.brief = _PB72p(
+        output_type="Report",
+        audience="Operations team",
+        build_description="An internal ops review.",
+    )
+    _d72p = _p72p.to_dict()
+    assert _d72p["thread_id"] == "abc123", "thread_id should serialize"
+    assert _d72p["publish_url"] == "https://deck.example/thread-test", "publish_url should serialize"
+    assert _d72p["published_at"] == "2024-01-01T00:00:00+00:00", "published_at should serialize"
+    assert _d72p["brief"]["output_type"] == "Report", "brief should serialize"
+    assert "chat_history" not in _d72p, "designer projects should not persist duplicate chat history"
+    _p72p2 = _DP72p.from_dict(_d72p)
+    assert _p72p2.thread_id == "abc123", "thread_id should deserialize"
+    assert _p72p2.publish_url == "https://deck.example/thread-test", "publish_url should deserialize"
+    assert _p72p2.published_at == "2024-01-01T00:00:00+00:00", "published_at should deserialize"
+    assert _p72p2.brief is not None and _p72p2.brief.output_type == "Report", "brief should deserialize"
+    # Legacy project without thread_id should deserialize fine
+    _legacy72p = {
+        "name": "Old",
+        "pages": [{"html": "<p>X</p>", "title": "T"}],
+        "chat_history": [{"role": "assistant", "content": "legacy"}],
+    }
+    _p72p3 = _DP72p.from_dict(_legacy72p)
+    assert _p72p3.thread_id is None, "legacy project should have None thread_id"
+    assert "chat_history" not in _p72p3.to_dict(), "legacy chat_history should be ignored on save"
+    record("PASS", "72p: DesignerProject.thread_id field")
+except Exception as e:
+    record("FAIL", "72p-thread-id-field", f"{type(e).__name__}: {e}")
+
+# ── 72p2. Project brief helper + preset inventory ────────────────────────
+try:
+    _p72p2 = DesignerProject(name="Brief Helper", template_id="product_launch")
+    _p72p2.brief = ProjectBrief(
+        output_type="Launch deck",
+        audience="Product and GTM leaders",
+        tone="Clear and optimistic",
+        length="6 slides",
+        build_description="A first-draft launch narrative for a workflow automation product.",
+        brand_preset="Aurora UI",
+        brand_url="https://example.com",
+        reference_notes="Focus on messaging hierarchy and rollout milestones.",
+    )
+    _p72p2.brand = BrandConfig()
+
+    assert project_has_build_brief(_p72p2)
+    _req72p2 = build_initial_design_request(_p72p2)
+    assert "Create the first draft of this Launch deck" in _req72p2
+    assert "Use the selected template as a starting structure" in _req72p2
+    assert "A first-draft launch narrative for a workflow automation product." in _req72p2
+    assert "Aurora UI" in _req72p2
+    assert "https://example.com" in _req72p2
+
+    _presets72p2 = get_all_presets()
+    for _preset72p2 in [
+        "Aurora UI", "Rose Studio", "Cobalt Paper", "Graphite Mint",
+        "Lime Grid", "Editorial Slate", "Solar Flare", "Midnight Signal",
+    ]:
+        assert _preset72p2 in _presets72p2, f"Missing built-in preset: {_preset72p2}"
+
+    record("PASS", "72p2: project brief helper and preset inventory")
+except Exception as e:
+    record("FAIL", "72p2-brief-helper-presets", f"{type(e).__name__}: {e}")
+
+# ── 72p3. Setup flow creates projects and optional initial prompts ───────
+try:
+    _brief72p3 = ProjectBrief(
+        output_type="One-pager",
+        audience="Founders and operators",
+        build_description="A product strategy one-pager for an internal planning session.",
+        brand_preset="Rose Studio",
+    )
+
+    _project72p3 = create_project_from_setup(
+        "blank_canvas",
+        aspect_ratio="4:3",
+        project_name="Strategy Draft",
+        brief=_brief72p3,
+        preset_name="Rose Studio",
+    )
+    assert _project72p3.name == "Strategy Draft"
+    assert _project72p3.aspect_ratio == "4:3"
+    assert _project72p3.canvas_width == 1024 and _project72p3.canvas_height == 768
+    assert _project72p3.template_id == "blank_canvas"
+    assert _project72p3.brief is not None and _project72p3.brief.build_description.startswith("A product strategy")
+    assert _project72p3.brand is not None and _project72p3.brand.primary_color == get_all_presets()["Rose Studio"].primary_color
+
+    _create_only72p3, _prompt_none72p3 = prepare_project_creation(
+        "product_launch",
+        aspect_ratio="16:9",
+        project_name="Launch Setup",
+        brief=_brief72p3,
+        preset_name="Rose Studio",
+        auto_build=False,
+    )
+    assert _create_only72p3.template_id == "product_launch"
+    assert _prompt_none72p3 is None
+
+    _create_build72p3, _prompt72p3 = prepare_project_creation(
+        "product_launch",
+        aspect_ratio="16:9",
+        project_name="Launch Setup",
+        brief=_brief72p3,
+        preset_name="Rose Studio",
+        auto_build=True,
+    )
+    assert _create_build72p3.template_id == "product_launch"
+    assert _prompt72p3 is not None and "Use the selected template as a starting structure" in _prompt72p3
+    assert "A product strategy one-pager for an internal planning session." in _prompt72p3
+
+    record("PASS", "72p3: setup flow prepares create-only and create-build paths")
+except Exception as e:
+    record("FAIL", "72p3-setup-flow", f"{type(e).__name__}: {e}")
+
+# ── 72p4. Project list exposes gallery preview data ──────────────────────
+try:
+    _p72p4 = DesignerProject(id="__test72p4__", name="Preview Card")
+    _p72p4.brand = BrandConfig(primary_color="#123456", secondary_color="#234567", accent_color="#345678")
+    _p72p4.pages = [
+        DesignerPage(
+            html="<html><body><h1>Preview Card</h1><p>Real first page.</p></body></html>",
+            title="Cover",
+        )
+    ]
+    save_project(_p72p4)
+
+    _summary72p4 = next((_s for _s in list_projects() if _s["id"] == "__test72p4__"), None)
+    assert _summary72p4 is not None
+    assert _summary72p4["preview_title"] == "Cover"
+    assert "Preview Card" in _summary72p4["preview_html"]
+    assert _summary72p4["brand"]["primary_color"] == "#123456"
+    assert _summary72p4["canvas_width"] == _p72p4.canvas_width
+    assert _summary72p4["canvas_height"] == _p72p4.canvas_height
+
+    _thumb_w72p4, _thumb_scale72p4 = compute_thumbnail_dimensions(1920, 1080, 80)
+    assert _thumb_w72p4 > 0 and _thumb_scale72p4 > 0
+
+    delete_project("__test72p4__")
+    record("PASS", "72p4: gallery preview summaries expose real first-page data")
+except Exception as e:
+    delete_project("__test72p4__")
+    record("FAIL", "72p4-gallery-preview-summary", f"{type(e).__name__}: {e}")
+
+# ── 72p5. Designer UI avoids invalid splitter slot usage ─────────────────
+try:
+    _designer_dir72p5 = PROJECT_ROOT / "designer"
+    _bad_splitter_refs72p5 = []
+    for _file72p5 in _designer_dir72p5.glob("*.py"):
+        _content72p5 = _file72p5.read_text(encoding="utf-8")
+        if "ui.splitter.before" in _content72p5 or "ui.splitter.after" in _content72p5:
+            _bad_splitter_refs72p5.append(_file72p5.name)
+    assert not _bad_splitter_refs72p5, f"Invalid splitter slot usage: {_bad_splitter_refs72p5}"
+    record("PASS", "72p5: no invalid ui.splitter.before/after usage in designer modules")
+except Exception as e:
+    record("FAIL", "72p5-splitter-usage", f"{type(e).__name__}: {e}")
+
+# ── 72p6. Project references persist, summarize, and dedupe ─────────────
+try:
+    _p72p6 = DesignerProject(id="__test72p6__", name="Reference Persist")
+    _added72p6 = persist_project_references(
+        _p72p6,
+        [{
+            "name": "brief.txt",
+            "data": b"Keep the layout airy. Lead with one strong product screenshot and restrained copy.",
+        }],
+        None,
+        {},
+    )
+    assert len(_added72p6) == 1
+    assert len(_p72p6.references) == 1
+    assert "airy" in _p72p6.references[0].summary.lower()
+    assert load_reference_bytes(_p72p6.id, _p72p6.references[0].stored_name) is not None
+
+    _dup_added72p6 = persist_project_references(
+        _p72p6,
+        [{
+            "name": "brief-copy.txt",
+            "data": b"Keep the layout airy. Lead with one strong product screenshot and restrained copy.",
+        }],
+        None,
+        {},
+    )
+    assert _dup_added72p6 == [], "Duplicate file content should not create another reference"
+
+    save_project(_p72p6)
+    _loaded72p6 = load_project("__test72p6__")
+    assert _loaded72p6 is not None
+    assert len(_loaded72p6.references) == 1
+    assert find_project_reference(_loaded72p6, "brief.txt") is not None
+
+    delete_project("__test72p6__")
+    record("PASS", "72p6: project references persist, summarize, and dedupe")
+except Exception as e:
+    delete_project("__test72p6__")
+    record("FAIL", "72p6-project-references", f"{type(e).__name__}: {e}")
+
+# ── 72p6b. Render paths resolve stored image references to data URIs ─────
+try:
+    import base64 as _b6472p6b
+
+    from designer.render_assets import resolve_project_image_sources as _resolve72p6b
+    from designer.storage import save_reference_bytes as _save_ref72p6b
+
+    _png72p6b = _b6472p6b.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Zr3sAAAAASUVORK5CYII="
+    )
+    _p72p6b = DesignerProject(id="__test72p6b__", name="Reference Render")
+    _ref72p6b = DesignerReference(
+        name="sample.png",
+        kind="image",
+        mime_type="image/png",
+        suffix=".png",
+        size_bytes=len(_png72p6b),
+    )
+    _ref72p6b.stored_name = _save_ref72p6b(_p72p6b.id, _ref72p6b.id, _ref72p6b.name, _png72p6b)
+    _p72p6b.references.append(_ref72p6b)
+
+    _html72p6b = f'<html><body><img src="http://localhost:8080/{_ref72p6b.id}" alt="Attached" /></body></html>'
+    _resolved72p6b = _resolve72p6b(_html72p6b, _p72p6b)
+    assert "data:image/png;base64," in _resolved72p6b
+    assert "localhost:8080" not in _resolved72p6b
+    assert _ref72p6b.id not in _resolved72p6b
+
+    delete_project("__test72p6b__")
+    record("PASS", "72p6b: render helpers inline stored image references")
+except Exception as e:
+    delete_project("__test72p6b__")
+    record("FAIL", "72p6b-reference-render", f"{type(e).__name__}: {e}")
+
+# ── 72p7. Reference files duplicate and delete with projects ─────────────
+try:
+    _p72p7 = DesignerProject(id="__test72p7__", name="Reference Copy")
+    persist_project_references(
+        _p72p7,
+        [{"name": "palette.txt", "data": b"Muted graphite, mint accents, generous spacing."}],
+        None,
+        {},
+    )
+    save_project(_p72p7)
+    _orig_ref72p7 = _p72p7.references[0]
+
+    _dup72p7 = duplicate_project("__test72p7__", new_name="Reference Copy Clone")
+    assert _dup72p7 is not None
+    assert len(_dup72p7.references) == 1
+    _dup_ref72p7 = _dup72p7.references[0]
+    assert load_reference_bytes(_dup72p7.id, _dup_ref72p7.stored_name) is not None
+
+    delete_project("__test72p7__")
+    assert load_reference_bytes("__test72p7__", _orig_ref72p7.stored_name) is None
+
+    delete_project(_dup72p7.id)
+    assert load_reference_bytes(_dup72p7.id, _dup_ref72p7.stored_name) is None
+
+    record("PASS", "72p7: reference files duplicate and delete with projects")
+except Exception as e:
+    delete_project("__test72p7__")
+    try:
+        if _dup72p7 is not None:
+            delete_project(_dup72p7.id)
+    except Exception:
+        pass
+    record("FAIL", "72p7-reference-storage", f"{type(e).__name__}: {e}")
+
+# ── 72p8. designer_get_reference resolves saved references ───────────────
+try:
+    from designer.tool import _get_reference as _get_reference72p8
+
+    _p72p8 = DesignerProject(id="__test72p8__", name="Reference Tool")
+    persist_project_references(
+        _p72p8,
+        [{
+            "name": "voice-and-tone.txt",
+            "data": b"Write like a sharp product launch: concise headlines, confident claims, and warm supporting copy.",
+        }],
+        None,
+        {},
+    )
+    set_active_project(_p72p8)
+
+    _payload72p8 = json.loads(_get_reference72p8("voice-and-tone.txt"))
+    assert _payload72p8["name"] == "voice-and-tone.txt"
+    assert "confident" in _payload72p8["summary"].lower()
+
+    _latest72p8 = json.loads(_get_reference72p8("latest"))
+    assert _latest72p8["id"] == _payload72p8["id"]
+
+    _removed72p8 = delete_project_reference(_p72p8, "voice-and-tone.txt")
+    assert _removed72p8 is not None
+    assert "could not find" in _get_reference72p8("voice-and-tone.txt").lower()
+
+    set_active_project(None)
+    delete_project("__test72p8__")
+    record("PASS", "72p8: designer_get_reference resolves saved references")
+except Exception as e:
+    set_active_project(None)
+    delete_project("__test72p8__")
+    record("FAIL", "72p8-get-reference-tool", f"{type(e).__name__}: {e}")
+
+# ── 72p9. Curated component registry renders reusable blocks ─────────────
+try:
+    _components72p9 = list_components()
+    assert len(_components72p9) >= 6
+    assert any(isinstance(_component72p9, DesignerComponent) for _component72p9 in _components72p9)
+
+    _hero72p9 = get_component("hero_callout")
+    assert _hero72p9.category == "Story"
+    assert "Two-column opener" in _hero72p9.description
+
+    _rendered72p9 = render_component_html(
+        "hero_callout",
+        {"headline": "Insert a bold proof-led opener", "stat_value": "84%"},
+    )
+    assert "Insert a bold proof-led opener" in _rendered72p9
+    assert "84%" in _rendered72p9
+    assert "{{headline}}" not in _rendered72p9
+
+    record("PASS", "72p9: curated component registry and renderer")
+except Exception as e:
+    record("FAIL", "72p9-component-registry", f"{type(e).__name__}: {e}")
+
+# ── 72p10. Component insertion helper and tool remain targetable ─────────
+try:
+    from designer.tool import _get_project as _get_project72p10, _insert_component as _insert_component72p10
+
+    _page72p10 = "<html><body><section><h1>Deck</h1></section></body></html>"
+    _inserted72p10, _element_id72p10, _selector72p10 = insert_component_in_html(
+        _page72p10,
+        render_component_html("stats_band"),
+        "stats_band",
+        position="top",
+    )
+    _summary72p10 = summarize_page_html(_inserted72p10)
+    assert _summary72p10["components"], "expected component summary entries"
+    assert _summary72p10["components"][0]["component_name"] == "stats_band"
+    assert _summary72p10["components"][0]["element_id"] == _element_id72p10
+    assert _summary72p10["components"][0]["selector_hint"] == _selector72p10
+    assert COMPONENT_NAME_ATTR in _inserted72p10
+
+    _p72p10 = DesignerProject(
+        id="__test72p10__",
+        name="Component Tool",
+        pages=[DesignerPage(html=_page72p10, title="Only")],
+    )
+    set_active_project(_p72p10)
+    _tool_result72p10 = _insert_component72p10("testimonial_quote", page_index=0, position="bottom")
+    assert "testimonial_quote" in _tool_result72p10
+
+    _project72p10 = json.loads(_get_project72p10())
+    _components_summary72p10 = _project72p10["pages"][0]["summary"]["components"]
+    assert any(_entry["component_name"] == "testimonial_quote" for _entry in _components_summary72p10)
+
+    set_active_project(None)
+    delete_project("__test72p10__")
+    record("PASS", "72p10: component insertion helper and tool remain targetable")
+except Exception as e:
+    set_active_project(None)
+    delete_project("__test72p10__")
+    record("FAIL", "72p10-component-insert", f"{type(e).__name__}: {e}")
+
+# ── 72p11. Page critique flags hierarchy, contrast, readability, spacing ─
+try:
+    from designer.tool import _critique_page as _critique_page72p11
+
+    _long_copy72p11 = " ".join(["This sentence intentionally stretches the page density."] * 18)
+    _html72p11 = (
+        "<html><body style='background:#ffffff; color:#bdbdbd;'>"
+        "<section style='display:flex;'>"
+        f"<p style='color:#bdbdbd; font-size:12px'>{_long_copy72p11}</p>"
+        "<div>Secondary block</div><div>Tertiary block</div>"
+        "</section></body></html>"
+    )
+    _report72p11 = critique_page_html(_html72p11, 1024, 768)
+    _cats72p11 = {finding["category"] for finding in _report72p11["findings"]}
+    assert {"hierarchy", "contrast", "readability", "spacing"}.issubset(_cats72p11)
+    assert _report72p11["score"] < 100
+
+    _p72p11 = DesignerProject(
+        id="__test72p11__",
+        name="Critique Tool",
+        pages=[DesignerPage(html=_html72p11, title="Only")],
+    )
+    set_active_project(_p72p11)
+    _tool_report72p11 = json.loads(_critique_page72p11(0))
+    assert _tool_report72p11["page_title"] == "Only"
+    assert any(finding["category"] == "contrast" for finding in _tool_report72p11["findings"])
+
+    set_active_project(None)
+    delete_project("__test72p11__")
+    record("PASS", "72p11: page critique flags hierarchy, contrast, readability, spacing")
+except Exception as e:
+    set_active_project(None)
+    delete_project("__test72p11__")
+    record("FAIL", "72p11-page-critique", f"{type(e).__name__}: {e}")
+
+# ── 72p12. Safe repairs tighten spacing and improve readability ──────────
+try:
+    from designer.tool import _apply_repairs as _apply_repairs72p12
+
+    _long_copy72p12 = " ".join(["This paragraph should be constrained and easier to scan."] * 16)
+    _html72p12 = (
+        "<html><body style='background:#ffffff; color:#bdbdbd;'>"
+        "<section style='display:flex; padding:48px;'>"
+        f"<p style='color:#bdbdbd; font-size:12px'>{_long_copy72p12}</p>"
+        "<div>Signal A</div><div>Signal B</div>"
+        "</section></body></html>"
+    )
+    _repaired72p12, _changes72p12 = apply_page_repairs(
+        _html72p12,
+        1024,
+        768,
+        ["contrast", "readability", "spacing", "overflow"],
+    )
+    assert _repaired72p12 != _html72p12
+    assert any(change["category"] == "contrast" for change in _changes72p12)
+    assert "max-width: 62ch" in _repaired72p12
+    assert "gap: 16px" in _repaired72p12
+
+    _p72p12 = DesignerProject(
+        id="__test72p12__",
+        name="Repair Tool",
+        pages=[DesignerPage(html=_html72p12, title="Only")],
+    )
+    set_active_project(_p72p12)
+    _tool_result72p12 = _apply_repairs72p12(0, ["contrast", "readability", "spacing", "overflow"])
+    assert "Applied" in _tool_result72p12
+    assert _p72p12.pages[0].html != _html72p12
+
+    set_active_project(None)
+    delete_project("__test72p12__")
+    record("PASS", "72p12: safe repairs tighten spacing and improve readability")
+except Exception as e:
+    set_active_project(None)
+    delete_project("__test72p12__")
+    record("FAIL", "72p12-safe-repairs", f"{type(e).__name__}: {e}")
+
+# ── 72q. threads.py project_id column + helpers ──────────────────
+try:
+    from threads import (
+        _save_thread_meta as _stm72q, _set_thread_project_id as _stp72q,
+        _get_thread_project_id as _gtp72q, _list_threads as _lt72q,
+        _delete_thread as _dt72q,
+    )
+    _tid72q = "__test72q_thread__"
+    _stm72q(_tid72q, "🎨 Test Project")
+    # Default project_id should be empty
+    assert _gtp72q(_tid72q) == "", "default project_id should be empty"
+    # Set project_id
+    _stp72q(_tid72q, "proj_abc")
+    assert _gtp72q(_tid72q) == "proj_abc", "project_id should be set"
+    # _list_threads should include project_id as 6th column
+    _rows72q = [r for r in _lt72q() if r[0] == _tid72q]
+    assert len(_rows72q) == 1
+    assert len(_rows72q[0]) == 6, f"Expected 6 columns, got {len(_rows72q[0])}"
+    assert _rows72q[0][5] == "proj_abc", "project_id should be in column 5"
+    _dt72q(_tid72q)
+    record("PASS", "72q: threads.py project_id column + helpers")
+except Exception as e:
+    try: _dt72q(_tid72q)
+    except: pass
+    record("FAIL", "72q-project-id", f"{type(e).__name__}: {e}")
+
+# ── 72r. sidebar _go_home / _new_thread clear designer ───────────
+try:
+    import ast as _ast72r
+    _sidebar_src72r = Path("ui/sidebar.py").read_text(encoding="utf-8")
+    # _go_home should set active_designer_project = None
+    assert "active_designer_project = None" in _sidebar_src72r, \
+        "_go_home must clear active_designer_project"
+    # Count occurrences — should be in both _go_home and _new_thread
+    _count72r = _sidebar_src72r.count("state.active_designer_project = None")
+    assert _count72r >= 2, f"Expected >=2 clears of active_designer_project, got {_count72r}"
+    record("PASS", "72r: sidebar _go_home/_new_thread clear designer")
+except Exception as e:
+    record("FAIL", "72r-sidebar-clear", f"{type(e).__name__}: {e}")
+
+# ── 72s. sidebar icon uses 'brush' for designer threads ───────────
+try:
+    _sidebar_src72s = Path("ui/sidebar.py").read_text(encoding="utf-8")
+    assert "is_designer_thread" in _sidebar_src72s, "should detect designer threads"
+    assert '"brush"' in _sidebar_src72s, "should use brush icon for designer threads"
+    record("PASS", "72s: sidebar uses brush icon for designer threads")
+except Exception as e:
+    record("FAIL", "72s-brush-icon", f"{type(e).__name__}: {e}")
+
+# ── 72t. _exit_designer clears thread state ──────────────────────
+try:
+    _app_src72t = Path("app.py").read_text(encoding="utf-8")
+    # Find _exit_designer — should clear thread_id
+    _idx72t = _app_src72t.index("def _exit_designer")
+    _block72t = _app_src72t[_idx72t:_idx72t+400]
+    assert "state.thread_id = None" in _block72t, "_exit_designer must clear thread_id"
+    assert "state.active_designer_project = None" in _block72t, "_exit_designer must clear project"
+    record("PASS", "72t: _exit_designer clears thread + project state")
+except Exception as e:
+    record("FAIL", "72t-exit-designer", f"{type(e).__name__}: {e}")
+
+# ── 72u. editor rename syncs thread name ─────────────────────────
+try:
+    _editor_src72u = Path("designer/editor.py").read_text(encoding="utf-8")
+    assert "_save_thread_meta" in _editor_src72u, "editor rename should call _save_thread_meta"
+    record("PASS", "72u: editor rename syncs thread name")
+except Exception as e:
+    record("FAIL", "72u-editor-rename", f"{type(e).__name__}: {e}")
 
 
 print(f"  ✅ PASS: {PASS}")

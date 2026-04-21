@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/tests-All%20Pass-brightgreen?style=flat" alt="Tests">
 </p>
 
-Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with 25 integrated tools (79 sub-operations) — web search, email, calendar, file management, shell access, browser automation, vision, image generation, X (Twitter), long-term memory with a personal knowledge graph, **advanced workflows** with conditional branching and approval gates, habit tracking, and more — plus a **plugin system** with a built-in marketplace and **5 messaging channels** (Telegram, WhatsApp, Discord, Slack, SMS) with full media support, streaming, reactions, and per-channel tool generation. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models from **OpenAI**, **Anthropic** (Claude), **Google AI** (Gemini), **xAI** (Grok), and **OpenRouter** (100+ models) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, and history — stays on your machine.
+Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with **27 core tools plus auto-generated channel send tools** — web search, email, calendar, file management, shell access, browser automation, vision, image generation, X (Twitter), long-term memory with a personal knowledge graph, **Designer Studio** for decks and one-pagers, **advanced workflows** with conditional branching and approval gates, **Thoth Status** self-inspection, configurable identity, an insights engine, habit tracking, and more — plus a **plugin system** with a built-in marketplace and **5 messaging channels** (Telegram, WhatsApp, Discord, Slack, SMS) with full media support, streaming, reactions, and approval routing. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models from **OpenAI**, **Anthropic** (Claude), **Google AI** (Gemini), **xAI** (Grok), and **OpenRouter** (100+ models) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, designer projects, and history — stays on your machine.
 
 > **Local models are already amazing.** You'll be surprised what a 14B+ local model can do. If you start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
 
@@ -42,7 +42,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ### 🤖 ReAct Agent Architecture
 
-LangGraph-based autonomous agent with **25 tools / 79 sub-operations** — the agent decides which tools to call, how many times, and in what order. Real-time token streaming with thinking model support (DeepSeek-R1, Qwen3, QwQ — collapsible reasoning bubbles). Smart context management via tiktoken: auto-summarization at 80% capacity, proportional tool-output shrinking, and dynamic tool budgets that adapt to available headroom. Destructive actions require explicit confirmation; orphaned tool calls are auto-repaired; recursive loops are caught with a wind-down warning at 75%.
+LangGraph-based autonomous agent with **27 core tools plus auto-generated channel tools** — the agent decides which tools to call, how many times, and in what order. Real-time token streaming with thinking model support (DeepSeek-R1, Qwen3, QwQ — collapsible reasoning bubbles). Smart context management via tiktoken: auto-summarization at 80% capacity, proportional tool-output shrinking, and dynamic tool budgets that adapt to available headroom. The prompt stack combines centralized templates with dynamic identity and self-knowledge context so Thoth can describe its own capabilities accurately. Destructive actions require explicit confirmation; orphaned tool calls are auto-repaired; recursive loops are caught with a wind-down warning at 75%.
 
 [Details →](docs/ARCHITECTURE.md#react-agent-architecture)
 
@@ -60,7 +60,7 @@ Export the entire knowledge graph as an **Obsidian-compatible markdown vault** �
 
 ### 🌙 Dream Cycle (Nightly Knowledge Refinement)
 
-A 4-phase background daemon that refines the knowledge graph during idle hours — **merging duplicates** (≥0.93 similarity), **enriching thin descriptions** from conversation context, **inferring missing relationships** between co-occurring entities, and **decaying stale confidence** on relations older than 90 days. Hub diversity caps, batch rotation, and a 7-day rejection cache ensure high-quality, non-repetitive inferences. Three-layer anti-contamination system prevents cross-entity fact-bleed. Ollama busy check defers cycles when the GPU is actively serving a user request. Configurable dream window; all operations logged to an expandable dream journal in the Activity tab. Manual 🌙 Dream button in the Knowledge graph panel.
+A 5-phase background daemon that refines the knowledge graph during idle hours — **merging duplicates** (≥0.93 similarity), **enriching thin descriptions** from conversation context, **decaying stale inferred confidence**, **inferring missing relationships** between co-occurring entities, and **generating actionable insights** from recent system activity. Hub diversity caps, batch rotation, and a 7-day rejection cache ensure high-quality, non-repetitive inferences. Three-layer anti-contamination system prevents cross-entity fact-bleed. Ollama busy check defers cycles when the GPU is actively serving a user request. Configurable dream window; all operations logged to an expandable dream journal in the Activity tab. Manual 🌙 Dream button in the Knowledge graph panel.
 
 [Details →](docs/ARCHITECTURE.md#dream-cycle)
 
@@ -102,9 +102,27 @@ Camera capture, screen capture, and **workspace image file analysis** via local 
 
 ### ⚡ Workflows & Scheduling
 
-Advanced **workflow engine** powered by APScheduler with 7 schedule types (daily, weekly, weekdays, weekends, interval, cron, one-shot delay) and a full **step-based pipeline builder**. Five step types — Prompt, Condition, Approval, Subtask, and Notify — with conditional `if_true`/`if_false` branching, approval gates that pause for human decisions, webhook triggers, task-completion triggers, concurrency groups, and per-workflow safety mode (block destructive, require approval, or allow all). Template variables (`{{date}}`, `{{time}}`, `{{step.X.output}}`), channel delivery (Telegram/Email), per-task model override, and configurable background permissions. A redesigned workflow builder UI offers simple and advanced modes with a visual Mermaid flow preview. Pending approvals surface in the sidebar with badge counts and quick-approve buttons.
+Advanced **workflow engine** powered by APScheduler with 7 schedule types (daily, weekly, weekdays, weekends, interval, cron, one-shot delay) and a full **step-based pipeline builder**. Five step types — Prompt, Condition, Approval, Subtask, and Notify — with conditional `if_true`/`if_false` branching, approval gates that pause for human decisions, webhook triggers, task-completion triggers, concurrency groups, and per-workflow safety mode (block destructive, require approval, or allow all). Template variables (`{{date}}`, `{{time}}`, `{{step.X.output}}`), channel delivery (Telegram/Email), per-task model override, and configurable background permissions. A redesigned workflow builder UI offers simple and advanced modes with a visual Mermaid flow preview. The Workflow Console surfaces running jobs, approvals, recent history, and insight cards, while pending approvals still surface in the sidebar with badge counts and quick-approve buttons.
 
 [Details →](docs/ARCHITECTURE.md#workflows--scheduling)
+
+### 🎨 Designer Studio
+
+Build presentations, one-pagers, reports, and visual briefs inside a dedicated Designer tab. Multi-page editor with setup flow, brand controls, reusable components, speaker notes, presenter mode, published share links, and export to PDF/HTML/PNG/PPTX. The designer tool can generate images, refine text, add charts, critique pages, and apply safe repairs. Asset-backed media keeps project images and references durable across preview, export, and publish.
+
+[Details →](docs/ARCHITECTURE.md#designer-studio)
+
+### 🪞 Thoth Status & Identity
+
+Self-introspection tool and Preferences UI for checking the current model, channels, tools, memory, logs, Designer projects, and more. Assistant name and personality are configurable, sensitive setting changes require approval, and self-improvement can expose skill-creation and skill-patching tools when enabled.
+
+[Details →](docs/ARCHITECTURE.md#thoth-status--identity)
+
+### 💡 Self-Knowledge & Insights
+
+Prompt-time self-knowledge keeps Thoth aware of its own feature set and live runtime state. Dream Cycle now produces structured insights from recent activity, and the Workflow Console lets you pin, dismiss, and apply them from the UI.
+
+[Details →](docs/ARCHITECTURE.md#self-knowledge--insights)
 
 ### 📬 Messaging Channels
 
@@ -158,15 +176,17 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 
 ### 🧩 Bundled Skills
 
-**10 reusable instruction packs** plus **13 tool guides** injected into the system prompt when enabled — each a `SKILL.md` with YAML frontmatter. Manual skills toggle from Settings; tool guides auto-activate when their linked tools are enabled. Create custom skills via the in-app editor or `~/.thoth/skills/`.
+**12 reusable instruction packs** plus **15 tool guides** injected into the system prompt when enabled — each a `SKILL.md` with YAML frontmatter. Manual skills toggle from Settings; tool guides auto-activate when their linked tools are enabled. Create custom skills via the in-app editor or `~/.thoth/skills/`.
 
 | Skill | Description |
 |-------|-------------|
 | 🧠 **Brain Dump** | Capture unstructured thoughts → organized notes |
-| 📊 **Data Analyst** | Dataset analysis, stats, and Plotly charts |
 | ☀️ **Daily Briefing** | Weather, calendar, and news roundup |
+| 📊 **Data Analyst** | Dataset analysis, stats, and Plotly charts |
 | 🔬 **Deep Research** | Multi-source research → structured report |
+| 🎨 **Design Creator** | Structured workflow for presentations, one-pagers, reports, and marketing layouts in Designer Studio |
 | 🗣️ **Humanizer** | Natural human tone — no AI-speak |
+| 📚 **Knowledge Base** | Manage the personal knowledge base across graph memories, uploaded documents, and the wiki vault |
 | 📋 **Meeting Notes** | Raw notes → actionable minutes |
 | 🎯 **Proactive Agent** | Anticipate needs, self-check at milestones |
 | 🪞 **Self-Reflection** | Review memory for gaps and contradictions |
@@ -179,23 +199,23 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 
 ### How does Thoth compare to OpenClaw?
 
-[OpenClaw](https://github.com/openclaw/openclaw) is the most popular open-source personal AI assistant (~350k stars). It's a powerful multi-channel gateway built for developers comfortable in the terminal. Here's how the two compare:
+[OpenClaw](https://github.com/openclaw/openclaw) is a popular open-source personal AI assistant. It's a powerful multi-channel gateway built for developers comfortable in the terminal. Here's how the two compare:
 
 | | Thoth | OpenClaw |
 |---|---|---|
 | **Getting started** | **One-click installer** (`.exe` / `.dmg`) — download, run, done. Built-in setup wizard, no terminal required | `npm install -g openclaw@latest` → CLI onboarding. Requires Node.js 24. Windows needs WSL2 (no native Windows support) |
 | **Local AI (offline)** | **Local-first** — Ollama with 39 curated models out of the box. Works fully offline. Cloud is opt-in | Cloud-first design — requires an API key to start. Local model support through provider config |
 | **Memory** | **Personal knowledge graph** — 10 entity types, typed directional relations, visual explorer, FAISS semantic search + 1-hop graph expansion, memory decay, orphan repair | Flat markdown files (`MEMORY.md` + daily notes) with semantic search. No structured graph |
-| **Knowledge refinement** | **Dream Cycle** — 4-phase nightly engine: duplicate merging (≥0.93 similarity), description enrichment, relationship inference with hub diversity caps and rejection cache, confidence decay on stale relations. 3-layer anti-contamination system, dream journal | Dreaming (experimental) — Light/Deep/REM phases that promote short-term signals to long-term memory via scoring thresholds |
+| **Knowledge refinement** | **Dream Cycle** — 5-phase nightly engine: duplicate merging (≥0.93 similarity), description enrichment, stale-confidence decay, relationship inference with hub diversity caps and rejection cache, and actionable insight generation. 3-layer anti-contamination system, dream journal | Dreaming (experimental) — Light/Deep/REM phases that promote short-term signals to long-term memory via scoring thresholds |
 | **Document intelligence** | **Map-reduce LLM pipeline** — extracts structured entities and relations into the knowledge graph with source provenance. Curated 67-type relation vocabulary, entity caps, self-loop rejection. Supports PDF, DOCX, EPUB, HTML, Markdown | File read/write/edit operations in the workspace |
 | **Wiki vault** | **Obsidian-compatible export** — one `.md` per entity with `[[wiki-links]]`, YAML frontmatter, and per-type indexes | Not available |
 | **Voice** | **Fully local** — faster-whisper STT + Kokoro TTS with 10 voices. Audio never leaves your machine | ElevenLabs (cloud TTS) + system fallback. Voice Wake on macOS/iOS |
 | **Health tracking** | **Built-in tracker** — medications, symptoms, exercise, mood, sleep, periods. Streak analysis, CSV export, Plotly charts | Not available |
-| **Tools** | 25 tools / 79 sub-operations — Gmail, Calendar, Arxiv, YouTube, Wolfram Alpha, Plotly charts, wiki vault, habit tracker, image generation, X (Twitter) | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
+| **Tools** | 27 core tools plus auto-generated channel send tools — shell, browser, filesystem, Gmail, Calendar, Designer Studio, Thoth Status, memory graph, image generation, and research tools | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
 | **Messaging channels** | **5 channels** — Telegram, WhatsApp, Discord, Slack, SMS — all with streaming, reactions, media, and approval routing. Auto-generated per-channel tools. Tunnel manager for webhooks | **23+ channels** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, and many more |
 | **Autonomous agents** | **Advanced workflows** — step-based pipelines with conditions, approval gates, webhook triggers, concurrency groups, and per-workflow safety mode. Multiple run in parallel with their own persistent threads | Multi-agent routing with isolated sessions per sender/channel |
 | **Desktop app** | Native window (pywebview) + system tray on **Windows & macOS**. One-click installers for both | macOS menu bar app. No native Windows app (WSL2 required). iOS & Android companion apps |
-| **Canvas** | Mermaid diagrams and Plotly charts rendered inline | A2UI — agent-driven interactive visual workspace |
+| **Designer / Canvas** | Designer Studio for decks, one-pagers, reports, published links, plus Mermaid diagrams and Plotly charts rendered inline | A2UI — agent-driven interactive visual workspace |
 | **Plugins** | Sandboxed plugin marketplace with hot-reload and security scanning | npm plugin ecosystem + ClawHub skill registry. Large community catalog |
 | **Privacy** | All data local. No account, no server, no telemetry. API keys stored locally — Thoth has no servers | Self-hosted gateway. Data stays on your machine. Some channel integrations require external services |
 | **Cost** | **Free** with local models. Cloud: pay-per-token (pennies/conversation) | Free + open source. Requires a cloud API key to function |
@@ -206,9 +226,9 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 
 ---
 
-## 🔧 Tools (25 Tools / 79 Sub-tools)
+## 🔧 Tools
 
-Thoth's agent has access to 25 tools that expose 79 individual operations to the model. Tools can be enabled/disabled from the Settings panel.
+Thoth's agent has access to 27 core tool modules. Many of them expose multiple operations, and running messaging channels add extra send/photo/document tools automatically. Tools can be enabled or disabled from the Settings panel.
 
 ### Search & Knowledge
 
@@ -235,8 +255,15 @@ Thoth's agent has access to 25 tools that expose 79 individual operations to the
 | **📋 Workflows** | Create, list, update, delete, and run advanced workflows — step-based pipelines with conditions, approvals, triggers, 7 schedule types (daily, weekly, weekdays, weekends, interval, cron, delay), channel delivery, per-task model override | None |
 | **📋 Tracker** | Habit/health tracker — log meds, symptoms, exercise, periods; streak, adherence, trend analysis; CSV export | None |
 | **📬 Channels** | Auto-generated send/photo/document tools for each running channel (Telegram, WhatsApp, Discord, Slack, SMS); receive voice, photos, and documents with transcription, analysis, and text extraction | Per-channel config |
-| **🐦 X (Twitter)** | Read timeline, search, post, reply, retweet, like/unlike, mentions, followers/following — 13 API operations via OAuth 2.0 PKCE | X API keys |
+| **🐦 X (Twitter)** | Grouped read, post, and engage operations for search, timeline, mentions, user info, posting, replies, quotes, likes, reposts, bookmarks, and deletes via OAuth 2.0 PKCE | X API keys |
 | **🖼️ Image Generation** | Generate images from text prompts and edit existing images via OpenAI, xAI (Grok Imagine), and Google (Imagen 4, Nano Banana); rendered inline in chat and deliverable to channels | Cloud API key |
+
+### Design & Self-Management
+
+| Tool | Description | API Key? |
+|------|-------------|----------|
+| **🎨 Designer** | Create and edit multi-page presentations, one-pagers, reports, and marketing layouts; manage pages, brand, components, charts, images, speaker notes, exports, and publish links | None |
+| **🪞 Thoth Status** | Query version, model, channels, tools, memory, identity, logs, Designer projects, and more; controlled self-management for selected settings and optional skill creation/patching when self-improvement is enabled | None |
 
 ### Computation & Analysis
 
@@ -286,13 +313,14 @@ Thoth's agent has access to 25 tools that expose 79 individual operations to the
 │               LangGraph ReAct Agent (agent.py)                       │
 │                                                                      │
 │   create_react_agent() with pre-model message trimming              │
-│   System prompt with TOOL USE, MEMORY, and CITATION guidelines      │
+│   System prompt with TOOL USE, MEMORY, SELF-KNOWLEDGE, and CITATION │
+│   guidelines                                                        │
 │   Interrupt mechanism for destructive action confirmation            │
 │   Graph-enhanced auto-recall (semantic + 1-hop expansion)           │
 │   Per-thread model override (local or cloud)                        │
 │                                                                      │
-│   79 LangChain sub-tools from 25 registered tool modules            │
-│   + plugin tools + auto-generated channel tools                     │
+│   27 core tool modules + plugin tools + auto-generated channel      │
+│   tools                                                             │
 └───────┬──────────┬──────────┬──────────┬──────────┬─────────────────┘
         │          │          │          │          │
         ▼          ▼          ▼          ▼          ▼
@@ -342,13 +370,13 @@ Thoth's agent has access to 25 tools that expose 79 individual operations to the
 
 ### Windows
 
-1. Download **[ThothSetup_3.15.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.16.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.15.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.16.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Open the DMG and drag **Thoth.app** into the **Applications** folder
 3. Launch **Thoth** from Applications or Launchpad
    - First run may prompt "Thoth is an app downloaded from the internet" → click **Open**
@@ -464,6 +492,7 @@ For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credent
    - *"I took my Lexapro"* → asks to log, then saves to Tracker
    - *"Show my headache trends this month"* → uses Tracker + Chart
    - *"Remind me to call the dentist tomorrow at 9am"* → uses Tasks with scheduling
+   - *"Create a 6-slide pitch deck for my startup"* → uses Designer
    - *"What did I ask about taxes last week?"* → uses Conversation Search
 4. **Open ⚙️ Settings** to configure models, enable/disable tools, and set up integrations
 

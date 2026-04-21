@@ -64,6 +64,10 @@ def open_settings(
         validate_xai_key,
         CONTEXT_SIZE_OPTIONS,
         CONTEXT_SIZE_LABELS,
+        CLOUD_CONTEXT_SIZE_OPTIONS,
+        CLOUD_CONTEXT_SIZE_LABELS,
+        get_cloud_context_size,
+        set_cloud_context_size,
         is_cloud_available,
         _cloud_model_cache,
     )
@@ -357,49 +361,43 @@ def open_settings(
         # Context window
         _is_cloud_ctx = is_cloud_model(state.current_model)
         ctx_opts = {v: CONTEXT_SIZE_LABELS.get(v, str(v)) for v in CONTEXT_SIZE_OPTIONS}
-
-        ctx_cloud_info = ui.label(
-            "☁️ Cloud models automatically use their full native context window."
-        ).classes("text-xs text-grey-6")
-        ctx_cloud_info.visible = _is_cloud_ctx
-
-        _cloud_max = get_model_max_context() if _is_cloud_ctx else None
-        _cloud_max_lbl = (
-            f"{_cloud_max // 1_000}K" if _cloud_max and _cloud_max < 1_000_000
-            else f"{_cloud_max // 1_000_000}M" if _cloud_max else "?"
-        )
-        ctx_cloud_size = ui.label(
-            f"Effective context: {_cloud_max_lbl} tokens"
-        ).classes("text-xs text-cyan")
-        ctx_cloud_size.visible = _is_cloud_ctx
+        cloud_ctx_opts = {v: CLOUD_CONTEXT_SIZE_LABELS.get(v, str(v))
+                         for v in CLOUD_CONTEXT_SIZE_OPTIONS}
 
         ctx_note = ui.label("").classes("text-xs text-warning")
         ctx_note.visible = False
 
+        def _fmt_ctx(val):
+            if val and val >= 1_000_000:
+                return f"{val // 1_000_000}M"
+            if val and val >= 1_000:
+                return f"{val // 1_000}K"
+            return "?"
+
         def _update_ctx_note():
             _cloud = is_cloud_model(state.current_model)
-            ctx_cloud_info.visible = _cloud
+            cloud_ctx_select.visible = _cloud
             ctx_select.visible = not _cloud
+            native_max = get_model_max_context()
             if _cloud:
-                _cmax = get_model_max_context()
-                if _cmax:
-                    _clbl = (
-                        f"{_cmax // 1_000}K" if _cmax < 1_000_000
-                        else f"{_cmax // 1_000_000}M"
-                    )
-                    ctx_cloud_size.text = f"Effective context: {_clbl} tokens"
-                ctx_cloud_size.visible = True
-                ctx_note.visible = False
+                # Show effective context info below cloud dropdown
+                effective = min(get_cloud_context_size(), native_max) if native_max else get_cloud_context_size()
+                native_lbl = _fmt_ctx(native_max) if native_max else "?"
+                ctx_note.text = f"ℹ️ Model native max: {native_lbl} — effective: {_fmt_ctx(effective)}"
+                ctx_note.visible = True
             else:
-                ctx_cloud_size.visible = False
-                model_max = get_model_max_context()
                 user_val = get_user_context_size()
-                if model_max is not None and user_val > model_max:
-                    max_label = CONTEXT_SIZE_LABELS.get(model_max, f"{model_max:,}")
+                if native_max is not None and user_val > native_max:
+                    max_label = CONTEXT_SIZE_LABELS.get(native_max, f"{native_max:,}")
                     ctx_note.text = f"ℹ️ Model max is {max_label} — trimming will use {max_label}"
                     ctx_note.visible = True
                 else:
                     ctx_note.visible = False
+
+        def _on_cloud_ctx_change(e):
+            set_cloud_context_size(e.value)
+            clear_agent_cache()
+            _update_ctx_note()
 
         def _on_ctx_change(e):
             set_context_size(e.value)
@@ -414,6 +412,17 @@ def open_settings(
                     f"Context capped: model max is {max_lbl} (you selected {usr_lbl}).",
                     type="warning", close_button=True, timeout=8000,
                 )
+
+        cloud_ctx_select = ui.select(
+            label="☁️ Cloud context window",
+            options=cloud_ctx_opts,
+            value=get_cloud_context_size(),
+            on_change=_on_cloud_ctx_change,
+        ).classes("w-full").tooltip(
+            "Caps how much conversation history is sent to the cloud model. "
+            "Lower values reduce cost and rate-limit pressure."
+        )
+        cloud_ctx_select.visible = _is_cloud_ctx
 
         ctx_select = ui.select(
             label="Local context window",
@@ -1689,6 +1698,7 @@ def open_settings(
                     _refresh_x_header()
                     ui.notify("✅ X authentication successful!", type="positive")
                 except Exception as exc:
+                    logger.error("X authentication failed: %s", exc, exc_info=True)
                     ui.notify(f"X authentication failed: {exc}", type="negative")
 
             async def _do_x_reauth():
@@ -2703,6 +2713,117 @@ def open_settings(
         _build_tab(on_browse_marketplace=_open_marketplace)
 
     # ══════════════════════════════════════════════════════════════════
+    # PREFERENCES TAB
+    # ══════════════════════════════════════════════════════════════════
+
+    def _build_preferences_tab() -> None:
+        from identity import (
+            get_identity_config, save_identity_config,
+            sanitize_personality, _DEFAULT_NAME, _PERSONALITY_MAX_LEN,
+            is_self_improvement_enabled, set_self_improvement_enabled,
+        )
+
+        cfg = get_identity_config()
+
+        ui.label("⚙️ Preferences").classes("text-h6")
+        ui.label(
+            "Customize the assistant's name and personality."
+        ).classes("text-grey-6 text-sm")
+        ui.separator()
+
+        # ── Name ─────────────────────────────────────────────────
+        ui.label("Assistant name").classes("text-subtitle2 q-mt-sm")
+
+        name_input = ui.input(
+            label="Name",
+            value=cfg["name"],
+            validation={
+                "Name cannot be empty": lambda v: bool(v and v.strip()),
+            },
+        ).classes("w-64")
+
+        def _on_name_change(e):
+            val = (e.value or "").strip()
+            if not val:
+                return
+            c = get_identity_config()
+            c["name"] = val
+            save_identity_config(c)
+            clear_agent_cache()
+
+        name_input.on("blur", lambda e: _on_name_change(type("E", (), {"value": name_input.value})))
+
+        ui.separator()
+
+        # ── Personality ──────────────────────────────────────────
+        ui.label("Personality").classes("text-subtitle2")
+        ui.label(
+            "Optional short description of how the assistant should behave. "
+            f"Max {_PERSONALITY_MAX_LEN} characters."
+        ).classes("text-grey-6 text-xs")
+
+        personality_input = ui.textarea(
+            label="Personality",
+            value=cfg["personality"],
+        ).props(f"maxlength={_PERSONALITY_MAX_LEN} counter").classes("w-full")
+
+        def _on_personality_change(e):
+            val = sanitize_personality(e.value or "")
+            c = get_identity_config()
+            c["personality"] = val
+            save_identity_config(c)
+            clear_agent_cache()
+            if val != (e.value or ""):
+                personality_input.set_value(val)
+                ui.notify("Some text was removed (disallowed patterns)", type="warning")
+
+        personality_input.on(
+            "blur",
+            lambda e: _on_personality_change(type("E", (), {"value": personality_input.value})),
+        )
+
+        ui.separator()
+
+        # ── Preview ──────────────────────────────────────────────
+        ui.label("Preview").classes("text-subtitle2")
+        preview = ui.label().classes("text-grey-6 text-sm italic")
+
+        def _update_preview():
+            n = (name_input.value or _DEFAULT_NAME).strip() or _DEFAULT_NAME
+            p_text = sanitize_personality(personality_input.value or "")
+            line = f"You are {n}, a knowledgeable personal assistant with access to tools."
+            if p_text:
+                line += f" {p_text}"
+            preview.set_text(line)
+
+        _update_preview()
+        name_input.on("update:model-value", lambda _: _update_preview())
+        personality_input.on("update:model-value", lambda _: _update_preview())
+
+        ui.separator()
+
+        # ── Self-Improvement Toggle ──────────────────────────────
+        ui.label("Self-Improvement").classes("text-subtitle2")
+        ui.label(
+            "When enabled, the assistant can create and improve skills, "
+            "and receives guidance on how to get better at tasks over time."
+        ).classes("text-grey-6 text-xs")
+
+        def _on_self_improve_change(e):
+            set_self_improvement_enabled(e.value)
+            clear_agent_cache()
+            ui.notify(
+                "Self-improvement enabled" if e.value else "Self-improvement disabled",
+                type="info",
+            )
+
+        ui.switch(
+            "Enable self-improvement",
+            value=is_self_improvement_enabled(),
+            on_change=_on_self_improve_change,
+        )
+
+    # ══════════════════════════════════════════════════════════════════
     # DIALOG SHELL
     # ══════════════════════════════════════════════════════════════════
 
@@ -2738,6 +2859,7 @@ def open_settings(
                         tab_channels = ui.tab("Channels", icon="forum")
                         tab_utils = ui.tab("Utilities", icon="build")
                         tab_plugins = ui.tab("Plugins", icon="extension")
+                        tab_prefs = ui.tab("Preferences", icon="tune")
                         _tab_map = {
                             "Models": tab_models, "Cloud": tab_cloud,
                             "Knowledge": tab_knowledge,
@@ -2750,6 +2872,7 @@ def open_settings(
                             "Accounts": tab_accounts,
                             "Channels": tab_channels, "Utilities": tab_utils,
                             "Plugins": tab_plugins,
+                            "Preferences": tab_prefs,
                         }
 
                 _initial = _tab_map.get(initial_tab, tab_models)
@@ -2769,6 +2892,7 @@ def open_settings(
                     (tab_voice, "Voice", _build_voice_tab),
                     (tab_channels, "Channels", _build_channels_tab),
                     (tab_plugins, "Plugins", _build_plugins_tab),
+                    (tab_prefs, "Preferences", _build_preferences_tab),
                 ]
                 _built_tabs: set[str] = set()
                 _panel_map: dict[str, object] = {}

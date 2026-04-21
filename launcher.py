@@ -356,11 +356,74 @@ if sys.platform == "darwin":
 import webview
 import webbrowser
 
+_NAMED_WINDOWS = {}
+
 class _JsApi:
     """Expose Python helpers to JavaScript via window.pywebview.api."""
     def open_url(self, url):
         if isinstance(url, str) and url.lower().startswith(("https://", "http://")):
             webbrowser.open(url)
+
+    def open_window(self, name, url, title=None, width=1600, height=900):
+        if not isinstance(url, str) or not url.lower().startswith(("https://", "http://")):
+            return False
+
+        try:
+            width = int(width or 1600)
+            height = int(height or 900)
+        except Exception:
+            width, height = 1600, 900
+
+        key = name if isinstance(name, str) else ""
+        if key:
+            existing = _NAMED_WINDOWS.get(key)
+            if existing is not None:
+                try:
+                    existing.load_url(url)
+                    try:
+                        existing.restore()
+                    except Exception:
+                        pass
+                    try:
+                        existing.show()
+                    except Exception:
+                        pass
+                    return True
+                except Exception:
+                    _NAMED_WINDOWS.pop(key, None)
+
+        window = webview.create_window(
+            title or "Thoth",
+            url,
+            width=width,
+            height=height,
+            js_api=_JS_API,
+        )
+        if key:
+            _NAMED_WINDOWS[key] = window
+
+            def _forget(*_args):
+                _NAMED_WINDOWS.pop(key, None)
+
+            try:
+                window.events.closed += _forget
+            except Exception:
+                pass
+        return True
+
+    def close_window(self, name):
+        key = name if isinstance(name, str) else ""
+        if not key:
+            return False
+        window = _NAMED_WINDOWS.get(key)
+        if window is None:
+            return False
+        try:
+            window.destroy()
+            _NAMED_WINDOWS.pop(key, None)
+            return True
+        except Exception:
+            return False
 
     def get_clipboard(self):
         import subprocess as _sp, sys as _sys
@@ -398,9 +461,11 @@ def _on_loaded(window):
     except Exception:
         pass
 
+_JS_API = _JsApi()
+
 url, title = sys.argv[1], sys.argv[2]
 w, h = int(sys.argv[3]), int(sys.argv[4])
-webview.create_window(title, url, width=w, height=h, js_api=_JsApi())
+webview.create_window(title, url, width=w, height=h, js_api=_JS_API)
 webview.start(func=_on_loaded)
 '''
 

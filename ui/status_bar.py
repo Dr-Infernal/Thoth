@@ -55,6 +55,26 @@ def _load_avatar_config() -> dict:
     return {}
 
 
+# ── Public helpers for chat avatar ───────────────────────────────────────
+
+def get_bot_avatar_emoji() -> str:
+    """Return the configured avatar emoji (or default 𓁟)."""
+    return _load_avatar_config().get("emoji", _DEFAULT_EMOJI)
+
+
+def get_bot_avatar_html() -> str:
+    """Return the inner HTML for the bot's chat avatar.
+
+    If the user has a generated image avatar, returns an ``<img>`` tag.
+    Otherwise returns the configured emoji character.
+    """
+    cfg = _load_avatar_config()
+    if cfg.get("mode") == "image" and cfg.get("image"):
+        b64 = cfg["image"]
+        return f'<img src="data:image/png;base64,{b64}" alt="avatar" />'
+    return cfg.get("emoji", _DEFAULT_EMOJI)
+
+
 def _save_avatar_config(avatar: dict) -> None:
     """Save avatar preferences to user_config.json."""
     try:

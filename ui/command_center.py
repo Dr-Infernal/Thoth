@@ -98,13 +98,13 @@ def build_command_center(
     from memory_extraction import set_active_thread
 
     with ui.right_drawer(value=True, fixed=True).style(
-        "width: 440px; border-left: 1px solid rgba(255,255,255,0.08);"
-        " padding: 0;"
-    ).props('no-swipe-open no-swipe-close'):
+        "width: 440px; padding: 0;"
+    ).classes("thoth-panel-card").props('no-swipe-open no-swipe-close width=440'):
         with ui.scroll_area().classes("w-full h-full"):
-            with ui.column().classes("w-full gap-2").style(
-                "overflow: hidden; padding: 6px 8px;"
-            ):
+          with ui.column().classes("w-full gap-2").style(
+              "overflow: hidden; padding: 6px 8px;"
+          ):
+            with ui.column().classes("w-full gap-2 thoth-inner-panel"):
                 with ui.column().classes("w-full gap-0"):
                     ui.label("Workflow Console").classes(
                         "text-subtitle1 font-bold"
@@ -566,6 +566,259 @@ def build_command_center(
 
                 _rebuild_recent()
                 ui.timer(10.0, _rebuild_recent)
+
+            # ════════════════════════════════════════════════════
+            # §6  INSIGHTS  (separate inner panel)
+            # ════════════════════════════════════════════════════
+            with ui.column().classes("w-full gap-2 thoth-inner-panel"):
+                _insights_container = ui.column().classes("w-full gap-0")
+
+                def _rebuild_insights() -> None:
+                    _insights_container.clear()
+                    try:
+                        from insights import (
+                            get_active_insights, get_insights_meta,
+                            dismiss_insight, pin_insight,
+                            update_insight_status,
+                            CATEGORY_ICONS, SEVERITY_SORT,
+                        )
+                    except ImportError:
+                        return
+
+                    active = get_active_insights()
+                    meta = get_insights_meta()
+                    last_analysis = meta.get("last_analysis", "")
+
+                    with _insights_container:
+                        # Header
+                        with ui.row().classes(
+                            "w-full items-center no-wrap gap-1"
+                        ):
+                            ui.label("💡 Insights").classes(
+                                "text-xs font-bold text-grey-5"
+                            ).style(
+                                "letter-spacing: 0.8px;"
+                                " text-transform: uppercase;"
+                            )
+                            if active:
+                                ui.badge(
+                                    str(len(active)), color="amber"
+                                ).props("dense").classes("text-xs")
+                            if last_analysis:
+                                ui.label(
+                                    _relative_time(last_analysis)
+                                ).classes("text-xs text-grey-7").style(
+                                    "margin-left: auto;"
+                                )
+
+                        if not active:
+                            with ui.row().classes(
+                                "w-full justify-center q-py-sm"
+                            ).style("opacity: 0.4;"):
+                                ui.icon("lightbulb", size="sm").classes(
+                                    "text-grey-7"
+                                )
+                                ui.label("No insights yet").classes(
+                                    "text-xs text-grey-7"
+                                )
+                            return
+
+                        for ins in active[:10]:
+                            _render_insight_card(
+                                ins, _rebuild_insights,
+                                state, p, rebuild_main,
+                                rebuild_thread_list,
+                                load_thread_messages,
+                            )
+
+                def _render_insight_card(
+                    ins: dict,
+                    refresh_fn,
+                    state: AppState,
+                    p: P,
+                    rebuild_main,
+                    rebuild_thread_list,
+                    load_thread_messages,
+                ) -> None:
+                    from insights import (
+                        dismiss_insight, pin_insight,
+                        update_insight_status,
+                        CATEGORY_ICONS, SEVERITY_SORT,
+                    )
+
+                    cat = ins.get("category", "system_health")
+                    sev = ins.get("severity", "info")
+                    icon = CATEGORY_ICONS.get(cat, "💡")
+                    title = ins.get("title", "Untitled")
+                    body = ins.get("body", "")
+                    suggestion = ins.get("suggestion", "")
+                    iid = ins["id"]
+                    is_pinned = ins.get("status") == "pinned"
+                    has_draft = bool(ins.get("skill_draft"))
+                    can_apply = (
+                        cat == "skill_proposal"
+                        and bool(ins.get("auto_fixable"))
+                        and has_draft
+                    )
+
+                    sev_colors = {
+                        "critical": "#ff5252",
+                        "warning": "#f0c040",
+                        "info": "rgba(255,255,255,0.15)",
+                    }
+                    border_color = sev_colors.get(sev, sev_colors["info"])
+
+                    with ui.card().classes("w-full q-my-xs").style(
+                        f"padding: 0.4rem 0.5rem;"
+                        f" border-left: 3px solid {border_color};"
+                        f" overflow: hidden; box-sizing: border-box;"
+                    ):
+                        # Title row
+                        with ui.row().classes(
+                            "w-full items-center no-wrap gap-1"
+                        ).style("overflow: hidden;"):
+                            ui.label(icon).style("font-size: 0.85rem;")
+                            ui.label(title).classes(
+                                "text-xs font-bold ellipsis"
+                            ).style("flex: 1; min-width: 0;")
+                            if is_pinned:
+                                ui.icon(
+                                    "push_pin", size="xs"
+                                ).classes("text-amber")
+
+                        # Body
+                        if body:
+                            ui.label(body).classes(
+                                "text-xs text-grey-6"
+                            ).style(
+                                "white-space: normal;"
+                                " word-break: break-word;"
+                            )
+
+                        # Suggestion
+                        if suggestion:
+                            ui.label(
+                                f"💬 {suggestion}"
+                            ).classes("text-xs text-grey-5").style(
+                                "white-space: normal;"
+                                " word-break: break-word;"
+                                " font-style: italic;"
+                            )
+
+                        # Action buttons
+                        with ui.row().classes(
+                            "w-full items-center gap-1 q-mt-xs"
+                        ):
+                            # Dismiss
+                            def _dismiss(i=iid):
+                                dismiss_insight(i)
+                                ui.notify("Insight dismissed", type="info")
+                                refresh_fn()
+
+                            ui.button(
+                                "Dismiss", on_click=_dismiss
+                            ).props(
+                                "flat dense no-caps size=xs"
+                            ).style("color: #999;")
+
+                            # Pin / Unpin
+                            if is_pinned:
+                                def _unpin(i=iid):
+                                    update_insight_status(i, "new")
+                                    refresh_fn()
+
+                                ui.button(
+                                    "Unpin", on_click=_unpin
+                                ).props(
+                                    "flat dense no-caps size=xs"
+                                ).style("color: #f0c040;")
+                            else:
+                                def _pin(i=iid):
+                                    pin_insight(i)
+                                    ui.notify("Insight pinned", type="positive")
+                                    refresh_fn()
+
+                                ui.button(
+                                    "Pin", on_click=_pin
+                                ).props(
+                                    "flat dense no-caps size=xs"
+                                ).style("color: #f0c040;")
+
+                            # Investigate — opens chat with context
+                            def _investigate(
+                                ins_title=title,
+                                ins_body=body,
+                                ins_sug=suggestion,
+                            ):
+                                from memory_extraction import set_active_thread
+                                from threads import _save_thread_meta
+                                new_tid = uuid.uuid4().hex[:12]
+                                _save_thread_meta(
+                                    new_tid,
+                                    f"Investigate: {ins_title}",
+                                )
+                                state.thread_id = new_tid
+                                state.thread_name = (
+                                    f"Investigate: {ins_title}"
+                                )
+                                state.messages = []
+                                p.pending_files.clear()
+                                set_active_thread(new_tid)
+                                rebuild_main()
+                                rebuild_thread_list()
+                                # Pre-fill input with context
+                                msg = (
+                                    f"An automated insight was generated:"
+                                    f"\n\n**{ins_title}**\n{ins_body}"
+                                )
+                                if ins_sug:
+                                    msg += f"\n\nSuggestion: {ins_sug}"
+                                msg += (
+                                    "\n\nPlease investigate this and"
+                                    " suggest what I should do."
+                                )
+                                if p.chat_input:
+                                    p.chat_input.value = msg
+
+                            ui.button(
+                                "Investigate", on_click=_investigate
+                            ).props(
+                                "flat dense no-caps size=xs"
+                            ).style("color: #64b5f6;")
+
+                            # Apply — only for skill_proposal with draft
+                            if can_apply:
+                                def _apply(i=iid):
+                                    _apply_skill_draft(i, refresh_fn)
+
+                                ui.button(
+                                    "Apply", on_click=_apply
+                                ).props(
+                                    "flat dense no-caps size=xs"
+                                ).style("color: #66bb6a;")
+
+                _rebuild_insights()
+                ui.timer(30.0, _rebuild_insights)
+
+
+def _apply_skill_draft(
+    insight_id: str, refresh_fn
+) -> None:
+    """Apply a skill-proposal insight through the backend helper."""
+    from nicegui import ui as _ui
+
+    try:
+        from insights import apply_insight
+
+        result = apply_insight(insight_id)
+        _ui.notify(
+            result.get("message", "Failed to apply insight"),
+            type="positive" if result.get("ok") else "warning",
+        )
+        if result.get("ok"):
+            refresh_fn()
+    except Exception as exc:
+        _ui.notify(f"Failed to apply insight: {exc}", type="negative")
 
 
 def _escape_html(text: str) -> str:

@@ -48,3 +48,5 @@ _README_OLD.md
 
 # Internal planning docs (not shipped)
 docs/ENTERPRISE_ROADMAP.md
+docs/DEVELOPER_CHECKLIST.md
+docs/DESIGNER_E2E_TEST.md

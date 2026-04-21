@@ -13,6 +13,10 @@ import logging
 import os
 import sys
 
+_DISCORD_BENIGN_VOICE_LOGGERS = (
+    "discord.client",
+)
+
 # ── Configure root logger (same as production app) ──────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -27,9 +31,12 @@ for _noisy in ("httpx", "httpcore", "urllib3", "asyncio", "multipart",
                "primp", "ddgs", "ddgs.ddgs", "faster_whisper",
                "streamlit", "kaleido", "choreographer"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
+for _discord_noisy in _DISCORD_BENIGN_VOICE_LOGGERS:
+    logging.getLogger(_discord_noisy).setLevel(logging.ERROR)
 
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
-os.environ.setdefault("USER_AGENT", "Thoth/3.9")
+from version import __version__ as _thoth_version
+os.environ.setdefault("USER_AGENT", f"Thoth/{_thoth_version}")
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +149,7 @@ def _check_oauth_tokens(_st=None) -> list[str]:
     from tools import registry as _reg
     warnings: list[str] = []
 
-    for tool_name, display in [("gmail", "Gmail"), ("calendar", "Calendar")]:
+    for tool_name, display in [("gmail", "Gmail"), ("calendar", "Calendar"), ("x", "X (Twitter)")]:
         if not _reg.is_enabled(tool_name):
             continue
         tool = _reg.get_tool(tool_name)
@@ -231,6 +238,14 @@ async def on_startup():
     _set("⚡ Loading workflows…")
     await asyncio.to_thread(lambda: (seed_default_tasks(), start_task_scheduler()))
 
+    # Pre-warm agent graph so first thread switch is fast
+    _set("🧠 Building agent graph…")
+    try:
+        from agent import get_agent_graph
+        await asyncio.to_thread(get_agent_graph)
+    except Exception as exc:
+        logger.warning("Agent graph pre-warm failed (non-fatal): %s", exc)
+
     # ── Load Plugins ────────────────────────────────────────────────────────
     _set("🔌 Loading plugins…")
     try:
@@ -269,7 +284,15 @@ async def on_startup():
                     f"⚠️ {_ch.display_name} failed to auto-start: {exc}"
                 )
 
-
+    # Auto-start tunnel if it was enabled before restart
+    if _ch_config.get("tunnel", "tunnel_main_app", False):
+        try:
+            from tunnel import tunnel_manager
+            if tunnel_manager.is_available():
+                tunnel_manager.start_tunnel(8080, label="main_app")
+                print("[startup] ✅ Main-app tunnel auto-started")
+        except Exception as exc:
+            _st.startup_warnings.append(f"⚠️ Tunnel failed to auto-start: {exc}")
 
     # ── Proactive OAuth token health check ───────────────────────────
     await asyncio.to_thread(_check_oauth_tokens, _st)
@@ -365,6 +388,34 @@ async def index():
     import ui.state as _st
 
     ui.dark_mode(True)
+
+    # ── Global panel card style ──────────────────────────────────────────
+    ui.add_head_html("""
+    <style>
+    .thoth-panel-card {
+        border: 1px solid rgba(255,255,255,0.07) !important;
+        box-shadow: 4px 0 16px rgba(0,0,0,0.45),
+                    -4px 0 16px rgba(0,0,0,0.45),
+                    0 4px 12px rgba(0,0,0,0.35) !important;
+    }
+    .thoth-inner-panel {
+        background: linear-gradient(
+            180deg,
+            rgba(255,255,255,0.05) 0%,
+            rgba(255,255,255,0.015) 100%
+        );
+        border: 1px solid rgba(255,255,255,0.09);
+        border-top-color: rgba(255,255,255,0.14);
+        border-bottom-color: rgba(0,0,0,0.15);
+        border-radius: 10px;
+        padding: 8px 10px;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.07),
+                    inset 0 -1px 0 rgba(0,0,0,0.12),
+                    0 3px 10px rgba(0,0,0,0.35),
+                    0 1px 3px rgba(0,0,0,0.2);
+    }
+    </style>
+    """)
 
     # ── Startup splash (poll until backend is ready) ─────────────────────
     if not _st.startup_ready:
@@ -463,8 +514,9 @@ async def index():
     from ui.terminal_widget import build_terminal_panel
     from tools import registry as _tool_registry
 
-    _outer = ui.column().classes("w-full max-w-7xl mx-auto px-4 no-wrap").style(
+    _outer = ui.column().classes("w-full max-w-7xl mx-auto px-4 no-wrap thoth-panel-card").style(
         "height: calc(100vh - 16px); overflow: hidden; padding-bottom: 12px;"
+        " border-radius: 12px; margin-top: 8px;"
     )
     with _outer:
         p.main_col = ui.column().classes("w-full no-wrap flex-grow").style(
@@ -484,9 +536,35 @@ async def index():
     def _rebuild_main() -> None:
         if p.main_col is None:
             return
+        # Designer needs full width; other views use centered max-w-7xl
+        if state.active_designer_project is not None:
+            _outer.classes(remove="max-w-7xl mx-auto px-4", add="px-2")
+        else:
+            _outer.classes(remove="px-2", add="max-w-7xl mx-auto px-4")
         p.main_col.clear()
         with p.main_col:
-            if state.thread_id is None:
+            if state.active_designer_project is not None:
+                from designer.editor import build_designer_editor
+
+                def _exit_designer():
+                    state.active_designer_project = None
+                    state.thread_id = None
+                    state.thread_name = None
+                    state.messages = []
+                    state.preferred_home_tab = "Designer"
+                    _rebuild_main()
+
+                build_designer_editor(
+                    state.active_designer_project,
+                    on_back=_exit_designer,
+                    send_message=_send_message,
+                    p=p,
+                    state=state,
+                    add_chat_message=lambda msg: add_chat_message(msg, p, state.thread_id),
+                    browse_file=browse_file,
+                    open_settings=_open_settings,
+                )
+            elif state.thread_id is None:
                 build_home(
                     state, p,
                     rebuild_main=_rebuild_main,
@@ -603,6 +681,16 @@ if __name__ in {"__main__", "__mp_main__"}:
     _static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
     if os.path.isdir(_static_dir):
         app.add_static_files("/static", _static_dir)
+
+    from designer.publish import ensure_published_dir
+
+    _published_dir = str(ensure_published_dir())
+    app.add_static_files("/published", _published_dir)
+
+    # Serve user-downloaded font cache
+    _font_cache = os.path.join(os.path.expanduser("~"), ".thoth", "font_cache")
+    if os.path.isdir(_font_cache):
+        app.add_static_files("/_fonts/cache", _font_cache)
 
     _native = "--native" in sys.argv
     _show = "--show" in sys.argv and not _native

@@ -454,8 +454,14 @@ def add_chat_message(msg: dict, p: P, thread_id: str | None = None) -> None:
         return
     is_user = msg["role"] == "user"
     avatar_cls = "thoth-avatar thoth-avatar-user" if is_user else "thoth-avatar thoth-avatar-bot"
-    avatar_content = "👤" if is_user else "𓁟"
-    name = "You" if is_user else "Thoth"
+    if is_user:
+        avatar_content = "👤"
+        name = "You"
+    else:
+        from identity import get_assistant_name
+        from ui.status_bar import get_bot_avatar_html
+        avatar_content = get_bot_avatar_html()
+        name = get_assistant_name()
     stamp = msg.get("timestamp", datetime.now().strftime("%H:%M"))
     with p.chat_container:
         row_cls = "thoth-msg-row thoth-msg-row-user" if is_user else "thoth-msg-row"

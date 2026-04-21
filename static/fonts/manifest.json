@@ -1,0 +1,138 @@
+{
+  "Inter": {
+    "300": "inter-300.woff2",
+    "400": "inter-400.woff2",
+    "600": "inter-600.woff2",
+    "700": "inter-700.woff2"
+  },
+  "Roboto": {
+    "300": "roboto-300.woff2",
+    "400": "roboto-400.woff2",
+    "500": "roboto-500.woff2",
+    "700": "roboto-700.woff2"
+  },
+  "Open Sans": {
+    "300": "open-sans-300.woff2",
+    "400": "open-sans-400.woff2",
+    "600": "open-sans-600.woff2",
+    "700": "open-sans-700.woff2"
+  },
+  "Lato": {
+    "300": "lato-300.woff2",
+    "400": "lato-400.woff2",
+    "700": "lato-700.woff2"
+  },
+  "Montserrat": {
+    "300": "montserrat-300.woff2",
+    "400": "montserrat-400.woff2",
+    "600": "montserrat-600.woff2",
+    "700": "montserrat-700.woff2"
+  },
+  "Poppins": {
+    "300": "poppins-300.woff2",
+    "400": "poppins-400.woff2",
+    "600": "poppins-600.woff2",
+    "700": "poppins-700.woff2"
+  },
+  "Raleway": {
+    "300": "raleway-300.woff2",
+    "400": "raleway-400.woff2",
+    "600": "raleway-600.woff2",
+    "700": "raleway-700.woff2"
+  },
+  "Nunito": {
+    "300": "nunito-300.woff2",
+    "400": "nunito-400.woff2",
+    "600": "nunito-600.woff2",
+    "700": "nunito-700.woff2"
+  },
+  "Source Sans 3": {
+    "300": "source-sans-3-300.woff2",
+    "400": "source-sans-3-400.woff2",
+    "600": "source-sans-3-600.woff2",
+    "700": "source-sans-3-700.woff2"
+  },
+  "Work Sans": {
+    "300": "work-sans-300.woff2",
+    "400": "work-sans-400.woff2",
+    "600": "work-sans-600.woff2",
+    "700": "work-sans-700.woff2"
+  },
+  "DM Sans": {
+    "300": "dm-sans-300.woff2",
+    "400": "dm-sans-400.woff2",
+    "500": "dm-sans-500.woff2",
+    "700": "dm-sans-700.woff2"
+  },
+  "Plus Jakarta Sans": {
+    "300": "plus-jakarta-sans-300.woff2",
+    "400": "plus-jakarta-sans-400.woff2",
+    "600": "plus-jakarta-sans-600.woff2",
+    "700": "plus-jakarta-sans-700.woff2"
+  },
+  "Merriweather": {
+    "300": "merriweather-300.woff2",
+    "400": "merriweather-400.woff2",
+    "700": "merriweather-700.woff2"
+  },
+  "Playfair Display": {
+    "400": "playfair-display-400.woff2",
+    "600": "playfair-display-600.woff2",
+    "700": "playfair-display-700.woff2"
+  },
+  "Lora": {
+    "400": "lora-400.woff2",
+    "500": "lora-500.woff2",
+    "600": "lora-600.woff2",
+    "700": "lora-700.woff2"
+  },
+  "PT Serif": {
+    "400": "pt-serif-400.woff2",
+    "700": "pt-serif-700.woff2"
+  },
+  "Libre Baskerville": {
+    "400": "libre-baskerville-400.woff2",
+    "700": "libre-baskerville-700.woff2"
+  },
+  "Orbitron": {
+    "400": "orbitron-400.woff2",
+    "500": "orbitron-500.woff2",
+    "700": "orbitron-700.woff2"
+  },
+  "Bebas Neue": {
+    "400": "bebas-neue-400.woff2"
+  },
+  "Oswald": {
+    "300": "oswald-300.woff2",
+    "400": "oswald-400.woff2",
+    "500": "oswald-500.woff2",
+    "700": "oswald-700.woff2"
+  },
+  "Anton": {
+    "400": "anton-400.woff2"
+  },
+  "Space Grotesk": {
+    "300": "space-grotesk-300.woff2",
+    "400": "space-grotesk-400.woff2",
+    "500": "space-grotesk-500.woff2",
+    "700": "space-grotesk-700.woff2"
+  },
+  "Fira Code": {
+    "300": "fira-code-300.woff2",
+    "400": "fira-code-400.woff2",
+    "500": "fira-code-500.woff2",
+    "700": "fira-code-700.woff2"
+  },
+  "JetBrains Mono": {
+    "300": "jetbrains-mono-300.woff2",
+    "400": "jetbrains-mono-400.woff2",
+    "500": "jetbrains-mono-500.woff2",
+    "700": "jetbrains-mono-700.woff2"
+  },
+  "IBM Plex Mono": {
+    "300": "ibm-plex-mono-300.woff2",
+    "400": "ibm-plex-mono-400.woff2",
+    "500": "ibm-plex-mono-500.woff2",
+    "700": "ibm-plex-mono-700.woff2"
+  }
+}

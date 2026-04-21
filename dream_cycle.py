@@ -26,7 +26,7 @@ import pathlib
 import re
 import threading
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -174,10 +174,10 @@ def _record_rejection(entity_a_id: str, entity_b_id: str) -> None:
     """Record that a pair was rejected by the LLM."""
     cache = _load_rejection_cache()
     pair_key = "|".join(sorted([entity_a_id, entity_b_id]))
-    cache[pair_key] = datetime.now().isoformat()
+    cache[pair_key] = datetime.now(timezone.utc).isoformat()
     # Prune expired entries while we're here
     ttl = _rejection_cache_ttl_days()
-    cutoff = (datetime.now() - timedelta(days=ttl)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl)).isoformat()
     cache = {k: v for k, v in cache.items() if v > cutoff}
     _save_rejection_cache(cache)
 
@@ -190,7 +190,7 @@ def _is_pair_recently_rejected(entity_a_id: str, entity_b_id: str) -> bool:
     if not ts:
         return False
     ttl = _rejection_cache_ttl_days()
-    cutoff = (datetime.now() - timedelta(days=ttl)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl)).isoformat()
     return ts > cutoff
 
 
@@ -246,8 +246,13 @@ def _is_ollama_busy() -> bool:
             import json as _json
             data = _json.loads(resp.read())
             models = data.get("models", [])
-            # If any model is loaded, Ollama is in use
-            return len(models) > 0
+            # A model is truly busy only when it has active slots in use.
+            # A model that is merely loaded/cached (size_vram > 0 but
+            # num_requests == 0) should not block the dream cycle.
+            return any(
+                m.get("num_requests", m.get("size_vram", 0)) > 0
+                for m in models
+            )
     except Exception:
         # Can't reach Ollama — not busy (or using cloud model)
         return False
@@ -526,7 +531,7 @@ def _extract_relevant_sentences(text: str, names: set[str], max_chars: int = 500
     return " ".join(kept)
 
 
-def _collect_other_subjects(entity_id: str, all_entities: list[dict] | None = None) -> set[str]:
+def _collect_other_subjects(entity_id: str | None, all_entities: list[dict] | None = None) -> set[str]:
     """Build a set of lowercased subject names for all entities EXCEPT *entity_id*.
 
     Used by the post-enrichment validator to detect cross-entity fact-bleed.
@@ -537,7 +542,7 @@ def _collect_other_subjects(entity_id: str, all_entities: list[dict] | None = No
 
     others: set[str] = set()
     for e in all_entities:
-        if e["id"] == entity_id:
+        if entity_id and e["id"] == entity_id:
             continue
         subj = (e.get("subject", "") or "").strip().lower()
         if subj and len(subj) >= 3 and subj != "user":
@@ -547,6 +552,27 @@ def _collect_other_subjects(entity_id: str, all_entities: list[dict] | None = No
             if alias and len(alias) >= 3 and alias != "user":
                 others.add(alias)
     return others
+
+
+def _prepare_enrichment_inputs(
+    all_entities: list[dict],
+    merges: list[dict],
+    min_chars: int,
+) -> tuple[list[dict], set[str]]:
+    """Prepare Phase 2 enrichment candidates and validation guardrails."""
+    merged_ids = {
+        item.get("duplicate_id")
+        for item in merges
+        if item.get("duplicate_id")
+    }
+    surviving_entities = [
+        entity for entity in all_entities
+        if entity["id"] not in merged_ids
+    ]
+    thin_entities = _find_thin_entities(surviving_entities, min_chars)
+    thin_entities.sort(key=lambda entity: entity.get("updated_at", ""))
+    other_subjects = _collect_other_subjects(None, surviving_entities)
+    return thin_entities[:20], other_subjects
 
 
 def _validate_enrichment(
@@ -991,6 +1017,238 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
     }
 
 
+# ── OP5: Insights analysis ──────────────────────────────────────────────────
+
+def _collect_system_snapshot() -> str:
+    """Gather a text snapshot of recent system activity for insights analysis."""
+    sections: list[str] = []
+
+    # 1. Recent logs (warnings and errors only)
+    try:
+        from logging_config import read_recent_logs
+        logs = read_recent_logs(100)
+        error_logs = [
+            entry for entry in logs
+            if entry.get("level", "").upper() in ("WARNING", "ERROR", "CRITICAL")
+        ]
+        if error_logs:
+            lines = []
+            for entry in error_logs[:30]:
+                ts = entry.get("ts", "?")
+                lvl = entry.get("level", "?")
+                msg = entry.get("msg", "")[:200]
+                tool = entry.get("tool", "")
+                tool_label = f" [{tool}]" if tool else ""
+                lines.append(f"  [{ts}]{tool_label} {lvl}: {msg}")
+            sections.append("RECENT WARNINGS/ERRORS (last 7 days):\n" + "\n".join(lines))
+            tool_counts: dict[str, int] = {}
+            for entry in error_logs:
+                tool = (entry.get("tool", "") or "").strip()
+                if not tool:
+                    continue
+                tool_counts[tool] = tool_counts.get(tool, 0) + 1
+            if tool_counts:
+                count_lines = [
+                    f"  {tool}: {count}"
+                    for tool, count in sorted(tool_counts.items(), key=lambda item: (-item[1], item[0]))
+                ]
+                sections.append("TOOL ERROR COUNTS:\n" + "\n".join(count_lines))
+            else:
+                sections.append("TOOL ERROR COUNTS: None")
+        else:
+            sections.append("RECENT WARNINGS/ERRORS: None")
+            sections.append("TOOL ERROR COUNTS: None")
+    except Exception:
+        sections.append("RECENT WARNINGS/ERRORS: (unavailable)")
+        sections.append("TOOL ERROR COUNTS: (unavailable)")
+
+    # 2. Knowledge graph stats
+    try:
+        import knowledge_graph as kg
+        entity_count = kg.count_entities()
+        relation_count = kg.count_relations()
+        sections.append(
+            f"KNOWLEDGE GRAPH: {entity_count} entities, {relation_count} relations"
+        )
+    except Exception:
+        sections.append("KNOWLEDGE GRAPH: (unavailable)")
+
+    # 3. Document library
+    try:
+        from documents import load_processed_files
+        processed_files = load_processed_files()
+        sections.append(f"DOCUMENT LIBRARY: {len(processed_files)} indexed files")
+    except Exception:
+        sections.append("DOCUMENT LIBRARY: (unavailable)")
+
+    # 4. Task history
+    try:
+        from tasks import list_tasks
+        tasks = list_tasks()
+        if tasks:
+            lines = []
+            for t in tasks[:15]:
+                name = t.get("name", "?")
+                enabled = t.get("enabled", False)
+                last_run = t.get("last_run") or "never"
+                last_status = t.get("last_status")
+                if not last_status:
+                    last_status = "never_run" if last_run == "never" else "no_history"
+                lines.append(f"  {name}: enabled={enabled}, last_run={last_run}, status={last_status}")
+            sections.append("TASKS:\n" + "\n".join(lines))
+        else:
+            sections.append("TASKS: None configured")
+    except Exception:
+        sections.append("TASKS: (unavailable)")
+
+    # 5. Skills
+    try:
+        from skills import get_all_skills, get_enabled_skills
+        all_skills = get_all_skills()
+        enabled = get_enabled_skills()
+        skill_names = [s.display_name or s.name for s in all_skills]
+        sections.append(
+            f"SKILLS: {len(enabled)} enabled / {len(all_skills)} total — "
+            + ", ".join(skill_names[:20])
+        )
+    except Exception:
+        sections.append("SKILLS: (unavailable)")
+
+    # 6. Channels
+    try:
+        from channels.registry import configured_channels, running_channels
+        configured = configured_channels()
+        running = running_channels()
+        if configured:
+            lines = [f"  {ch.label}: running={ch in running}" for ch in configured]
+            sections.append("CHANNELS:\n" + "\n".join(lines))
+        else:
+            sections.append("CHANNELS: None configured")
+    except Exception:
+        sections.append("CHANNELS: (unavailable)")
+
+    # 7. Last dream cycle
+    try:
+        journal = _load_journal()
+        if journal:
+            last = journal[-1]
+            sections.append(
+                f"LAST DREAM CYCLE: {last.get('timestamp', '?')} — {last.get('summary', '?')}"
+            )
+        else:
+            sections.append("LAST DREAM CYCLE: Never run")
+    except Exception:
+        sections.append("LAST DREAM CYCLE: (unavailable)")
+
+    # 8. Existing active insights (so LLM avoids duplicates)
+    try:
+        from insights import get_active_insights
+        active = get_active_insights()
+        if active:
+            lines = [f"  [{i['category']}] {i['title']}" for i in active[:10]]
+            sections.append("EXISTING ACTIVE INSIGHTS:\n" + "\n".join(lines))
+    except Exception:
+        pass
+
+    return "\n\n".join(sections)
+
+
+def _run_insights_phase(cycle_id: str, on_status=None) -> dict:
+    """Phase 5: Analyze system state and generate insights.
+
+    Returns a dict with 'insights_added' and 'insights_merged' counts.
+    """
+    from prompts import DREAM_INSIGHTS_PROMPT
+    import insights
+
+    result = {"insights_added": 0, "insights_merged": 0, "errors": []}
+
+    def _status(msg: str):
+        logger.info("Dream [%s]: %s", cycle_id, msg)
+        if on_status:
+            on_status(msg)
+
+    _status("Phase 5: Analyzing system for insights…")
+
+    # Collect data
+    try:
+        snapshot = _collect_system_snapshot()
+    except Exception as exc:
+        result["errors"].append(f"Snapshot collection failed: {exc}")
+        return result
+
+    # Get assistant name for prompt
+    try:
+        from identity import get_assistant_name
+        name = get_assistant_name()
+    except Exception:
+        name = "Thoth"
+
+    prompt = DREAM_INSIGHTS_PROMPT.format(
+        assistant_name=name,
+        snapshot=snapshot,
+    )
+
+    # LLM call
+    try:
+        raw = _llm_call(prompt)
+    except Exception as exc:
+        result["errors"].append(f"Insights LLM call failed: {exc}")
+        return result
+
+    # Parse JSON array
+    try:
+        # Try to extract JSON array from response
+        import knowledge_graph as _kg_parse
+        json_str = _kg_parse.extract_json_block(raw, "[")
+        if not json_str:
+            # Fallback: try the whole response
+            json_str = raw.strip()
+        items = json.loads(json_str)
+        if not isinstance(items, list):
+            items = []
+    except (json.JSONDecodeError, TypeError) as exc:
+        logger.warning("Dream insights: failed to parse LLM response: %s", exc)
+        result["errors"].append(f"JSON parse error: {exc}")
+        return result
+
+    # Store each insight
+    for item in items[:5]:  # Cap at 5 per cycle
+        try:
+            added = insights.add_insight(
+                category=item.get("category", "system_health"),
+                severity=item.get("severity", "info"),
+                title=item.get("title", "Untitled insight")[:100],
+                body=item.get("body", ""),
+                evidence=item.get("evidence", []),
+                suggestion=item.get("suggestion", ""),
+                auto_fixable=item.get("auto_fixable", False),
+                confidence=float(item.get("confidence", 0.5)),
+                source_cycle=cycle_id,
+                skill_draft=item.get("skill_draft"),
+            )
+            if added:
+                if added.get("_merged"):
+                    result["insights_merged"] += 1
+                else:
+                    result["insights_added"] += 1
+                _status(f"Insight: [{added['category']}] {added['title']}")
+        except Exception as exc:
+            result["errors"].append(f"Insight store error: {exc}")
+
+    # Maintenance
+    try:
+        pruned = insights.auto_prune()
+        if pruned:
+            _status(f"Auto-pruned {pruned} stale insight(s)")
+    except Exception:
+        pass
+
+    insights.set_last_analysis()
+    _status(f"Insights phase: {result['insights_added']} new, {result['insights_merged']} merged")
+    return result
+
+
 # ── Main dream cycle ────────────────────────────────────────────────────────
 
 def run_dream_cycle(on_status=None) -> dict:
@@ -1004,7 +1262,7 @@ def run_dream_cycle(on_status=None) -> dict:
     import knowledge_graph as kg
 
     cycle_id = uuid.uuid4().hex[:8]
-    start_time = datetime.now()
+    start_time = datetime.now(timezone.utc)
     cfg = _load_config()
 
     summary = {
@@ -1028,7 +1286,7 @@ def run_dream_cycle(on_status=None) -> dict:
     if entity_count < cfg.get("min_entities", 20):
         _status(f"Skipped — only {entity_count} entities (min: {cfg.get('min_entities', 20)})")
         summary["summary"] = f"Skipped — {entity_count} entities below minimum"
-        summary["duration_s"] = (datetime.now() - start_time).total_seconds()
+        summary["duration_s"] = (datetime.now(timezone.utc) - start_time).total_seconds()
         _append_journal(summary)
         return summary
 
@@ -1082,16 +1340,13 @@ def run_dream_cycle(on_status=None) -> dict:
         # ── OP2: Description enrichment ──────────────────────────────
         _status("Phase 2: Enriching thin descriptions…")
         min_chars = cfg.get("enrich_min_chars", 80)
-        thin = _find_thin_entities(batch, min_chars)
+        enrichment_candidates, other_subjects = _prepare_enrichment_inputs(
+            all_entities,
+            summary["merges"],
+            min_chars,
+        )
 
-        # Pre-compute other subjects for cross-entity validation
-        other_subjects = _collect_other_subjects("__none__", all_entities)
-
-        for entity in thin[:20]:  # Cap enrichment per cycle
-            # Skip entities that were just merged (may have been deleted)
-            merged_ids = {m.get("duplicate_id") for m in summary["merges"]}
-            if entity["id"] in merged_ids:
-                continue
+        for entity in enrichment_candidates:
 
             excerpts = _find_conversation_mentions(
                 entity.get("subject", ""),
@@ -1118,12 +1373,11 @@ def run_dream_cycle(on_status=None) -> dict:
         _DECAY_DELETE_BELOW = 0.3  # remove if confidence drops below this
         summary["decayed"] = []
         summary["pruned"] = []
+        _decay_conn = None
         try:
-            import sqlite3 as _sqlite3
-            _conn = _sqlite3.connect(kg.DB_PATH)
-            _conn.row_factory = _sqlite3.Row
-            cutoff_date = (datetime.now() - timedelta(days=_DECAY_AFTER_DAYS)).isoformat()
-            stale_rows = _conn.execute(
+            _decay_conn = kg._get_conn()
+            cutoff_date = (datetime.now(timezone.utc) - timedelta(days=_DECAY_AFTER_DAYS)).isoformat()
+            stale_rows = _decay_conn.execute(
                 "SELECT id, source_id, target_id, relation_type, confidence, updated_at "
                 "FROM relations WHERE source = 'dream_infer' AND updated_at < ?",
                 (cutoff_date,),
@@ -1141,9 +1395,9 @@ def run_dream_cycle(on_status=None) -> dict:
                     })
                     _status(f"Pruned stale inference: {row['relation_type']} (conf {old_conf:.2f})")
                 else:
-                    _conn.execute(
+                    _decay_conn.execute(
                         "UPDATE relations SET confidence = ?, updated_at = ? WHERE id = ?",
-                        (new_conf, datetime.now().isoformat(), row["id"]),
+                        (new_conf, datetime.now(timezone.utc).isoformat(), row["id"]),
                     )
                     summary["decayed"].append({
                         "relation_id": row["id"],
@@ -1151,8 +1405,7 @@ def run_dream_cycle(on_status=None) -> dict:
                         "old_confidence": old_conf,
                         "new_confidence": new_conf,
                     })
-            _conn.commit()
-            _conn.close()
+            _decay_conn.commit()
             if summary["decayed"] or summary["pruned"]:
                 _status(
                     f"Decayed {len(summary['decayed'])} stale inference(s), "
@@ -1160,6 +1413,9 @@ def run_dream_cycle(on_status=None) -> dict:
                 )
         except Exception as exc:
             summary["errors"].append(f"Decay error: {exc}")
+        finally:
+            if _decay_conn:
+                _decay_conn.close()
 
         # ── OP4: Relationship inference ──────────────────────────────
         _status("Phase 4: Inferring relationships…")
@@ -1188,6 +1444,15 @@ def run_dream_cycle(on_status=None) -> dict:
             except Exception as exc:
                 summary["errors"].append(f"Infer error: {exc}")
 
+        # ── OP5: Insights analysis ───────────────────────────────────
+        try:
+            insights_result = _run_insights_phase(cycle_id, on_status=on_status)
+            summary["insights"] = insights_result
+            if insights_result.get("errors"):
+                summary["errors"].extend(insights_result["errors"])
+        except Exception as exc:
+            summary["errors"].append(f"Insights error: {exc}")
+
     finally:
         # Restore normal indexing and rebuild once
         kg._skip_reindex = False
@@ -1211,12 +1476,17 @@ def run_dream_cycle(on_status=None) -> dict:
     r = len(summary["inferred_relations"])
     d = len(summary.get("decayed", []))
     p = len(summary.get("pruned", []))
+    ins = summary.get("insights", {})
+    i_add = ins.get("insights_added", 0)
+    i_merge = ins.get("insights_merged", 0)
     errs = len(summary["errors"])
-    duration = (datetime.now() - start_time).total_seconds()
+    duration = (datetime.now(timezone.utc) - start_time).total_seconds()
     summary["duration_s"] = round(duration, 1)
     parts = [f"{m} merge(s), {e} enrichment(s), {r} inference(s)"]
     if d or p:
         parts.append(f"{d} decayed, {p} pruned")
+    if i_add or i_merge:
+        parts.append(f"{i_add} insight(s), {i_merge} merged")
     if errs:
         parts.append(f"{errs} error(s)")
     parts.append(f"in {duration:.0f}s")

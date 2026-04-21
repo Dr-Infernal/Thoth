@@ -199,6 +199,26 @@ def check_calendar_oauth() -> CheckResult:
         return CheckResult("Calendar OAuth", "error", str(exc), settings_tab="Calendar")
 
 
+def check_x_oauth() -> CheckResult:
+    """Check X (Twitter) OAuth token health."""
+    try:
+        from tools import registry
+        if not registry.is_enabled("x"):
+            return CheckResult("X OAuth", "inactive", "Tool disabled", settings_tab="Accounts")
+        tool = registry.get_tool("x")
+        if tool is None or not tool.is_authenticated():
+            return CheckResult("X OAuth", "inactive", "Not authenticated", settings_tab="Accounts")
+        status, detail = tool.check_token_health()
+        if status in ("valid", "refreshed"):
+            label = "Valid" if status == "valid" else "Refreshed"
+            return CheckResult("X OAuth", "ok", label, settings_tab="Accounts")
+        if status == "expired":
+            return CheckResult("X OAuth", "warn", "Token expired", settings_tab="Accounts")
+        return CheckResult("X OAuth", "error", detail, settings_tab="Accounts")
+    except Exception as exc:
+        return CheckResult("X OAuth", "error", str(exc), settings_tab="Accounts")
+
+
 def check_task_scheduler() -> CheckResult:
     """Check APScheduler health."""
     try:
@@ -436,6 +456,7 @@ ALL_CHECKS = [
     check_tunnel,
     check_gmail_oauth,
     check_calendar_oauth,
+    check_x_oauth,
     check_task_scheduler,
     check_memory_extraction,
     check_dream_cycle,
@@ -466,6 +487,7 @@ HEAVY_CHECKS = [
     check_cloud_api,
     check_gmail_oauth,
     check_calendar_oauth,
+    check_x_oauth,
     check_memory_extraction,
     check_dream_cycle,
     check_wiki_vault,

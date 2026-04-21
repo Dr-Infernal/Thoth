@@ -430,7 +430,10 @@ def get_task(task_id: str) -> dict | None:
 def list_tasks() -> list[dict]:
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT * FROM tasks ORDER BY sort_order, created_at"
+        "SELECT t.*, "
+        "(SELECT r.status FROM task_runs r WHERE r.task_id = t.id "
+        " ORDER BY r.started_at DESC LIMIT 1) AS last_status "
+        "FROM tasks t ORDER BY t.sort_order, t.created_at"
     ).fetchall()
     conn.close()
     return [_row_to_dict(r) for r in rows]

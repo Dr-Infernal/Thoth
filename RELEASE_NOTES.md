@@ -2,6 +2,112 @@
 
 ---
 
+## v3.16.0 — Designer Studio, Self-Aware Status & Insight Engine
+
+Thoth gains a full **Designer Studio** for building multi-page presentations, one-pagers, marketing material, and reports inside the app. Designer ships with a home-screen gallery, unified setup flow, live editor, brand controls, reusable components, AI image generation, chart embedding, presenter mode, published deck links, and export to **PDF / HTML / PNG / PPTX**. Outside Designer, Thoth becomes more **self-aware** — a new **Thoth Status** tool can inspect live configuration, tools, channels, logs, and Designer state, **identity** is now configurable, and the dream cycle now produces actionable **insights** surfaced in the Workflow Console. The home UI gains a dedicated **Designer** tab, a new **status bar** with configurable avatar and live health pills, and extracted shared chat components used by both the main chat and Designer. Ships with major regression expansion, including dedicated coverage for Designer Studio, identity, self-knowledge, Thoth Status, and insights, bringing the suite to **1751 PASS / 0 FAIL / 4 WARN**.
+
+### 🎨 Designer Studio
+
+A complete in-app design subsystem for decks, one-pagers, reports, and marketing layouts.
+
+- **New `designer/` subsystem** — gallery, setup flow, editor, preview, export, publish, presentation, history, references, storage, AI content, and brand modules across ~35 new files
+- **Home-screen Designer tab** — `ui/home.py` adds a first-class Designer surface alongside Workflows, Knowledge, and Activity, with a project gallery and direct launch into the editor
+- **Unified project setup flow** — template selection, aspect ratio / canvas sizing, project brief capture, and create-only vs create-and-build-first-draft flows are handled in one entry point instead of separate dialogs
+- **Live multi-page editor** — page navigator, canvas resize controls, interactive preview editing, in-place text editing, undo/redo, and snapshot history support iterative design work without leaving the app
+- **Brand system** — brand presets, color/font controls, logo placement, and brand-variable injection allow consistent styling across pages and exports
+- **Reusable design blocks** — curated components, critique helpers, and deterministic repair flows support structured layout building and safe cleanup passes
+- **AI-assisted content tools** — generate images, refine copy, add charts, generate notes, and update individual pages without rewriting whole projects
+- **Presentation and sharing** — presenter mode, separate audience window support, publishable deck links, and export to PDF / HTML / PNG / PPTX complete the end-to-end workflow
+
+### 🖼️ Asset-Backed Design Media
+
+Designer media now uses persisted asset references instead of bloating project HTML with inline image payloads.
+
+- **Canonical asset refs** — stored project HTML now uses `asset://<asset-id>` references for generated images, inserted images, replaced images, and charts
+- **Persistent media storage** — Designer assets are stored on disk per project and hydrated for preview, export, publish, and presentation output when needed
+- **Compatibility normalization** — render and load paths tolerate legacy data URIs, legacy `asset:` schemes, and malformed “asset-like” identifiers instead of failing hard or leaving broken placeholders
+- **Compact project state** — `designer_get_project` and stored page HTML stay small and structured because binary image data no longer rides inside every page update
+- **Windows-safe atomic writes** — project and asset persistence now use unique temp files plus replace retries for common Windows file-lock cases, avoiding temp-file races and placeholder-only failures
+
+### 🪞 Self-Aware Status & Identity
+
+Thoth can now inspect and describe its own state more accurately, and selected self-management actions are exposed through a dedicated tool.
+
+- **New `thoth_status` tool** — query version, model, channels, memory, skills, tools, API keys, tasks, voice, image generation, config, logs, errors, and Designer project state from one place
+- **Controlled self-management** — `thoth_update_setting` can change selected settings such as model, context caps, dream-cycle settings, tool toggles, skill toggles, image-generation model, and self-improvement mode with explicit approval
+- **Identity module** — new `identity.py` persists assistant name and personality in user config, sanitizes prompt-injection-like text, and stores the self-improvement toggle
+- **Dynamic prompt identity** — `prompts.py` now builds the agent system prompt from the configured identity instead of relying solely on the static fallback string
+- **Self-improvement hooks** — Thoth Status can create new user skills and patch existing skills with backups and bundled-skill overrides when self-improvement is enabled
+- **New tool guide** — `tool_guides/thoth_status_guide/SKILL.md` documents when to query status, when to inspect logs, and how controlled setting changes should be handled
+
+### 🧠 Self-Knowledge, Memory & Insights
+
+The agent now has a richer internal model of its own capabilities, and the dream cycle can turn system observations into actionable follow-up.
+
+- **Self-knowledge manifest** — new `self_knowledge.py` defines a structured feature manifest, dynamic state block, and identity line so the agent can answer “what can you do?” more consistently
+- **Designer and self-awareness prompting** — prompt scaffolding now includes self-knowledge and a dedicated `DREAM_INSIGHTS_PROMPT` for turning recent system activity into structured insight objects
+- **Insights engine** — new `insights.py` persists, deduplicates, prunes, pins, dismisses, and applies insights across categories including error patterns, skill proposals, tool configuration, knowledge quality, usage patterns, and system health
+- **Workflow Console integration** — `ui/command_center.py` adds an Insights panel with dismiss, pin, investigate, and apply actions, including one-click application of auto-fixable skill proposals
+- **Richer memory / graph metadata** — memory extraction and knowledge-graph flows now support aliases, source metadata, stronger relation handling, and updated self-knowledge integration
+
+### 💬 UI & Workflow Updates
+
+- **Shared chat primitives** — new `ui/chat_components.py` extracts the chat message area, upload flow, and input bar into reusable components shared by the main chat and Designer
+- **Status bar overhaul** — `ui/status_bar.py` replaces the old home logo section with a configurable avatar, cached health pills, and a diagnosis button wired into `ui/status_checks.py`
+- **Dynamic health checks** — status checks now cover model availability, cloud APIs, channels, tunnel state, scheduler status, memory extraction freshness, and OAuth-backed tools with consistent `CheckResult` handling
+- **Settings wiring** — settings now expose identity configuration and related persistence instead of treating the assistant name/personality as static
+- **Design workflow guidance** — new bundled `design_creator` skill plus the Designer tool guide help steer presentation and layout workflows more consistently
+
+### 🐛 Bug Fixes
+
+- **Designer image placeholders** — preview and editor rendering now correctly hydrate persisted Designer image assets instead of leaving placeholder-only image blocks when stored HTML contains non-canonical asset references
+- **Gallery preview accuracy** — Designer gallery cards load the real current first-page content instead of relying on stale summary HTML
+- **Atomic save collisions on Windows** — overlapping project saves no longer collide on a shared temp path; unique temp files and replace retries handle common `WinError 2`, `WinError 5`, and `WinError 32` cases more safely
+- **Graceful legacy asset handling** — malformed legacy base64 payloads, invalid legacy logo data, and unresolved legacy asset refs degrade safely instead of breaking the whole project render path
+
+### 🔧 Other Changes
+
+- **Tool registration** — `tools/__init__.py` now registers both the new Thoth Status tool and the Designer tool on startup
+- **Local presentation assets** — `static/reveal/` and `static/fonts/` add self-hosted presentation/runtime assets for Designer export and presentation flows
+- **Version single source of truth** — new `version.py` centralizes the app version string for reuse across the app and tools
+- **Installer / packaging updates** — installer and requirements changes pull the new Designer and self-awareness surfaces into the packaged app
+
+### 🧪 Tests
+
+- **Dedicated Designer coverage** — `test_suite.py` adds Section 72 for Designer Studio, covering imports, setup flow, component rendering, storage, prompt building, preview, export, tool registration, and asset-backed media behavior
+- **Self-awareness coverage** — new tests cover `identity.py`, `self_knowledge.py`, `tools/thoth_status_tool.py`, and `insights.py`, including prompt injection sanitization, status categories, insight CRUD, and semantic deduplication
+- **Designer E2E plan** — `docs/DESIGNER_E2E_TEST.md` documents the manual end-to-end validation path for gallery, editor, branding, AI content, export, and presenter mode
+- **Regression expansion** — the combined suite now validates the new Designer, self-awareness, and insights surfaces end to end, reaching **1751 PASS / 0 FAIL / 4 WARN**
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`designer/`** | **New** — full Designer subsystem: gallery, setup, editor, preview, export, publish, presentation, history, references, storage, assets, and AI content |
+| **`tools/thoth_status_tool.py`** | **New** — self-introspection and controlled self-management tool |
+| **`identity.py`** | **New** — persistent assistant name / personality configuration with sanitization |
+| **`self_knowledge.py`** | **New** — feature manifest, identity line, and self-knowledge prompt block |
+| **`insights.py`** | **New** — persisted dream-cycle insights engine with dedup / apply flows |
+| **`ui/chat_components.py`** | **New** — shared chat UI components for main chat and Designer |
+| **`bundled_skills/design_creator/SKILL.md`** | **New** — behavior skill for structured design workflows |
+| **`tool_guides/designer_guide/SKILL.md`** | **New** — tool-usage guide for Designer workflows |
+| **`tool_guides/thoth_status_guide/SKILL.md`** | **New** — tool-usage guide for self-status and self-management |
+| `app.py` | Launches the dedicated Designer editor flow and published-deck setup |
+| `dream_cycle.py` | Insight generation and refinement updates |
+| `knowledge_graph.py` | Richer metadata, relation handling, and graph-side refinements |
+| `memory_extraction.py` | Updated extraction flow and self-knowledge integration |
+| `prompts.py` | Dynamic identity prompt construction and dream insights prompt |
+| `skills.py` | Self-improvement and guide-related skill plumbing |
+| `tools/__init__.py` | Registers `thoth_status` and the Designer tool |
+| `ui/home.py` | Adds the Designer tab, gallery launch, and editor entry flow |
+| `ui/command_center.py` | Adds the Insights panel and insight actions |
+| `ui/settings.py` | Identity and related settings persistence wiring |
+| `ui/status_bar.py` | Replaces the old logo area with avatar + health status UI |
+| `ui/status_checks.py` | Expanded health checks for channels, tunnel, model, OAuth, and memory extraction |
+| `requirements.txt` | Dependency updates for the new Designer and self-awareness surfaces |
+| `test_suite.py` | Dedicated Designer and self-awareness regression coverage |
+| `docs/DESIGNER_E2E_TEST.md` | **New** — manual Designer end-to-end test plan |
+
 ## v3.15.0 — Multi-Channel Messaging, X Tool, Tunnels & Tool Guides
 
 Thoth goes **multi-channel** — four new messaging adapters join Telegram: **WhatsApp** (via Baileys bridge with QR pairing), **Discord**, **Slack**, and **SMS** (Twilio). All five channels share full parity: streaming responses, typing indicators, reactions, media capture, slash commands, and thread management. A new **tunnel manager** (ngrok) auto-exposes webhook ports so channels like SMS receive inbound messages without manual port forwarding. The **X (Twitter) tool** adds native read, post, and engagement capabilities via OAuth 2.0 PKCE. A **tool guides** system auto-injects per-tool usage instructions into the system prompt when tools are enabled, replacing 120+ lines of hardcoded prompt text. The **sidebar** gains a live **channel health monitor** with status dots, icons, and last-activity tracking. A **chat input redesign** wraps the composer in a modern card layout. Generated images now **persist to disk** so channels can send them after generation. Ships with **~76 net new tests** across 3 sections, covering the X tool, finish-reason detection, and tunnel infrastructure.

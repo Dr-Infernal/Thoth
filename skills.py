@@ -328,6 +328,36 @@ def estimate_tokens(skill_names: Optional[list[str]] = None) -> int:
 # ── Skill CRUD ───────────────────────────────────────────────────────────────
 
 
+def _build_ordered_frontmatter(meta: dict) -> str:
+    """Serialize skill metadata as YAML with canonical field order."""
+    _FIELD_ORDER = [
+        "name", "display_name", "icon", "description",
+        "enabled_by_default", "version", "tools", "tags", "author",
+    ]
+    lines: list[str] = []
+    for key in _FIELD_ORDER:
+        if key not in meta:
+            continue
+        val = meta[key]
+        if isinstance(val, list):
+            lines.append(f"{key}:")
+            for item in val:
+                lines.append(f"  - {item}")
+        elif isinstance(val, bool):
+            lines.append(f"{key}: {'true' if val else 'false'}")
+        elif isinstance(val, str) and ('\n' in val or ':' in val or '"' in val):
+            escaped = val.replace('"', '\\"')
+            lines.append(f'{key}: "{escaped}"')
+        else:
+            lines.append(f"{key}: {val}")
+    # Include any extra keys not in _FIELD_ORDER
+    for key in meta:
+        if key not in _FIELD_ORDER:
+            val = meta[key]
+            lines.append(f"{key}: {val}")
+    return "\n".join(lines) + "\n"
+
+
 def create_skill(
     name: str,
     display_name: str,
@@ -337,9 +367,17 @@ def create_skill(
     tools: Optional[list[str]] = None,
     tags: Optional[list[str]] = None,
     enabled: bool = True,
+    version: str = "1.0",
 ) -> Skill:
     """Create a new user skill on disk and register it in the cache."""
     skill_dir = USER_SKILLS_DIR / name.replace(" ", "-").lower()
+    md_path = skill_dir / "SKILL.md"
+
+    if get_skill(name) is not None:
+        raise ValueError(f"Skill already exists: {name}")
+    if md_path.exists():
+        raise ValueError(f"Skill directory already contains SKILL.md: {skill_dir.name}")
+
     skill_dir.mkdir(parents=True, exist_ok=True)
 
     # Build SKILL.md content
@@ -348,7 +386,7 @@ def create_skill(
         "display_name": display_name,
         "icon": icon,
         "description": description,
-        "version": "1.0",
+        "version": version,
         "author": "User",
         "enabled_by_default": enabled,
     }
@@ -357,13 +395,13 @@ def create_skill(
     if tags:
         meta["tags"] = tags
 
-    frontmatter = yaml.dump(meta, default_flow_style=False, allow_unicode=True)
+    frontmatter = _build_ordered_frontmatter(meta)
     content = f"---\n{frontmatter}---\n\n{instructions}\n"
 
-    (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+    md_path.write_text(content, encoding="utf-8")
 
     # Re-parse to get a clean Skill object
-    skill = _parse_skill_md(skill_dir / "SKILL.md", source="user")
+    skill = _parse_skill_md(md_path, source="user")
     if skill:
         _skills_cache[skill.name] = skill
         _enabled[skill.name] = enabled
@@ -407,7 +445,7 @@ def update_skill(
 
     new_instructions = instructions if instructions is not None else skill.instructions
 
-    frontmatter = yaml.dump(meta, default_flow_style=False, allow_unicode=True)
+    frontmatter = _build_ordered_frontmatter(meta)
     content = f"---\n{frontmatter}---\n\n{new_instructions}\n"
 
     md_path = skill.path / "SKILL.md"

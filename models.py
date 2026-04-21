@@ -105,6 +105,14 @@ CONTEXT_SIZE_OPTIONS = [16384, 32768, 65536, 131072, 262144]
 CONTEXT_SIZE_LABELS = {16384: "16K", 32768: "32K",
                        65536: "64K", 131072: "128K", 262144: "256K"}
 
+# Cloud-model context options (user-selectable cap — reduces cost / rate-limit pressure)
+DEFAULT_CLOUD_CONTEXT_SIZE = 131072   # 128K — safe default for most API tiers
+CLOUD_CONTEXT_SIZE_OPTIONS = [32768, 65536, 131072, 262144, 524288, 1048576]
+CLOUD_CONTEXT_SIZE_LABELS = {
+    32768: "32K", 65536: "64K", 131072: "128K",
+    262144: "256K", 524288: "512K", 1048576: "1M",
+}
+
 # ── Persistent settings file ────────────────────────────────────────────────
 _DATA_DIR = pathlib.Path(os.environ.get("THOTH_DATA_DIR", pathlib.Path.home() / ".thoth"))
 _SETTINGS_PATH = _DATA_DIR / "model_settings.json"
@@ -226,6 +234,9 @@ _num_ctx = _saved.get("context_size", DEFAULT_CONTEXT_SIZE)
 # Clamp legacy values below the new minimum to the smallest option
 if _num_ctx < CONTEXT_SIZE_OPTIONS[0]:
     _num_ctx = CONTEXT_SIZE_OPTIONS[0]
+_cloud_num_ctx = _saved.get("cloud_context_size", DEFAULT_CLOUD_CONTEXT_SIZE)
+if _cloud_num_ctx < CLOUD_CONTEXT_SIZE_OPTIONS[0]:
+    _cloud_num_ctx = CLOUD_CONTEXT_SIZE_OPTIONS[0]
 _llm_instance = None
 _model_max_ctx_cache: dict[str, int | None] = {}  # model_name → max context
 
@@ -339,9 +350,8 @@ def set_active_model_override(name: str) -> None:
 def get_context_size(model_name: str | None = None) -> int:
     """Return the *effective* context size for the given (or current) model.
 
-    - **Cloud models** always use the model's full native context window.
-      Cloud providers handle memory server-side and bill per-token, so
-      there is no reason to artificially limit context.
+    - **Cloud models** use ``min(user_cloud_cap, model_native_max)``.
+      The user-configurable cap reduces cost and rate-limit pressure.
     - **Local (Ollama) models** use ``min(user_setting, model_native_max)``
       because ``num_ctx`` directly controls VRAM usage.
 
@@ -353,8 +363,9 @@ def get_context_size(model_name: str | None = None) -> int:
     name = model_name or _active_model_override.get() or _current_model
     model_max = get_model_max_context(name)
     if is_cloud_model(name):
-        # Cloud: use full native context (fallback via heuristic)
-        return model_max if model_max is not None else _estimate_context_heuristic(name)
+        # Cloud: cap at user-selected limit (reduces cost / rate-limit pressure)
+        native = model_max if model_max is not None else _estimate_context_heuristic(name)
+        return min(_cloud_num_ctx, native)
     # Local: respect user's VRAM-controlling setting
     if model_max is not None:
         return min(_num_ctx, model_max)
@@ -378,6 +389,22 @@ def get_user_context_size() -> int:
     return _num_ctx
 
 
+def get_cloud_context_size() -> int:
+    """Return the raw user-selected cloud context cap."""
+    return _cloud_num_ctx
+
+
+def set_cloud_context_size(size: int):
+    """Change the cloud context cap and recreate the LLM instance."""
+    global _cloud_num_ctx, _llm_instance
+    logger.info("Cloud context size changed: %s → %s", _cloud_num_ctx, size)
+    _cloud_num_ctx = size
+    if is_cloud_model(_current_model):
+        _llm_instance = _get_cloud_llm(_current_model)
+    _save_settings({"model": _current_model, "context_size": _num_ctx,
+                    "cloud_context_size": _cloud_num_ctx})
+
+
 def set_context_size(size: int):
     """Change the context window size and recreate the LLM instance."""
     global _num_ctx, _llm_instance
@@ -387,7 +414,8 @@ def set_context_size(size: int):
         _llm_instance = _get_cloud_llm(_current_model)
     else:
         _llm_instance = ChatOllama(model=_current_model, num_ctx=_num_ctx, reasoning=True)
-    _save_settings({"model": _current_model, "context_size": _num_ctx})
+    _save_settings({"model": _current_model, "context_size": _num_ctx,
+                    "cloud_context_size": _cloud_num_ctx})
 
 
 def get_current_model() -> str:

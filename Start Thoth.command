@@ -34,7 +34,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
 VENV_DIR="$PROJECT_DIR/.venv"
 THOTH_HOME="$HOME/.thoth"
-THOTH_VERSION="3.7.0"
+THOTH_VERSION="$(awk -F'"' '/__version__/ { print $2; exit }' "$PROJECT_DIR/version.py" 2>/dev/null || true)"
+if [ -z "$THOTH_VERSION" ]; then
+    THOTH_VERSION="3.16.0"
+fi
 OLLAMA_PORT=11434
 
 # ── Is this a first-time install? ───────────────────────────────────────────
@@ -273,7 +276,7 @@ RESOURCES="$CONTENTS/Resources"
 mkdir -p "$MACOS_DIR" "$RESOURCES"
 
 # Info.plist
-cat > "$CONTENTS/Info.plist" << 'PLIST'
+cat > "$CONTENTS/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -286,9 +289,9 @@ cat > "$CONTENTS/Info.plist" << 'PLIST'
     <key>CFBundleIdentifier</key>
     <string>com.thoth.assistant</string>
     <key>CFBundleVersion</key>
-    <string>3.7.0</string>
+    <string>${THOTH_VERSION}</string>
     <key>CFBundleShortVersionString</key>
-    <string>3.7.0</string>
+    <string>${THOTH_VERSION}</string>
     <key>CFBundleExecutable</key>
     <string>thoth</string>
     <key>CFBundleIconFile</key>

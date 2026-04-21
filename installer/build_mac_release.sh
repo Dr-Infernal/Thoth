@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-VERSION="${1:-3.15.0}"
+VERSION="${1:-3.16.0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_NAME="Thoth-${VERSION}-macOS"
@@ -62,8 +62,6 @@ rsync -a --exclude='.venv' \
          --exclude='installer/*.exe' \
          --exclude='.DS_Store' \
          --exclude='*.pyc' \
-         --exclude='sounds/*.wav' \
-         --exclude='sounds/*.mp3' \
          --filter='- *.bak' \
          --filter='- *.bak[0-9]*' \
          --filter='- *.bak.*' \

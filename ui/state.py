@@ -48,6 +48,8 @@ class AppState:
         self.tts_service.voice_service = self.voice_service
         set_vision_service(self.vision_service)
         self.attached_data_cache: dict[str, bytes] = {}
+        self.active_designer_project = None  # DesignerProject | None
+        self.preferred_home_tab: str | None = None  # tab to select on next rebuild
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -144,3 +146,10 @@ class P:
     # Sidebar avatar
     sidebar_avatar: Any = None
     sidebar_avatar_label: Any = None
+    # Designer
+    designer_preview_container: Any = None
+    designer_chat_container: Any = None
+    designer_page_nav: Any = None
+
+    def __init__(self) -> None:
+        self.pending_files = []
