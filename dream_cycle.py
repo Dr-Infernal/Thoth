@@ -1103,12 +1103,12 @@ def _collect_system_snapshot() -> str:
 
     # 5. Skills
     try:
-        from skills import get_all_skills, get_enabled_skills
-        all_skills = get_all_skills()
-        enabled = get_enabled_skills()
-        skill_names = [s.display_name or s.name for s in all_skills]
+        from skills import get_manual_skill_statuses
+        skill_statuses = get_manual_skill_statuses()
+        enabled = [skill for skill, is_enabled in skill_statuses if is_enabled]
+        skill_names = [skill.display_name or skill.name for skill, _ in skill_statuses]
         sections.append(
-            f"SKILLS: {len(enabled)} enabled / {len(all_skills)} total — "
+            f"SKILLS: {len(enabled)} enabled / {len(skill_statuses)} total — "
             + ", ".join(skill_names[:20])
         )
     except Exception:

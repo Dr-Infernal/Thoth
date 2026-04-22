@@ -52,9 +52,9 @@ def build_home(
         "align=center"
     ).style("border-bottom: 1px solid rgba(255,255,255,0.08);") as home_tabs:
         tasks_tab = ui.tab("Workflows", icon="bolt")
+        designer_tab = ui.tab("Designer", icon="design_services")
         graph_tab = ui.tab("Knowledge", icon="psychology")
         activity_tab = ui.tab("Activity", icon="assessment")
-        designer_tab = ui.tab("Designer", icon="design_services")
 
     # Choose initial tab (Designer after back / refresh, else Workflows)
     _tab_map = {"Workflows": tasks_tab, "Knowledge": graph_tab,
@@ -273,18 +273,6 @@ def build_home(
                         "text-grey-6 text-sm q-mt-sm"
                     )
 
-        # ── Graph panel ───────────────────────────────────────────
-        with ui.tab_panel(graph_tab).classes("h-full").style(
-            "padding: 0; overflow: hidden; display: flex; flex-direction: column;"
-        ):
-            build_graph_panel()
-
-        # ── Activity panel ───────────────────────────────────────────
-        with ui.tab_panel(activity_tab).classes("h-full").style("padding: 0;"):
-            activity_container = ui.column().classes("w-full h-full")
-            with activity_container:
-                _build_activity_content(activity_container)
-
         # ── Designer panel ───────────────────────────────────────────
         with ui.tab_panel(designer_tab).classes("h-full").style("padding: 0;"):
             from designer.home_tab import build_designer_tab
@@ -333,6 +321,18 @@ def build_home(
                 on_open_project=_open_designer_project,
                 on_refresh=_designer_refresh,
             )
+
+        # ── Graph panel ───────────────────────────────────────────
+        with ui.tab_panel(graph_tab).classes("h-full").style(
+            "padding: 0; overflow: hidden; display: flex; flex-direction: column;"
+        ):
+            build_graph_panel()
+
+        # ── Activity panel ───────────────────────────────────────────
+        with ui.tab_panel(activity_tab).classes("h-full").style("padding: 0;"):
+            activity_container = ui.column().classes("w-full h-full")
+            with activity_container:
+                _build_activity_content(activity_container)
 
 
 # ══════════════════════════════════════════════════════════════════════

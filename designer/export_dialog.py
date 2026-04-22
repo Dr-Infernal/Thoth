@@ -50,6 +50,16 @@ def show_export_dialog(project: DesignerProject) -> None:
 
         ui.label("Quick Presets").classes(SECTION_LABEL_CLASSES + " q-mt-sm").style(SECTION_LABEL_STYLE)
 
+        with ui.row().classes("w-full q-mt-xs flex-wrap").style("gap: 8px;"):
+            pdf_preset_btn = ui.button("Presentation PDF", on_click=lambda: _apply_preset("pdf", "all"))
+            style_secondary_button(pdf_preset_btn, compact=True)
+            pptx_preset_btn = ui.button("Editable PPTX", on_click=lambda: _apply_preset("pptx", "all", mode="structured"))
+            style_secondary_button(pptx_preset_btn, compact=True)
+            html_preset_btn = ui.button("Shareable HTML", on_click=lambda: _apply_preset("html", "all"))
+            style_secondary_button(html_preset_btn, compact=True)
+            png_preset_btn = ui.button("Current Slide PNG", on_click=lambda: _apply_preset("png", "current"))
+            style_secondary_button(png_preset_btn, compact=True)
+
         ui.label("Format").classes(SECTION_LABEL_CLASSES + " q-mt-sm").style(SECTION_LABEL_STYLE)
         format_toggle = ui.toggle(
             {"pdf": "PDF", "pptx": "PPTX", "html": "HTML", "png": "PNG"},
@@ -119,16 +129,6 @@ def show_export_dialog(project: DesignerProject) -> None:
                 pptx_mode.update()
             if fmt == "pptx":
                 _update_pptx_hint(pptx_mode.value)
-
-        with ui.row().classes("w-full q-mt-xs flex-wrap").style("gap: 8px;"):
-            pdf_preset_btn = ui.button("Presentation PDF", on_click=lambda: _apply_preset("pdf", "all"))
-            style_secondary_button(pdf_preset_btn, compact=True)
-            pptx_preset_btn = ui.button("Editable PPTX", on_click=lambda: _apply_preset("pptx", "all", mode="structured"))
-            style_secondary_button(pptx_preset_btn, compact=True)
-            html_preset_btn = ui.button("Shareable HTML", on_click=lambda: _apply_preset("html", "all"))
-            style_secondary_button(html_preset_btn, compact=True)
-            png_preset_btn = ui.button("Current Slide PNG", on_click=lambda: _apply_preset("png", "current"))
-            style_secondary_button(png_preset_btn, compact=True)
 
         from designer.export import get_export_workspace
 

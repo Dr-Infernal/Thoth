@@ -268,6 +268,23 @@ def get_manual_skills() -> list[Skill]:
     return [s for s in get_all_skills() if not is_tool_guide(s)]
 
 
+def _ensure_skills_loaded():
+    """Populate the in-memory cache on first read for status/reporting paths."""
+    if not _skills_cache:
+        load_skills()
+
+
+def get_manual_skill_statuses() -> list[tuple[Skill, bool]]:
+    """Return non-tool-guide skills with their persisted enabled state."""
+    _ensure_skills_loaded()
+    return [(skill, _enabled.get(skill.name, False)) for skill in get_manual_skills()]
+
+
+def get_enabled_manual_skills() -> list[Skill]:
+    """Return only enabled non-tool-guide skills."""
+    return [skill for skill, enabled in get_manual_skill_statuses() if enabled]
+
+
 def get_enabled_skill_names() -> list[str]:
     """Return names of all active skills (manual + auto tool guides)."""
     return [s.name for s in get_enabled_skills()]

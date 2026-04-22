@@ -154,14 +154,14 @@ def _query_memory() -> str:
 
 def _query_skills() -> str:
     try:
-        from skills import get_all_skills, is_enabled as is_skill_enabled, is_tool_guide
-        skills = [s for s in get_all_skills() if not is_tool_guide(s)]
-        if not skills:
+        from skills import get_manual_skill_statuses
+        skill_statuses = get_manual_skill_statuses()
+        if not skill_statuses:
             return "**Skills**\nNo skills found."
         lines = ["**Skills**"]
-        for s in skills:
-            status = "enabled" if is_skill_enabled(s.name) else "disabled"
-            lines.append(f"- {s.display_name}: {status}")
+        for skill, is_enabled in skill_statuses:
+            status = "enabled" if is_enabled else "disabled"
+            lines.append(f"- {skill.display_name}: {status}")
         return "\n".join(lines)
     except Exception as exc:
         return f"**Skills**\nError: {exc}"

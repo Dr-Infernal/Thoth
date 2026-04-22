@@ -26,7 +26,9 @@ vector_store/
 *.sqlite
 
 # Backups
-*.bak*    
+*.bak*
+.tmp/
+.backups/
 
 # Dev/test scripts
 seed_knowledge_graph.py
@@ -50,3 +52,5 @@ _README_OLD.md
 docs/ENTERPRISE_ROADMAP.md
 docs/DEVELOPER_CHECKLIST.md
 docs/DESIGNER_E2E_TEST.md
+
+*backup_*

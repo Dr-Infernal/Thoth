@@ -5943,6 +5943,18 @@ try:
                 f"behavioral skill '{_bn}' should have empty tools, got {_bsk.tools}"
     record("PASS", "skills: behavioral skills have no tools field")
 
+    # ── 36ba. get_manual_skill_statuses lazy-loads and excludes guides ──
+    _skills_mod36._skills_cache.clear()
+    _skills_mod36._enabled.clear()
+    _manual_statuses36 = _skills_mod36.get_manual_skill_statuses()
+    assert _manual_statuses36, \
+        "get_manual_skill_statuses() should reload skills when cache is empty"
+    assert all(not _skill36.tools for _skill36, _ in _manual_statuses36), \
+        "get_manual_skill_statuses() must exclude tool guides"
+    assert {s.name for s, _ in _manual_statuses36} == {s.name for s in _skills_mod36.get_manual_skills()}, \
+        "manual skill status helper should mirror get_manual_skills()"
+    record("PASS", "skills: manual status helper lazy-loads and excludes tool guides")
+
     # Clean up temp files
     _shutil36.rmtree(_tmp_dir36, ignore_errors=True)
 
@@ -7707,6 +7719,30 @@ try:
     assert "decayed" in _rdc_src48 and "pruned" in _rdc_src48, \
         "run_dream_cycle must track decayed and pruned counts"
     record("PASS", "dream: confidence decay + pruning on stale inferences")
+
+    # ── 48an. system snapshot lazy-loads manual skill counts ────────
+    import skills as _skills48an
+    _skills48an._skills_cache.clear()
+    _skills48an._enabled.clear()
+    _snapshot48an = _dc48._collect_system_snapshot()
+    _skills_line48an = next(
+        (line for line in _snapshot48an.splitlines() if line.startswith("SKILLS:")),
+        "",
+    )
+    _manual_statuses48an = _skills48an.get_manual_skill_statuses()
+    _manual_enabled48an = sum(1 for _, _is_enabled48an in _manual_statuses48an if _is_enabled48an)
+    assert _skills48an._skills_cache, "system snapshot should populate the skills cache"
+    assert _skills_line48an.startswith(
+        f"SKILLS: {_manual_enabled48an} enabled / {len(_manual_statuses48an)} total"
+    ), f"unexpected skills snapshot line: {_skills_line48an!r}"
+    _guide_names48an = [
+        _skill48an.display_name
+        for _skill48an in _skills48an.get_all_skills()
+        if _skills48an.is_tool_guide(_skill48an)
+    ]
+    assert all(_guide48an not in _skills_line48an for _guide48an in _guide_names48an[:5]), \
+        "system snapshot should exclude tool guides from skill reporting"
+    record("PASS", "dream: system snapshot lazy-loads manual skill counts")
 
 except Exception as e:
     record("FAIL", "dream-cycle", f"{type(e).__name__}: {e}")
@@ -13578,6 +13614,8 @@ except Exception as e:
 # ── 69o. ThothStatusTool has expected query categories ────────────────────
 try:
     from tools.thoth_status_tool import _QUERY_HANDLERS as _qh69o
+    from tools.thoth_status_tool import _query_skills as _query_skills69o
+    import skills as _skills69o
     _expected_cats69o = {
         "overview", "version", "model", "channels", "memory", "skills",
         "tools", "api_keys", "identity", "tasks", "logs", "errors",
@@ -13585,6 +13623,18 @@ try:
     }
     _missing_cats69o = _expected_cats69o - set(_qh69o.keys())
     assert not _missing_cats69o, f"Missing query categories: {_missing_cats69o}"
+    _skills69o._skills_cache.clear()
+    _skills69o._enabled.clear()
+    _skills_block69o = _query_skills69o()
+    assert "No skills found." not in _skills_block69o, \
+        "Thoth Status skill query should lazy-load manual skills"
+    _guide_names69o = [
+        _skill69o.display_name
+        for _skill69o in _skills69o.get_all_skills()
+        if _skills69o.is_tool_guide(_skill69o)
+    ]
+    assert all(_guide69o not in _skills_block69o for _guide69o in _guide_names69o[:5]), \
+        "Thoth Status skill query should exclude tool guides"
     record("PASS", f"69o: ThothStatusTool has all {len(_expected_cats69o)} query categories")
 except Exception as e:
     record("FAIL", "69o-status-categories", f"{type(e).__name__}: {e}")

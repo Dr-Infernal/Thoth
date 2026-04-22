@@ -366,8 +366,8 @@ def get_dynamic_state() -> str:
 
     # Enabled skills
     try:
-        from skills import get_enabled_skills, is_tool_guide
-        enabled = [s for s in get_enabled_skills() if not is_tool_guide(s)]
+        from skills import get_enabled_manual_skills
+        enabled = get_enabled_manual_skills()
         if enabled:
             names = [s.display_name for s in enabled]
             parts.append(f"- Enabled skills: {', '.join(names)}")
