@@ -296,11 +296,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION="$(python3 - <<'PY'
-from version import __version__
-print(__version__)
-PY
-          )"
+          VERSION="$(python3 -c "from version import __version__; print(__version__)")"
           ARCH="$(uname -m)"
           APP_PATH="installer/build/mac/Thoth.app"
           DMG_PATH="dist/Thoth-${VERSION}-macOS-${ARCH}.dmg"
