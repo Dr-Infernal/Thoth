@@ -36,6 +36,8 @@ seed_knowledge_graph.py
 _*.py
 !__init__.py
 scripts/simulate_update.py
+debug_tools.py
+audit_*.py
 
 # Old Streamlit app (replaced by NiceGUI in v3.0.0)
 .streamlit/
