@@ -26,7 +26,9 @@
 - [X (Twitter) Tool](#x-twitter-tool)
 - [Tool Guides](#tool-guides)
 - [Image Generation](#image-generation)
+- [Video Generation](#video-generation)
 - [Plugin System & Marketplace](#plugin-system--marketplace)
+- [Auto-Updates](#auto-updates)
 - [Habit & Health Tracker](#habit--health-tracker)
 - [Desktop App](#desktop-app)
 - [Chat & Conversations](#chat--conversations)
@@ -41,7 +43,7 @@
 ## ReAct Agent Architecture
 
 - **Autonomous tool use** — the agent decides which tools to call, when, and how many times, based on your question
-- **27 core tools plus auto-generated channel tools** — web search, email, calendar, file management, shell access, browser automation, vision, image generation, X (Twitter), a personal knowledge graph, Designer Studio, scheduled workflows, habit tracking, Thoth Status self-inspection, and more
+- **28 core tools plus auto-generated channel tools** — web search, email, calendar, file management, shell access, browser automation, vision, image generation, video generation, X (Twitter), a personal knowledge graph, Designer Studio, scheduled workflows, habit tracking, Thoth Status self-inspection, and more
 - **Streaming responses** — tokens stream in real-time with a typing indicator
 - **Thinking indicators** — shows when the model is reasoning before responding
 - **Smart context management** — automatic conversation summarization compresses older turns when token usage exceeds 80% of the context window, preserving the 5 most recent turns and a running summary; a hard trim at 85% drops oldest messages as a safety net; oversized tool outputs are proportionally shrunk so multi-tool chains fit within context; accurate token counting via tiktoken (cl100k_base)
@@ -275,40 +277,65 @@ Tasks have been renamed to **Workflows** throughout the application. The workflo
 
 ## Designer Studio
 
-Designer Studio is a dedicated visual-authoring subsystem for building decks, one-pagers, reports, and presentation-style documents inside Thoth.
+Designer Studio is Thoth's dedicated visual-authoring subsystem. It spans five distinct **project modes**, a sandboxed interactive runtime, an authoring guardrail stack, and a mutation-reviewable tool surface for editing projects turn over turn.
 
-### Project Model
+### Project Modes
 
-- **Multi-page projects** — each project stores a page list, canvas dimensions, aspect ratio, title metadata, notes, and brand settings
+Every project is created in one of five modes. Each mode carries its own canvas presets, template gallery, prompt budgets, critique rules, runtime behavior, and export targets.
+
+- **`deck`** — traditional slide decks; 16:9 canvas; ≤5 bullets per slide; PPTX export via `python-pptx` preserves editable text runs, images, and charts
+- **`document`** — long-form report / one-pager pages; A4 or letter canvas; 130–160 words per block; PDF export is the primary delivery format
+- **`landing`** — interactive marketing landing pages; vertical scroll canvas; CTAs and multi-section hero / feature / pricing layouts; published as interactive HTML
+- **`app_mockup`** — multi-screen app prototypes; route-aware navigator so the agent can define screens and declarative navigation between them; runtime bridge turns link / button clicks into in-preview route changes
+- **`storyboard`** — motion / ad storyboards; limited to 3–4 blocks per frame to avoid cropping; pairs naturally with the video generation tool for per-frame motion references
+
+### Interactive Runtime
+
+Interactive modes (`landing`, `app_mockup`, `storyboard`) do **not** allow free-form `<script>` from the agent. Behavior is expressed declaratively via `data-thoth-action` attributes and interpreted at runtime by a sandboxed bridge.
+
+- **`designer/runtime/` package** — loads per-project runtime state, resolves route / screen navigation, handles state toggles, controls media playback, and dispatches declarative actions to real DOM operations inside the preview iframe
+- **Declarative action grammar** — `data-thoth-action="navigate:screen-id"`, `data-thoth-action="toggle:state-key"`, `data-thoth-action="play:asset-id"`, etc. — the agent authors intent, the runtime executes it safely
+- **Shared preview + publish runtime** — the same runtime powers editor preview, presenter mode, and published share links so interactive projects behave identically in all three surfaces
+
+### Project Model & Storage
+
+- **Multi-page / multi-screen projects** — each project stores a page list, canvas dimensions, aspect ratio, mode, title metadata, notes, brand settings, and (for app mockups) a route map
 - **Home gallery** — the Home screen includes a dedicated **Designer** tab with recent projects, new-project flows, and quick reopen actions
-- **Canvas presets and resizing** — projects can be created as slide decks, social layouts, document pages, or arbitrary aspect ratios, then resized later
+- **Canvas presets and resizing** — projects can be resized after creation; mode-appropriate presets are offered up front
 - **Reference storage** — uploaded briefs, screenshots, and source material are stored as reusable references so future designer sessions can reopen them without reuploading
+- **Asset-backed media** — project HTML stores media as `asset://<asset-id>` references rather than brittle placeholder tokens; `designer/render_assets.py` normalizes legacy refs, preserves `data-asset-id`, and hydrates assets for preview, presentation, export, and published output
+- **Persistent asset storage** — designer assets live on disk under `~/.thoth/designer/assets/`; projects and references are stored separately
+- **Windows-safe writes** — `designer/storage.py` uses temp-file + replace semantics with retry logic to avoid broken saves on Windows file locks
 
 ### Editor & Authoring
 
-- **Full-width editor** — `designer/editor.py` switches the app into a full-width editing mode with page navigator, preview, controls, and assistant side chat
+- **Full-width editor** — `designer/editor.py` switches the app into a full-width editing mode with page / screen navigator, preview, controls, and assistant side chat
 - **Shared chat primitives** — the designer editor reuses `ui/chat_components.py` so uploads, input behavior, and chat rendering match the main conversation UI
-- **Page operations** — the designer tool can set, update, add, move, and delete pages; update brand settings; resize projects; and insert reusable components
-- **Setup flow** — the creation flow captures format, audience, tone, and source brief before generating an initial draft
-- **Reusable components** — curated insertable blocks like heroes, stat bands, timelines, testimonials, and pricing sections accelerate common layouts
-- **Critique and repair** — pages can be reviewed for hierarchy, overflow, contrast, readability, and spacing; deterministic repairs can then be applied safely
+- **Surgical tool surface** — the designer tool can set, update, add, move, duplicate, and delete pages / screens; move, replace, restyle, and remove individual elements; refine-text-in-place (shorten / expand / simplify / rewrite); insert reusable components; update brand settings; and resize projects
+- **Setup flow** — the creation flow captures mode, format, audience, tone, and source brief before generating an initial draft
+- **Typed image slots** — templates declare expected image slots by semantic role (hero, thumbnail, icon, background, etc.) so generated imagery lands in intentional places with appropriate aspect ratios
+- **Reusable components** — curated insertable blocks like heroes, stat bands, timelines, testimonials, pricing sections, and app shells accelerate common layouts
+- **Authoring guardrails** — mode-specific content budgets, no-decorative-overlap rules, horizontal button-row rules, and slot-typed imagery are encoded in `designer/prompt.py` so the agent produces layout-clean output on first draft
 
-### AI Content & Presentation
+### Critique & Repair Loop
 
-- **AI image generation** — generate slide imagery directly inside the designer workflow
-- **Stock image search and embed** — search Unsplash, then place images by returned ID without manual download steps
+- **`designer/critique.py`** — runs deterministic checks for overflow, card-heavy sections, contrast, hierarchy, readability, and spacing on any page
+- **Mandatory post-edit critique** — the designer tool automatically critiques after each structural change and applies safe repairs before returning control to the agent
+- **Repair operations** — deterministic, side-effect-scoped fixes (e.g. trim overflowing blocks, drop redundant bullets, fix contrast, respace buttons)
+- **Review dialog** — a mutation diff view shows exactly what the agent changed on each turn, per page, so the user can accept, revert, or spot-check without hunting through the project
+
+### AI Content
+
+- **AI image generation** — generate slide / page imagery directly inside the designer workflow, routed into typed image slots
+- **AI video generation** — storyboard frames and landing hero videos can be generated via the `video_gen_tool` and referenced as `asset://` media
 - **Chart insertion** — create charts from inline CSV and place them in a page layout
-- **Text refinement** — shorten, expand, simplify, or custom-rewrite targeted text blocks in-place
 - **Speaker notes** — generate and persist notes for presenter use
-- **Presenter mode** — `designer/presentation.py` serves Reveal.js-based presenter mode with notes support
-- **Sharing and export** — projects can be exported to PDF, HTML, PNG, or PPTX, and can publish self-contained share links mounted under `/published`
 
-### Asset-Backed Media
+### Presentation, Sharing & Export
 
-- **Canonical asset references** — project HTML stores media as `asset://<asset-id>` references rather than brittle placeholder tokens
-- **Hydration pipeline** — `designer/render_assets.py` normalizes legacy refs, preserves `data-asset-id`, and hydrates assets for preview, presentation, export, and published output
-- **Persistent asset storage** — designer assets live on disk under `~/.thoth/designer/assets/`; projects and references are stored separately so content can be reopened and reused reliably
-- **Windows-safe writes** — `designer/storage.py` uses temp-file + replace semantics with retry logic to avoid broken saves on Windows file locks
+- **Presenter mode** — `designer/presentation.py` serves Reveal.js-based presenter mode with notes support (deck mode)
+- **Export pipeline** — Playwright drives raster + HTML export; `python-pptx` drives editable PPTX; `weasyprint` / Playwright drive PDF; PNG exports for any page
+- **Published share links** — self-contained interactive HTML (with runtime bridge) is mounted under `/published` for direct sharing
 
 ---
 
@@ -447,6 +474,19 @@ Thoth can generate and edit images through multiple cloud providers, render them
 
 ---
 
+## Video Generation
+
+Thoth can generate short video clips from text prompts or reference images, primarily through Google Veo, for chat use and Designer storyboard workflows.
+
+- **`video_gen_tool`** — top-level agent tool for text-to-video and image-to-video generation
+- **Google Veo provider** — current backend, with per-person-generation policy handling and provider-side prompt sanitization
+- **Inline rendering** — generated clips are surfaced directly in the chat stream with safe media-element hydration
+- **Designer integration** — Designer Studio storyboards and landing hero slots can reference generated videos as `asset://` media; motion clips are rendered in preview, presenter mode, and published share links
+- **Persistent asset storage** — generated clips are saved to Thoth's media storage so they survive thread refreshes and can be reused across designer projects
+- **Channel delivery** — running messaging channels can pick up generated videos and deliver them where supported
+
+---
+
 ## Plugin System & Marketplace
 
 A sandboxed, hot-reloadable extension system lets plugins add new tools and skills without modifying the core codebase.
@@ -467,6 +507,20 @@ A sandboxed, hot-reloadable extension system lets plugins add new tools and skil
 - **Browse dialog** — search, inspect, and install plugins from within the app
 - **Install / update / uninstall** — plugin archives are validated before install and reloaded immediately afterward
 - **Per-plugin settings UI** — each installed plugin gets config controls, secret inputs, and enable/disable toggles in Settings
+
+---
+
+## Auto-Updates
+
+`updater.py` polls the GitHub Releases API for the official Thoth repo on a background thread (30-second startup delay, then every 6 hours, with a 24-hour debounce on actual network calls). Checking is on by default; if there is no internet the call fails silently and the next tick retries.
+
+- **Channel** — `stable` (default) hits `/releases/latest`; `beta` walks the top 10 releases and includes pre-releases. Persisted in `~/.thoth/update_config.json`.
+- **Manifest verification** — every release body must contain a fenced `<!-- thoth-update-manifest -->` block with SHA256 hashes for each platform asset. Without a manifest entry, `download_update` refuses to install. The CI workflow `.github/workflows/update-manifest.yml` calls `scripts/append_sha_manifest.py` to PATCH the release body once artifacts are uploaded.
+- **OS code signature** — Windows installs invoke `signtool.exe verify /pa`; macOS installs invoke `codesign --verify --deep --strict`. Failures abort the install with a visible error.
+- **Hand-off** — Windows: `ThothSetup_x.y.z.exe /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS`. The `.iss` was extended with `CloseApplications=yes` / `RestartApplications=yes` so Inno Setup can swap files while Thoth is running. macOS: `open <dmg>` and exit; the user drags the new app to `/Applications`.
+- **UI** — a green "⬆ vX.Y.Z" status-bar pill appears when a newer release is detected; clicking opens the What's-New dialog (rendered release notes plus Install / Skip / Later buttons). Settings → Preferences → Updates exposes channel selection, "Check for updates", and a list of skipped versions.
+- **Agent surface** — `tools/updater_tool.py` registers `thoth_check_for_updates` (read-only) and `thoth_install_update` (interrupt-gated). The dynamic self-knowledge block surfaces "Update available: …" when applicable, and `thoth_status` adds an `updates` category.
+- **Dev installs** — when a `.git/` directory sits next to the app source (i.e. running from a checkout), the scheduler is disabled and `thoth_install_update` refuses, so working copies are never overwritten.
 
 ---
 
@@ -658,7 +712,7 @@ Most open-source AI assistants are still **developer tools disguised as products
 | **Conversations** | Provider-owned chat history | Local SQLite-backed threads, exportable anytime |
 | **Cost** | Subscription or provider billing | Free with local models; cloud usage is pay-per-token only when you opt in |
 | **Memory** | Limited, opaque, provider-controlled | Personal knowledge graph with entities, relations, visualization, wiki export, and background refinement |
-| **Tools** | Limited app integrations and provider-defined plug-ins | 27 core tools plus auto-generated channel tools: shell, browser, filesystem, Gmail, Calendar, memory graph, Designer Studio, Thoth Status, image generation, research tools, and more |
+| **Tools** | Limited app integrations and provider-defined plug-ins | 28 core tools plus auto-generated channel tools: shell, browser, filesystem, Gmail, Calendar, memory graph, Designer Studio, Thoth Status, image generation, video generation, research tools, and more |
 | **Customization** | Pick a model and maybe a custom instruction | Swap models per thread or workflow, configure name and personality, build workflows, toggle tools and skills, and enable self-improvement features |
 | **Voice** | Usually cloud-processed | Local faster-whisper STT plus Kokoro TTS |
 | **Availability** | Internet required | Local models work offline; cloud models are optional |
@@ -677,7 +731,7 @@ Most open-source AI assistants are still **developer tools disguised as products
 | **Knowledge refinement** | 5-phase Dream Cycle with merge, enrich, decay, infer, and insight passes | Experimental dreaming-style memory promotion flows |
 | **Document intelligence** | Structured graph extraction with provenance, dedup, and relation typing | Strong workspace tools but less graph-centric document knowledge modeling |
 | **Designer / Canvas** | Designer Studio for decks, one-pagers, reports, published links, plus inline Mermaid and Plotly rendering | A2UI-style interactive workspace focus |
-| **Tools** | 27 core tools plus auto-generated channel send tools, including Designer Studio and Thoth Status | Broad built-in toolset with different emphasis |
+| **Tools** | 28 core tools plus auto-generated channel send tools, including Designer Studio and Thoth Status | Broad built-in toolset with different emphasis |
 | **Messaging channels** | 5 bundled channels with streaming, media handling, approvals, and a sidebar monitor | Wider channel catalog and gateway focus |
 | **Autonomous workflows** | Step-based workflows with approvals, conditions, triggers, concurrency groups, and safety modes | Strong channel routing and automation, different orchestration model |
 | **Desktop experience** | Native Windows and macOS desktop app with tray, splash, and setup wizard | More developer-first and channel-first in practice |

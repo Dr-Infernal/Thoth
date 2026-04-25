@@ -8,7 +8,7 @@ import logging
 
 from nicegui import ui
 
-from designer.render_assets import resolve_project_image_sources
+from designer.render_assets import resolve_project_image_sources, resolve_project_media_sources
 from designer.storage import load_asset_bytes
 from designer.state import DesignerProject, BrandConfig
 from designer.interaction import inject_bridge_js
@@ -174,8 +174,158 @@ def render_page_html(
 ) -> str:
     """Render one page with resolved image references and brand variables applied."""
 
-    resolved_html = resolve_project_image_sources(page_html, project)
+    resolved_html = resolve_project_media_sources(page_html, project)
     return inject_brand_variables(resolved_html, project.brand, project=project, page_index=page_index)
+
+
+# ── Interactive (landing / app_mockup / storyboard) multi-route render ──
+INTERACTIVE_MODES = {"landing", "app_mockup", "storyboard"}
+
+_BODY_OPEN_RE = _re_body_open = __import__("re").compile(r"<body[^>]*>", __import__("re").IGNORECASE)
+_BODY_CLOSE_RE = __import__("re").compile(r"</body>", __import__("re").IGNORECASE)
+
+
+# ── Phase 2.2.I — phone-frame chrome for app_mockup preview ───────────
+
+# Visual thickness of the phone bezel, in CSS px. Applied evenly around
+# the iframe so the content canvas retains its original aspect ratio.
+PHONE_BEZEL_PADDING_PX = 14
+PHONE_BEZEL_RADIUS_PX = 44
+PHONE_NOTCH_WIDTH_PX = 120
+PHONE_NOTCH_HEIGHT_PX = 22
+
+
+def get_preview_chrome(project: DesignerProject) -> dict:
+    """Return chrome metadata used by the preview renderer.
+
+    Interactive ``app_mockup`` projects get a phone bezel + notch. All
+    other modes return ``{"kind": "none"}`` so existing preview rendering
+    is untouched.
+    """
+
+    mode = getattr(project, "mode", "deck") or "deck"
+    if mode != "app_mockup":
+        return {"kind": "none"}
+    return {
+        "kind": "phone",
+        "bezel_padding_px": PHONE_BEZEL_PADDING_PX,
+        "bezel_radius_px": PHONE_BEZEL_RADIUS_PX,
+        "notch_width_px": PHONE_NOTCH_WIDTH_PX,
+        "notch_height_px": PHONE_NOTCH_HEIGHT_PX,
+        "bezel_style": (
+            f"padding: {PHONE_BEZEL_PADDING_PX}px;"
+            f"border-radius: {PHONE_BEZEL_RADIUS_PX}px;"
+            "background: #111;"
+            "box-shadow: 0 0 0 2px #333, 0 12px 36px rgba(0,0,0,0.5);"
+            "position: relative; display: inline-block;"
+        ),
+        "screen_style": (
+            "overflow: hidden;"
+            f"border-radius: {max(0, PHONE_BEZEL_RADIUS_PX - PHONE_BEZEL_PADDING_PX)}px;"
+            "position: relative; background: #000;"
+        ),
+        "notch_style": (
+            "position: absolute;"
+            f"top: {max(2, PHONE_BEZEL_PADDING_PX // 2)}px;"
+            "left: 50%; transform: translateX(-50%);"
+            f"width: {PHONE_NOTCH_WIDTH_PX}px;"
+            f"height: {PHONE_NOTCH_HEIGHT_PX}px;"
+            "background: #000; border-radius: 14px;"
+            "z-index: 3; pointer-events: none;"
+        ),
+    }
+
+
+def _slugify_route(value: str, fallback: str) -> str:
+    import re as _re
+    slug = _re.sub(r"[^a-zA-Z0-9]+", "-", (value or "")).strip("-").lower()
+    return slug or fallback
+
+
+def _ensure_page_route_ids(project: DesignerProject) -> list[str]:
+    """Return the list of route_ids for pages, synthesizing where missing."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for idx, page in enumerate(project.pages):
+        rid = (getattr(page, "route_id", "") or "").strip()
+        if not rid:
+            rid = _slugify_route(page.title, f"page-{idx + 1}")
+        base = rid
+        dedup = 2
+        while rid in seen:
+            rid = f"{base}-{dedup}"
+            dedup += 1
+        seen.add(rid)
+        out.append(rid)
+    return out
+
+
+def _extract_body_inner(html: str) -> tuple[str, str]:
+    """Split rendered page HTML into ``(head_block, body_inner)``.
+
+    ``head_block`` is the whole document up through the opening ``<body…>`` tag
+    (used to seed the multi-route shell).  ``body_inner`` is the inner HTML of
+    ``<body>`` with outer ``<body>``/``</body>`` stripped.
+    """
+    m_open = _BODY_OPEN_RE.search(html)
+    m_close = _BODY_CLOSE_RE.search(html)
+    if not m_open or not m_close:
+        return "", html
+    head_block = html[: m_open.end()]
+    body_inner = html[m_open.end(): m_close.start()]
+    return head_block, body_inner
+
+
+def render_multi_route_html(
+    project: DesignerProject,
+    *,
+    active_route_id: str | None = None,
+) -> str:
+    """Render every page into one HTML doc with route sections + runtime bridge.
+
+    Used for preview and (after minor tweaks) publish in interactive modes.
+    """
+    from designer.runtime import build_routes_payload, inject_runtime
+
+    if not project.pages:
+        return "<html><body></body></html>"
+
+    route_ids = _ensure_page_route_ids(project)
+    labels = {rid: project.pages[i].title for i, rid in enumerate(route_ids)}
+    initial = active_route_id or ""
+    if initial not in route_ids:
+        idx0 = max(0, min(project.active_page, len(project.pages) - 1))
+        initial = route_ids[idx0]
+
+    # Use the first page's rendered head as the shell; route sections live in body.
+    first_rendered = render_page_html(project, project.pages[0].html, page_index=0)
+    head_block, first_body_inner = _extract_body_inner(first_rendered)
+    if not head_block:
+        head_block = "<!DOCTYPE html><html><head></head><body>"
+        first_body_inner = first_rendered
+
+    sections: list[str] = []
+    for idx, page in enumerate(project.pages):
+        rid = route_ids[idx]
+        if idx == 0:
+            inner = first_body_inner
+        else:
+            rendered = render_page_html(project, page.html, page_index=idx)
+            _, inner = _extract_body_inner(rendered)
+            if not inner:
+                inner = rendered
+        sections.append(
+            f'<section data-thoth-route-host="1" '
+            f'data-thoth-route="{rid}" '
+            f'data-thoth-route-index="{idx}" '
+            f'aria-label="{_escape_attr(page.title)}">'
+            f'{inner}'
+            f'</section>'
+        )
+
+    assembled = f"{head_block}\n" + "\n".join(sections) + "\n</body></html>"
+    payload = build_routes_payload(initial=initial, order=route_ids, labels=labels)
+    return inject_runtime(assembled, routes_payload=payload)
 
 
 import re as _re
@@ -269,9 +419,29 @@ def build_preview(project: DesignerProject, *,
         (len(project.pages), project.active_page,
          project.canvas_width, project.canvas_height)
     ]
+    # Fingerprint of every page's title+html so we can detect agent edits
+    # that mutate a page in place (no structural change) and still rebuild
+    # the navigator thumbnails. Uses hash() per-page to stay cheap; a tuple
+    # of ints is trivial to compare on each poll tick.
+    def _content_fingerprint() -> tuple[int, ...]:
+        return tuple(hash((p.title, p.html)) for p in project.pages)
+    _last_content: list[tuple[int, ...]] = [_content_fingerprint()]
     _iframe_id = f"designer-preview-{project.id[:8]}"
     _zoom_value: list[str] = ["Fit"]
-    _interactive: bool = on_element_click is not None or on_text_edit is not None
+    # "authoring" = the designer-side click/edit bridge that captures clicks
+    # to drive the hotspot recorder and inline text editor. This is ON by
+    # default when the caller registers element_click/text_edit handlers.
+    _authoring_enabled: bool = on_element_click is not None or on_text_edit is not None
+    # Preview mode toggle — when True we suppress the authoring bridge so
+    # clicks flow through to the runtime bridge (navigate/toggle_state/etc.)
+    # and the user can test interactive prototypes without leaving the editor.
+    # Exposed via the returned dict so the toolbar can flip it.
+    _preview_mode: list[bool] = [False]
+    # Scripts must be allowed for any interactive-mode project so the runtime
+    # bridge can run, independent of whether authoring is active.
+    _scripts_allowed: bool = _authoring_enabled or (
+        getattr(project, "mode", "deck") in INTERACTIVE_MODES
+    )
 
     with ui.column().classes("w-full h-full").style("position: relative;") as container:
         # Zoom controls bar
@@ -289,23 +459,39 @@ def build_preview(project: DesignerProject, *,
 
         # Aspect-ratio container
         ratio = project.canvas_width / project.canvas_height
-        _sandbox = "allow-same-origin allow-scripts" if _interactive else "allow-same-origin"
+        _sandbox = "allow-same-origin allow-scripts" if _scripts_allowed else "allow-same-origin"
+        _chrome = get_preview_chrome(project)
         with ui.element("div").classes("w-full flex-grow").style(
             "display: flex; align-items: center; justify-content: center;"
             "overflow: hidden; background: #111;"
         ) as _ratio_wrap:
             # Sized wrapper — JS will set width/height to the scaled dims
             _wrapper_id = f"designer-wrapper-{project.id[:8]}"
-            ui.html(
-                f'<div id="{_wrapper_id}" style="position: relative; overflow: hidden;">'
+            _iframe_markup = (
                 f'<iframe id="{_iframe_id}" '
                 f'sandbox="{_sandbox}" '
                 f'style="border: none; background: white; '
                 f'width: {project.canvas_width}px; height: {project.canvas_height}px; '
                 f'transform-origin: top left; position: absolute; top: 0; left: 0;" '
-                f'></iframe></div>',
-                sanitize=False,
+                f'></iframe>'
             )
+            if _chrome.get("kind") == "phone":
+                _inner_html = (
+                    f'<div style="{_chrome["bezel_style"]}">'
+                    f'<div style="{_chrome["notch_style"]}"></div>'
+                    f'<div id="{_wrapper_id}" style="{_chrome["screen_style"]}'
+                    "overflow: hidden;\">"
+                    f"{_iframe_markup}"
+                    "</div>"
+                    "</div>"
+                )
+            else:
+                _inner_html = (
+                    f'<div id="{_wrapper_id}" style="position: relative; overflow: hidden;">'
+                    f"{_iframe_markup}"
+                    "</div>"
+                )
+            ui.html(_inner_html, sanitize=False)
 
     def _apply_zoom():
         zoom = ZOOM_LEVELS.get(_zoom_value[0])
@@ -356,10 +542,19 @@ def build_preview(project: DesignerProject, *,
         structure_changed = cur_structure != _last_structure[0]
         dims_changed = (cur_structure[2] != _last_structure[0][2] or
                         cur_structure[3] != _last_structure[0][3])
+        # Detect per-page content changes (agent edits a slide in place)
+        cur_content = _content_fingerprint()
+        content_changed = cur_content != _last_content[0]
         if structure_changed:
             _last_structure[0] = cur_structure
-            if on_navigate:
-                on_navigate()
+        if content_changed:
+            _last_content[0] = cur_content
+        # Nav bar must rebuild whenever structure OR page content changed
+        # so thumbnails reflect the latest HTML. Without the content check
+        # an agent-driven designer_update_page leaves the thumbnail stale
+        # until the user clicks the page tile.
+        if (structure_changed or content_changed) and on_navigate:
+            on_navigate()
         # If canvas dimensions changed, resize the iframe element
         if dims_changed:
             cw, ch = project.canvas_width, project.canvas_height
@@ -374,9 +569,20 @@ def build_preview(project: DesignerProject, *,
             ''')
         idx = max(0, min(project.active_page, len(project.pages) - 1))
         page = project.pages[idx]
-        html = render_page_html(project, page.html, page_index=idx)
-        # Inject interaction bridge JS when interactive mode is on
-        if _interactive:
+        _is_interactive_mode = (
+            getattr(project, "mode", "deck") in INTERACTIVE_MODES
+        )
+        if _is_interactive_mode:
+            route_ids = _ensure_page_route_ids(project)
+            active_route = route_ids[idx] if idx < len(route_ids) else None
+            html = render_multi_route_html(project, active_route_id=active_route)
+        else:
+            html = render_page_html(project, page.html, page_index=idx)
+        # Inject the authoring (click/edit capture) bridge only when the
+        # caller wired authoring handlers AND the user is NOT in preview
+        # mode. Preview mode lets clicks reach the runtime bridge so
+        # interactive prototypes can be exercised from the editor.
+        if _authoring_enabled and not _preview_mode[0]:
             html = inject_bridge_js(html)
         if not force and html == _last_html[0] and not structure_changed:
             return
@@ -414,7 +620,7 @@ def build_preview(project: DesignerProject, *,
     ui.timer(0.5, _safe_refresh)
 
     # Register parent-side message listener for interactive bridge
-    if _interactive:
+    if _authoring_enabled:
         _setup_message_listener(
             on_element_click=on_element_click,
             on_text_edit=on_text_edit,
@@ -422,10 +628,28 @@ def build_preview(project: DesignerProject, *,
             on_redo_shortcut=on_redo_shortcut,
         )
 
+    def _set_preview_mode(enabled: bool) -> None:
+        """Toggle preview mode (suppresses the authoring click/edit bridge).
+
+        Forces a full iframe reload so the sandboxed document reflects the
+        new bridge-injection state.
+        """
+        new_val = bool(enabled)
+        if _preview_mode[0] == new_val:
+            return
+        _preview_mode[0] = new_val
+        try:
+            _refresh(force=True)
+        except Exception:
+            pass
+
     return {
         "refresh": _refresh,
         "force_refresh": lambda: _refresh(force=True),
         "container": container,
+        "set_preview_mode": _set_preview_mode,
+        "is_preview_mode": lambda: _preview_mode[0],
+        "supports_preview_mode": _authoring_enabled,
     }
 
 

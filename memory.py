@@ -121,6 +121,24 @@ def delete_memory(memory_id: str) -> bool:
     return _kg.delete_entity(memory_id)
 
 
+def delete_memories(memory_ids: list[str]) -> tuple[int, list[tuple[str, str]]]:
+    """Delete several memories at once.
+
+    Returns ``(deleted_count, failures)``. Ids whose entity was already
+    gone (``delete_memory`` returns False) are not counted as failures
+    — they're idempotent no-ops.
+    """
+    deleted = 0
+    failures: list[tuple[str, str]] = []
+    for mid in memory_ids:
+        try:
+            if delete_memory(mid):
+                deleted += 1
+        except Exception as exc:
+            failures.append((mid, str(exc)))
+    return deleted, failures
+
+
 def get_memory(memory_id: str) -> dict | None:
     entity = _kg.get_entity(memory_id)
     return _entity_to_memory(entity) if entity else None

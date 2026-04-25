@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/tests-All%20Pass-brightgreen?style=flat" alt="Tests">
 </p>
 
-Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with **27 core tools plus auto-generated channel send tools** — web search, email, calendar, file management, shell access, browser automation, vision, image generation, X (Twitter), long-term memory with a personal knowledge graph, **Designer Studio** for decks and one-pagers, **advanced workflows** with conditional branching and approval gates, **Thoth Status** self-inspection, configurable identity, an insights engine, habit tracking, and more — plus a **plugin system** with a built-in marketplace and **5 messaging channels** (Telegram, WhatsApp, Discord, Slack, SMS) with full media support, streaming, reactions, and approval routing. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models from **OpenAI**, **Anthropic** (Claude), **Google AI** (Gemini), **xAI** (Grok), and **OpenRouter** (100+ models) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, designer projects, and history — stays on your machine.
+Thoth is a **local-first AI assistant built for personal AI sovereignty** — your models, your data, your rules. It combines a powerful ReAct agent with **28 core tools plus auto-generated channel send tools** — web search, email, calendar, file management, shell access, browser automation, vision, image generation, video generation, X (Twitter), long-term memory with a personal knowledge graph, **Designer Studio** (five modes: decks, documents, landing pages, app mockups, and motion storyboards), **advanced workflows** with conditional branching and approval gates, **Thoth Status** self-inspection, configurable identity, an insights engine, habit tracking, and more — plus a **plugin system** with a built-in marketplace and **5 messaging channels** (Telegram, WhatsApp, Discord, Slack, SMS) with full media support, streaming, reactions, and approval routing. Run everything locally via [Ollama](https://ollama.com/), or add opt-in cloud models from **OpenAI**, **Anthropic** (Claude), **Google AI** (Gemini), **xAI** (Grok), and **OpenRouter** (100+ models) when you need frontier reasoning or don't have a GPU. Either way, your data — conversations, memories, documents, designer projects, and history — stays on your machine.
 
 > **Local models are already amazing.** You'll be surprised what a 14B+ local model can do. If you start with cloud models today, and as local models get smarter and hardware gets cheaper, transition to fully local, fully private, fully free AI — seamlessly, with no changes to your setup.
 
@@ -42,7 +42,7 @@ In ancient Egyptian mythology, **Thoth** (𓁟) was the god of wisdom, writing, 
 
 ### 🤖 ReAct Agent Architecture
 
-LangGraph-based autonomous agent with **27 core tools plus auto-generated channel tools** — the agent decides which tools to call, how many times, and in what order. Real-time token streaming with thinking model support (DeepSeek-R1, Qwen3, QwQ — collapsible reasoning bubbles). Smart context management via tiktoken: auto-summarization at 80% capacity, proportional tool-output shrinking, and dynamic tool budgets that adapt to available headroom. The prompt stack combines centralized templates with dynamic identity and self-knowledge context so Thoth can describe its own capabilities accurately. Destructive actions require explicit confirmation; orphaned tool calls are auto-repaired; recursive loops are caught with a wind-down warning at 75%.
+LangGraph-based autonomous agent with **28 core tools plus auto-generated channel tools** — the agent decides which tools to call, how many times, and in what order. Real-time token streaming with thinking model support (DeepSeek-R1, Qwen3, QwQ — collapsible reasoning bubbles). Smart context management via tiktoken: auto-summarization at 80% capacity, proportional tool-output shrinking, and dynamic tool budgets that adapt to available headroom. The prompt stack combines centralized templates with dynamic identity and self-knowledge context so Thoth can describe its own capabilities accurately. Destructive actions require explicit confirmation; orphaned tool calls are auto-repaired; recursive loops are caught with a wind-down warning at 75%.
 
 [Details →](docs/ARCHITECTURE.md#react-agent-architecture)
 
@@ -108,7 +108,7 @@ Advanced **workflow engine** powered by APScheduler with 7 schedule types (daily
 
 ### 🎨 Designer Studio
 
-Build presentations, one-pagers, reports, and visual briefs inside a dedicated Designer tab. Multi-page editor with setup flow, brand controls, reusable components, speaker notes, presenter mode, published share links, and export to PDF/HTML/PNG/PPTX. The designer tool can generate images, refine text, add charts, critique pages, and apply safe repairs. Asset-backed media keeps project images and references durable across preview, export, and publish.
+A dedicated design workspace with **five project modes** — slide **decks**, long-form **documents**, interactive **landing pages**, multi-screen **app mockups**, and motion **storyboards**. Each mode has its own canvas rules, template gallery, prompt guardrails, and export targets. Interactive projects (landing, app_mockup, storyboard) run on a sandboxed **runtime bridge** that turns declarative `data-thoth-action` attributes into real in-preview navigation, state toggles, and media playback — no free-form `<script>` from the agent. The designer tool surface includes a full suite of surgical editors (move, replace, duplicate, restyle, refine-text, insert-component), AI content tools (image + video generation, chart insertion, speaker notes), and a **critique-repair loop** that automatically catches overflow, spacing, contrast, hierarchy, and readability issues. Export to PDF / HTML / PNG / PPTX, or publish a self-contained interactive share link. A **mutation diff review dialog** shows exactly what the agent changed, page by page, turn over turn.
 
 [Details →](docs/ARCHITECTURE.md#designer-studio)
 
@@ -144,9 +144,21 @@ Generate and edit images via **OpenAI**, **xAI** (Grok Imagine), and **Google** 
 
 [Details →](docs/ARCHITECTURE.md#image-generation)
 
+### 🎬 Video Generation
+
+Generate short video clips from text prompts or reference images via **Google Veo** — rendered inline in chat, persisted to disk, and deliverable to supported messaging channels. Designer Studio's **storyboard** mode and **landing** hero slots consume the same provider layer so motion content lands as `asset://` references in preview, presenter mode, and published share links. Text-to-video and image-to-video flows both supported, with provider-side person-generation policy handling.
+
+[Details →](docs/ARCHITECTURE.md#video-generation)
+
 ### 🔌 Plugin System & Marketplace
 
 A sandboxed, hot-reloadable **plugin architecture** lets anyone add new tools and skills without touching core code. Plugins declare metadata in `plugin.json`, are security-scanned (no `eval`/`exec`/`subprocess`), and run in a dependency-safe sandbox. A built-in **marketplace** lets users browse, install, update, and uninstall plugins from a curated GitHub-hosted catalog. Plugin settings, API keys, enable/disable toggles, and per-plugin config dialogs are all managed from Settings → Plugins.
+
+[Details →](docs/ARCHITECTURE.md#plugin-system--marketplace)
+
+### ⬆ Auto-Updates
+
+Thoth checks GitHub Releases in the background and surfaces an "⬆ vX.Y.Z" pill in the status bar when a new build is available. Clicking it opens release notes plus Install / Skip / Remind-me-later buttons. Downloads are SHA256-verified against a manifest embedded in each release body and Authenticode/codesign verified before launch. Auto-checking is on by default; if there's no Internet the check fails silently. Channel selection (stable vs beta), skip list, and a manual "Check now" button live in **Settings → Preferences → Updates**. The same flow is exposed to the agent as `thoth_check_for_updates` and `thoth_install_update` (always approval-gated).
 
 [Details →](docs/ARCHITECTURE.md#plugin-system--marketplace)
 
@@ -211,7 +223,7 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 | **Wiki vault** | **Obsidian-compatible export** — one `.md` per entity with `[[wiki-links]]`, YAML frontmatter, and per-type indexes | Not available |
 | **Voice** | **Fully local** — faster-whisper STT + Kokoro TTS with 10 voices. Audio never leaves your machine | ElevenLabs (cloud TTS) + system fallback. Voice Wake on macOS/iOS |
 | **Health tracking** | **Built-in tracker** — medications, symptoms, exercise, mood, sleep, periods. Streak analysis, CSV export, Plotly charts | Not available |
-| **Tools** | 27 core tools plus auto-generated channel send tools — shell, browser, filesystem, Gmail, Calendar, Designer Studio, Thoth Status, memory graph, image generation, and research tools | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
+| **Tools** | 28 core tools plus auto-generated channel send tools — shell, browser, filesystem, Gmail, Calendar, Designer Studio, Thoth Status, memory graph, image + video generation, and research tools | ~20 built-in tools — exec, browser, web search, canvas, cron, image/music/video generation |
 | **Messaging channels** | **5 channels** — Telegram, WhatsApp, Discord, Slack, SMS — all with streaming, reactions, media, and approval routing. Auto-generated per-channel tools. Tunnel manager for webhooks | **23+ channels** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, and many more |
 | **Autonomous agents** | **Advanced workflows** — step-based pipelines with conditions, approval gates, webhook triggers, concurrency groups, and per-workflow safety mode. Multiple run in parallel with their own persistent threads | Multi-agent routing with isolated sessions per sender/channel |
 | **Desktop app** | Native window (pywebview) + system tray on **Windows & macOS**. One-click installers for both | macOS menu bar app. No native Windows app (WSL2 required). iOS & Android companion apps |
@@ -228,7 +240,7 @@ Desktop notifications, distinct audio chimes (task completion, timer alerts), an
 
 ## 🔧 Tools
 
-Thoth's agent has access to 27 core tool modules. Many of them expose multiple operations, and running messaging channels add extra send/photo/document tools automatically. Tools can be enabled or disabled from the Settings panel.
+Thoth's agent has access to 28 core tool modules. Many of them expose multiple operations, and running messaging channels add extra send/photo/document tools automatically. Tools can be enabled or disabled from the Settings panel.
 
 ### Search & Knowledge
 
@@ -257,12 +269,13 @@ Thoth's agent has access to 27 core tool modules. Many of them expose multiple o
 | **📬 Channels** | Auto-generated send/photo/document tools for each running channel (Telegram, WhatsApp, Discord, Slack, SMS); receive voice, photos, and documents with transcription, analysis, and text extraction | Per-channel config |
 | **🐦 X (Twitter)** | Grouped read, post, and engage operations for search, timeline, mentions, user info, posting, replies, quotes, likes, reposts, bookmarks, and deletes via OAuth 2.0 PKCE | X API keys |
 | **🖼️ Image Generation** | Generate images from text prompts and edit existing images via OpenAI, xAI (Grok Imagine), and Google (Imagen 4, Nano Banana); rendered inline in chat and deliverable to channels | Cloud API key |
+| **🎬 Video Generation** | Generate short video clips from text prompts or reference images via Google Veo; rendered inline in chat, used by Designer storyboards, and deliverable to channels | Cloud API key |
 
 ### Design & Self-Management
 
 | Tool | Description | API Key? |
 |------|-------------|----------|
-| **🎨 Designer** | Create and edit multi-page presentations, one-pagers, reports, and marketing layouts; manage pages, brand, components, charts, images, speaker notes, exports, and publish links | None |
+| **🎨 Designer** | Five-mode design studio (deck / document / landing / app_mockup / storyboard) with interactive runtime bridge, curated templates, AI image + video generation, chart insertion, brand controls, critique-repair loop, published share links, and export to PDF / HTML / PNG / PPTX | None |
 | **🪞 Thoth Status** | Query version, model, channels, tools, memory, identity, logs, Designer projects, and more; controlled self-management for selected settings and optional skill creation/patching when self-improvement is enabled | None |
 
 ### Computation & Analysis
@@ -319,7 +332,7 @@ Thoth's agent has access to 27 core tool modules. Many of them expose multiple o
 │   Graph-enhanced auto-recall (semantic + 1-hop expansion)           │
 │   Per-thread model override (local or cloud)                        │
 │                                                                      │
-│   27 core tool modules + plugin tools + auto-generated channel      │
+│   28 core tool modules + plugin tools + auto-generated channel      │
 │   tools                                                             │
 └───────┬──────────┬──────────┬──────────┬──────────┬─────────────────┘
         │          │          │          │          │
@@ -370,13 +383,13 @@ Thoth's agent has access to 27 core tool modules. Many of them expose multiple o
 
 ### Windows
 
-1. Download **[ThothSetup_3.16.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[ThothSetup_3.17.0.exe](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Run the installer — it installs Python, Ollama, and all dependencies automatically
 3. Launch **Thoth** from the Start Menu or Desktop shortcut
 
 ### macOS
 
-1. Download **[Thoth-3.16.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
+1. Download **[Thoth-3.17.0-macOS-arm64.dmg](https://github.com/siddsachar/Thoth/releases/latest)** from the latest release
 2. Open the DMG and drag **Thoth.app** into the **Applications** folder
 3. Launch **Thoth** from Applications or Launchpad
    - First run may prompt "Thoth is an app downloaded from the internet" → click **Open**

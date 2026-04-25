@@ -237,6 +237,168 @@ def _delete_thread(thread_id: str):
         pass
 
 
+def delete_threads(thread_ids: list[str]) -> tuple[int, list[tuple[str, str]]]:
+    """Delete several threads at once.
+
+    Loops over :func:`_delete_thread` so all existing side effects
+    (checkpoint purge, media cleanup, summary cache invalidation) are
+    preserved per thread. Returns ``(deleted_count, failures)`` where
+    ``failures`` is a list of ``(thread_id, error_message)``.
+
+    The UI layer is responsible for additional cleanup that lives
+    outside this module (shell/browser session kills, active-generation
+    stops, state invalidation) — this helper only touches the same
+    surfaces that :func:`_delete_thread` does.
+    """
+    deleted = 0
+    failures: list[tuple[str, str]] = []
+    for tid in thread_ids:
+        try:
+            _delete_thread(tid)
+            deleted += 1
+        except Exception as exc:  # pragma: no cover — defensive
+            failures.append((tid, str(exc)))
+            logger.exception("Bulk delete failed for thread %s", tid)
+    return deleted, failures
+
+
+def purge_external_state(thread_id: str) -> None:
+    """Best-effort cleanup of state that lives outside threads.py.
+
+    Covers: active-generation stop, task-run stop, agent summary cache,
+    shell/browser tool sessions + histories. Every step is guarded so a
+    partial environment (e.g. tests without tools loaded) won't crash.
+    Safe to call before or after :func:`_delete_thread`.
+    """
+    if not thread_id:
+        return
+    # Active generation
+    try:
+        from ui.state import _active_generations  # lazy import
+        gen = _active_generations.get(thread_id)
+        if gen:
+            try:
+                gen.stop_event.set()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Background task run
+    try:
+        from tasks import stop_task
+        stop_task(thread_id)
+    except Exception:
+        pass
+    # Agent summary cache
+    try:
+        from agent import clear_summary_cache
+        clear_summary_cache(thread_id)
+    except Exception:
+        pass
+    # Shell tool
+    try:
+        from tools.shell_tool import get_session_manager, clear_shell_history
+        get_session_manager().kill_session(thread_id)
+        clear_shell_history(thread_id)
+    except Exception:
+        pass
+    # Browser tool
+    try:
+        from tools.browser_tool import (
+            get_session_manager as get_browser_session_manager,
+            clear_browser_history,
+        )
+        get_browser_session_manager().kill_session(thread_id)
+        clear_browser_history(thread_id)
+    except Exception:
+        pass
+
+
+def get_workflow_thread_ids() -> set[str]:
+    """Return the set of thread_ids that belong to a workflow/task.
+
+    Union of ``task_runs.thread_id`` and ``tasks.persistent_thread_id``.
+    Used by the sidebar filter to classify threads as workflow runs so
+    they can be filtered / badged distinctly from regular chats.
+    """
+    ids: set[str] = set()
+    try:
+        from tasks import _get_conn  # lazy import to avoid cycles
+        conn = _get_conn()
+        try:
+            for (tid,) in conn.execute(
+                "SELECT DISTINCT thread_id FROM task_runs "
+                "WHERE thread_id IS NOT NULL AND thread_id != ''"
+            ):
+                ids.add(tid)
+            for (tid,) in conn.execute(
+                "SELECT persistent_thread_id FROM tasks "
+                "WHERE persistent_thread_id IS NOT NULL AND persistent_thread_id != ''"
+            ):
+                ids.add(tid)
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug("Failed to read workflow thread ids", exc_info=True)
+    return ids
+
+
+def classify_thread(project_id: str, thread_id: str,
+                    workflow_tids: set[str] | None = None) -> str:
+    """Return ``"designer"``, ``"workflow"``, or ``"chat"``.
+
+    Designer takes precedence over workflow (a thread shouldn't carry
+    both, but if it does, the project view is the richer home).
+    """
+    if project_id:
+        return "designer"
+    if workflow_tids is None:
+        workflow_tids = get_workflow_thread_ids()
+    if thread_id in workflow_tids:
+        return "workflow"
+    return "chat"
+
+
+def sweep_orphan_project_ids() -> int:
+    """Startup helper: fully purge thread_meta rows whose referenced
+    designer project JSON is missing.
+
+    Previous versions only cleared the ``project_id`` column so rows
+    would fall into the generic "chat" bucket, but that leaves zombie
+    conversations that the user can no longer meaningfully open.
+    We now delete the row and its LangGraph data via
+    :func:`_delete_thread` so the sidebar stays clean.
+
+    Returns the number of threads deleted.
+    """
+    try:
+        from designer.storage import PROJECTS_DIR
+    except Exception:
+        return 0
+    removed = 0
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT thread_id, COALESCE(project_id, '') FROM thread_meta "
+            "WHERE COALESCE(project_id, '') != ''"
+        ).fetchall()
+        conn.close()
+        orphans = [tid for tid, pid in rows
+                   if not (PROJECTS_DIR / f"{pid}.json").exists()]
+        for tid in orphans:
+            try:
+                purge_external_state(tid)
+                _delete_thread(tid)
+                removed += 1
+            except Exception:
+                logger.exception("Failed to purge orphan thread %s", tid)
+        if removed:
+            logger.info("Orphan project sweep removed %d thread(s)", removed)
+    except Exception:
+        logger.exception("sweep_orphan_project_ids failed")
+    return removed
+
+
 def _get_thread_model_override(thread_id: str) -> str:
     """Return the model override for a thread (empty string if none)."""
     conn = sqlite3.connect(DB_PATH)

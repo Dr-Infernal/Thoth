@@ -152,10 +152,10 @@ def _new_thread(channel_id: str) -> str:
 # Agent execution
 # ──────────────────────────────────────────────────────────────────────
 def _run_agent_sync(user_text: str, config: dict,
-                    event_queue=None) -> tuple[str, dict | None, list[bytes]]:
-    """Run the agent synchronously, returning (answer, interrupt_data, images)."""
+                    event_queue=None) -> tuple[str, dict | None, list[bytes], list[str]]:
+    """Run the agent synchronously, returning (answer, interrupt_data, images, video_paths)."""
     from tools import registry as tool_registry
-    from channels.media_capture import grab_vision_capture, grab_generated_image
+    from channels.media_capture import grab_vision_capture, grab_generated_image, grab_generated_video
 
     config = {**config, "recursion_limit": agent_mod.RECURSION_LIMIT_CHAT}
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
@@ -164,6 +164,7 @@ def _run_agent_sync(user_text: str, config: dict,
     interrupt_data: dict | None = None
     used_vision = False
     used_image_gen = False
+    used_video_gen = False
 
     for event_type, payload in agent_mod.stream_agent(user_text, enabled, config):
         if event_type == "token":
@@ -178,6 +179,8 @@ def _run_agent_sync(user_text: str, config: dict,
                 used_vision = True
             if raw_name in ("generate_image", "edit_image"):
                 used_image_gen = True
+            if raw_name in ("generate_video", "animate_image"):
+                used_video_gen = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -198,6 +201,7 @@ def _run_agent_sync(user_text: str, config: dict,
         event_queue.put(None)  # sentinel
 
     captured_images: list[bytes] = []
+    captured_video_paths: list[str] = []
     if used_vision:
         img = grab_vision_capture()
         if img:
@@ -206,14 +210,18 @@ def _run_agent_sync(user_text: str, config: dict,
         img = grab_generated_image()
         if img:
             captured_images.append(img)
-    return answer or "_(No response)_", interrupt_data, captured_images
+    if used_video_gen:
+        vid_path = grab_generated_video()
+        if vid_path:
+            captured_video_paths.append(vid_path)
+    return answer or "_(No response)_", interrupt_data, captured_images, captured_video_paths
 
 
 def _resume_agent_sync(config: dict, approved: bool,
-                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, list[bytes]]:
+                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, list[bytes], list[str]]:
     """Resume a paused agent after interrupt approval/denial."""
     from tools import registry as tool_registry
-    from channels.media_capture import grab_vision_capture, grab_generated_image
+    from channels.media_capture import grab_vision_capture, grab_generated_image, grab_generated_video
 
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
     full_answer: list[str] = []
@@ -221,6 +229,7 @@ def _resume_agent_sync(config: dict, approved: bool,
     interrupt_data: dict | None = None
     used_vision = False
     used_image_gen = False
+    used_video_gen = False
 
     for event_type, payload in agent_mod.resume_stream_agent(
         enabled, config, approved, interrupt_ids=interrupt_ids
@@ -237,6 +246,8 @@ def _resume_agent_sync(config: dict, approved: bool,
                 used_vision = True
             if raw_name in ("generate_image", "edit_image"):
                 used_image_gen = True
+            if raw_name in ("generate_video", "animate_image"):
+                used_video_gen = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -252,6 +263,7 @@ def _resume_agent_sync(config: dict, approved: bool,
         answer = "\n".join(tool_reports)
 
     captured_images: list[bytes] = []
+    captured_video_paths: list[str] = []
     if used_vision:
         img = grab_vision_capture()
         if img:
@@ -260,7 +272,11 @@ def _resume_agent_sync(config: dict, approved: bool,
         img = grab_generated_image()
         if img:
             captured_images.append(img)
-    return answer or "_(No response)_", interrupt_data, captured_images
+    if used_video_gen:
+        vid_path = grab_generated_video()
+        if vid_path:
+            captured_video_paths.append(vid_path)
+    return answer or "_(No response)_", interrupt_data, captured_images, captured_video_paths
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -538,7 +554,7 @@ async def _handle_dm(event: dict, say, client) -> None:
         )
 
         loop = asyncio.get_event_loop()
-        answer, new_interrupt, captured = await loop.run_in_executor(
+        answer, new_interrupt, captured, captured_vids = await loop.run_in_executor(
             None,
             lambda: _resume_agent_sync(
                 config, approved, interrupt_ids=interrupt_ids
@@ -557,6 +573,16 @@ async def _handle_dm(event: dict, say, client) -> None:
                 )
             except Exception as exc:
                 log.warning("Failed to send Slack image: %s", exc)
+        for vpath in captured_vids:
+            try:
+                await _app.client.files_upload_v2(
+                    channel=channel_id,
+                    file=vpath,
+                    filename="video.mp4",
+                    title="🎬 Video",
+                )
+            except Exception as exc:
+                log.warning("Failed to send Slack video: %s", exc)
         if new_interrupt:
             with _pending_lock:
                 _pending_interrupts[channel_id] = {
@@ -602,7 +628,7 @@ async def _handle_dm(event: dict, say, client) -> None:
             _slack_edit_consumer(client, channel_id, placeholder_ts, eq, loop)
         ) if placeholder_ts else None
 
-        answer, interrupt_data, captured_images = await agent_fut
+        answer, interrupt_data, captured_images, captured_video_paths = await agent_fut
         if consumer_task:
             streamed_display = await consumer_task
 
@@ -632,7 +658,7 @@ async def _handle_dm(event: dict, say, client) -> None:
                     None, repair_orphaned_tool_calls, None, config
                 )
                 log.info("Repaired orphaned tool calls for %s, retrying", channel_id)
-                answer, interrupt_data, captured_images = await loop.run_in_executor(
+                answer, interrupt_data, captured_images, captured_video_paths = await loop.run_in_executor(
                     None, _run_agent_sync, text, config
                 )
             except Exception as retry_exc:
@@ -673,6 +699,16 @@ async def _handle_dm(event: dict, say, client) -> None:
                     )
                 except Exception as img_exc:
                     log.warning("Failed to send Slack image: %s", img_exc)
+            for vpath in captured_video_paths:
+                try:
+                    await _app.client.files_upload_v2(
+                        channel=channel_id,
+                        file=vpath,
+                        filename="video.mp4",
+                        title="🎬 Video",
+                    )
+                except Exception as vid_exc:
+                    log.warning("Failed to send Slack video: %s", vid_exc)
             if interrupt_data:
                 with _pending_lock:
                     _pending_interrupts[channel_id] = {
@@ -724,6 +760,16 @@ async def _handle_dm(event: dict, say, client) -> None:
                 )
             except Exception as exc:
                 log.warning("Failed to send Slack image: %s", exc)
+        for vpath in captured_video_paths:
+            try:
+                await _app.client.files_upload_v2(
+                    channel=channel_id,
+                    file=vpath,
+                    filename="video.mp4",
+                    title="🎬 Video",
+                )
+            except Exception as exc:
+                log.warning("Failed to send Slack video: %s", exc)
         return
 
     # Streaming overflowed or was not used — delete placeholder, send normally
@@ -749,6 +795,17 @@ async def _handle_dm(event: dict, say, client) -> None:
             )
         except Exception as exc:
             log.warning("Failed to send Slack image: %s", exc)
+
+    for vpath in captured_video_paths:
+        try:
+            await _app.client.files_upload_v2(
+                channel=channel_id,
+                file=vpath,
+                filename="video.mp4",
+                title="🎬 Video",
+            )
+        except Exception as exc:
+            log.warning("Failed to send Slack video: %s", exc)
 
     if interrupt_data:
         with _pending_lock:
@@ -901,7 +958,7 @@ async def _handle_file(event: dict, say, client) -> None:
                 if caption:
                     user_text += f"\n\nCaption: {caption}"
                 loop = asyncio.get_event_loop()
-                answer, _, _ = await loop.run_in_executor(
+                answer, _, _, _ = await loop.run_in_executor(
                     None, _run_agent_sync, user_text, config
                 )
                 if answer:
@@ -914,7 +971,7 @@ async def _handle_file(event: dict, say, client) -> None:
                 if caption:
                     user_text += f"\n\nUser said: {caption}"
                 loop = asyncio.get_event_loop()
-                answer, _, _ = await loop.run_in_executor(
+                answer, _, _, _ = await loop.run_in_executor(
                     None, _run_agent_sync, user_text, config
                 )
                 if answer:
@@ -943,7 +1000,7 @@ async def _handle_file(event: dict, say, client) -> None:
 
             user_text = "\n".join(parts)
             loop = asyncio.get_event_loop()
-            answer, _, _ = await loop.run_in_executor(
+            answer, _, _, _ = await loop.run_in_executor(
                 None, _run_agent_sync, user_text, config
             )
             if answer:

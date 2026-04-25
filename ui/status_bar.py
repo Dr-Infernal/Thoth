@@ -14,6 +14,7 @@ import time
 from typing import Callable
 
 from nicegui import run, ui
+from ui.timer_utils import safe_timer
 
 from ui.status_checks import CheckResult, run_all_checks, run_light_checks, HEAVY_CHECKS
 
@@ -415,7 +416,7 @@ def build_status_bar(
           )
           extraction_pill.set_visibility(True)
 
-      ui.timer(2.0, _poll_extraction_status)
+      safe_timer(2.0, _poll_extraction_status)
 
       # Wire the stop button via JavaScript delegation
       ui.run_javascript('''
@@ -436,3 +437,38 @@ def build_status_bar(
                   ui.notify("⏹ Stopping extraction…", type="info")
           except ImportError:
               pass
+
+      # ── UPDATE-AVAILABLE pill ────────────────────────────────
+      update_pill = ui.html("", sanitize=False)
+      update_pill.set_visibility(False)
+      update_pill.style("text-align: center; margin-top: 4px; cursor: pointer;")
+
+      def _refresh_update_pill() -> None:
+          try:
+              import updater  # noqa: WPS433 (local import keeps startup light)
+              info = updater.get_update_state().available
+          except Exception:
+              return
+          if info is None:
+              update_pill.set_visibility(False)
+              return
+          update_pill.set_content(
+              f'<span class="status-pill" style="border:1px solid #66bb6a; '
+              f'color:#66bb6a; background:rgba(102,187,106,0.08);" '
+              f'title="New version available — click to view">'
+              f'<span class="dot" style="background:#66bb6a;"></span>'
+              f'⬆ v{info.version}'
+              f'</span>'
+          )
+          update_pill.set_visibility(True)
+
+      def _open_update_dialog() -> None:
+          try:
+              from ui.update_dialog import show_update_dialog
+              show_update_dialog()
+          except Exception as exc:
+              logger.debug("Failed to open update dialog: %s", exc)
+
+      update_pill.on("click", lambda: _open_update_dialog())
+      _refresh_update_pill()
+      safe_timer(60.0, _refresh_update_pill)

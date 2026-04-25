@@ -566,6 +566,41 @@ def open_settings(
             on_change=lambda e: tool_registry.set_enabled("image_gen", e.value),
         ).tooltip("Allow the agent to generate and edit images.")
 
+        # ── Video Generation ─────────────────────────────────────────
+        ui.separator()
+        ui.label("🎬 Video Generation").classes("text-h6")
+        ui.label(
+            "Generate videos and animate images using AI models. Requires a Google or xAI API key."
+        ).classes("text-grey-6 text-sm")
+
+        from tools.video_gen_tool import get_available_video_models, DEFAULT_MODEL as _VG_DEFAULT
+        _vg_tool = tool_registry.get_tool("video_gen")
+        _vg_enabled = tool_registry.is_enabled("video_gen") if _vg_tool else False
+        _vg_model = _vg_tool.get_config("model", _VG_DEFAULT) if _vg_tool else _VG_DEFAULT
+
+        _vg_model_opts = get_available_video_models()
+        if not _vg_model_opts:
+            ui.label(
+                "⚠️ No API keys configured. Add a Google or xAI key in the Cloud tab."
+            ).classes("text-warning text-sm")
+        else:
+            if _vg_model not in _vg_model_opts:
+                _vg_model = next(iter(_vg_model_opts))
+                if _vg_tool:
+                    _vg_tool.set_config("model", _vg_model)
+            ui.select(
+                label="Video model",
+                options=_vg_model_opts,
+                value=_vg_model,
+                on_change=lambda e: _vg_tool.set_config("model", e.value) if _vg_tool else None,
+            ).classes("w-full")
+
+        ui.switch(
+            "Enable video generation",
+            value=_vg_enabled,
+            on_change=lambda e: tool_registry.set_enabled("video_gen", e.value),
+        ).tooltip("Allow the agent to generate videos and animate images.")
+
     # ── Cloud Tab ────────────────────────────────────────────────────
 
     def _build_cloud_tab() -> None:
@@ -2140,9 +2175,29 @@ def open_settings(
         ui.separator()
 
         if total > 0:
+            from ui.bulk_select import BulkSelect, render_bulk_action_bar
+            from ui.confirm import confirm_destructive
+
+            _bulk_mem = BulkSelect()
+
             cat_options = ["All"] + sorted(memory_db.VALID_CATEGORIES)
             cat_sel = ui.select(label="Filter by category", options=cat_options, value="All").classes("w-full")
             search_input = ui.input("Search knowledge", placeholder="Type a keyword…").classes("w-full")
+
+            with ui.row().classes("w-full items-center justify-end q-mt-xs"):
+                _mem_select_btn = ui.button("Select").props(
+                    "flat dense no-caps size=sm"
+                )
+
+                def _toggle_mem_select():
+                    _bulk_mem.toggle_mode()
+                    _mem_select_btn.text = (
+                        "Done" if _bulk_mem.active else "Select"
+                    )
+                    _refresh_memories()
+
+                _mem_select_btn.on("click", _toggle_mem_select)
+
             mem_container = ui.column().classes("w-full")
 
             def _refresh_memories():
@@ -2158,7 +2213,30 @@ def open_settings(
                         ui.label("No matching entries.").classes("text-grey-6")
                     else:
                         for mem in memories:
-                            with ui.expansion(f"**{mem['subject']}** — _{mem.get('category', mem.get('entity_type', ''))}_").classes("w-full"):
+                            _mem_id = mem["id"]
+                            _header_label = (
+                                f"**{mem['subject']}** — "
+                                f"_{mem.get('category', mem.get('entity_type', ''))}_"
+                            )
+                            if _bulk_mem.active:
+                                with ui.row().classes("w-full items-center no-wrap").style(
+                                    "gap: 4px;"
+                                ):
+                                    _cb = ui.checkbox(
+                                        value=_bulk_mem.is_selected(_mem_id),
+                                    )
+                                    _cb.on(
+                                        "update:model-value",
+                                        lambda e, i=_mem_id: _bulk_mem.toggle_item(
+                                            i, bool(e.args),
+                                        ),
+                                    )
+                                    _entry_container = ui.expansion(
+                                        _header_label,
+                                    ).classes("col-grow")
+                            else:
+                                _entry_container = ui.expansion(_header_label).classes("w-full")
+                            with _entry_container:
                                 content = mem.get("content", mem.get("description", ""))
                                 ui.markdown(content, extras=['code-friendly', 'fenced-code-blocks', 'tables'])
                                 aliases = mem.get("aliases", "")
@@ -2196,6 +2274,30 @@ def open_settings(
                                     open_entity_editor(mid, on_saved=_refresh_memories)
 
                                 ui.button("✏️ Edit", on_click=_edit_mem).props("flat dense")
+
+            def _do_mem_bulk_delete(ids: list[str]) -> None:
+                def _commit():
+                    deleted, failures = memory_db.delete_memories(ids)
+                    msg = f"🗑️ Deleted {deleted} entr{'ies' if deleted != 1 else 'y'}."
+                    if failures:
+                        msg += f" {len(failures)} failed."
+                    ui.notify(msg, type="negative" if failures else "info")
+                    _refresh_memories()
+
+                noun = "entry" if len(ids) == 1 else "entries"
+                confirm_destructive(
+                    f"Delete {len(ids)} {noun}?",
+                    body="This cannot be undone.",
+                    on_confirm=_commit,
+                )
+
+            render_bulk_action_bar(
+                _bulk_mem,
+                on_delete=_do_mem_bulk_delete,
+                label_singular="entry",
+                label_plural="entries",
+                on_clear=_refresh_memories,
+            )
 
             cat_sel.on("update:model-value", lambda _: _refresh_memories())
             search_input.on("update:model-value", lambda _: _refresh_memories())
@@ -2822,6 +2924,13 @@ def open_settings(
             value=is_self_improvement_enabled(),
             on_change=_on_self_improve_change,
         )
+
+        # ── Auto-update section ─────────────────────────────────
+        try:
+            from ui.update_dialog import build_update_section
+            build_update_section()
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("update section failed to build", exc_info=True)
 
     # ══════════════════════════════════════════════════════════════════
     # DIALOG SHELL

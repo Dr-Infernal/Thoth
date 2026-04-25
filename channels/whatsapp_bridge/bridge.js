@@ -335,15 +335,27 @@ rl.on("line", async (line) => {
       }
 
       case "send_media": {
-        const { chatId, mediaData, filename: fname, caption } = params;
-        const buffer = Buffer.from(mediaData, "base64");
+        const { chatId, mediaData, filePath, filename: fname, caption } = params;
+        const buffer = mediaData ? Buffer.from(mediaData, "base64") : undefined;
         const ext = (fname || "").split(".").pop().toLowerCase();
+        const videoMime = {
+          mp4: "video/mp4",
+          mov: "video/quicktime",
+          avi: "video/x-msvideo",
+          mkv: "video/x-matroska",
+        }[ext] || "video/mp4";
 
         let msgPayload;
         if (["jpg", "jpeg", "png", "webp", "gif"].includes(ext)) {
           msgPayload = { image: buffer, caption: caption || undefined };
         } else if (["mp4", "mov", "avi", "mkv"].includes(ext)) {
-          msgPayload = { video: buffer, caption: caption || undefined };
+          msgPayload = {
+            video: filePath ? { url: filePath } : buffer,
+            caption: caption || undefined,
+            mimetype: videoMime,
+            fileName: fname || undefined,
+            ptv: false,
+          };
         } else if (["ogg", "opus", "mp3", "wav", "m4a"].includes(ext)) {
           const audioMime = (ext === "ogg" || ext === "opus")
             ? "audio/ogg; codecs=opus" : "audio/mpeg";

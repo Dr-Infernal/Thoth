@@ -111,8 +111,11 @@ def is_enabled(name: str) -> bool:
 
 
 def set_enabled(name: str, value: bool) -> None:
-    logger.info("Tool '%s' %s", name, "enabled" if value else "disabled")
-    _enabled[name] = value
+    tool = get_tool(name)
+    if tool is None:
+        raise KeyError(f"Unknown tool '{name}'")
+    logger.info("Tool '%s' %s", tool.name, "enabled" if value else "disabled")
+    _enabled[tool.name] = value
     _save_config()
     _invalidate_agent_cache()
     # Also invalidate the task tool-inference keyword map

@@ -248,138 +248,186 @@ def build_chat(
             and _msgs_to_render[-1].get("content", "").startswith(
                 "\u26a0\ufe0f The assistant was interrupted")):
         _msgs_to_render = _msgs_to_render[:-1]
-    for msg in _msgs_to_render:
+
+    # ── Progressive render ───────────────────────────────────────────
+    # For responsiveness on large threads, render the first batch
+    # synchronously so the user sees content immediately, then stream
+    # the remainder via chained timers (each yields to the event loop
+    # so clicks / input remain responsive). Reattach / onboarding /
+    # scroll hooks run AFTER all messages are in the DOM so order is
+    # preserved.
+    _INITIAL_RENDER = 15
+    _CHUNK_SIZE = 10
+    for msg in _msgs_to_render[:_INITIAL_RENDER]:
         add_chat_message(msg)
+    _remaining_msgs = _msgs_to_render[_INITIAL_RENDER:]
 
     # ── Reattach to running generation ───────────────────────────────
-    if _reattach_gen and _reattach_gen.detached and _reattach_gen.status == "streaming":
-        from identity import get_assistant_name as _gan_ra
-        from ui.status_bar import get_bot_avatar_html as _gba_ra
-        _ra_avatar = _gba_ra()
-        _ra_name = _gan_ra()
-        with p.chat_container:
-            with ui.element("div").classes("thoth-msg-row"):
-                ui.html(f'<div class="thoth-avatar thoth-avatar-bot">{_ra_avatar}</div>', sanitize=False)
-                with ui.column().classes("thoth-msg-body gap-1") as _ra_wrapper:
-                    ui.html(
-                        '<div class="thoth-msg-header">'
-                        f'<span class="thoth-msg-name">{_ra_name}</span>'
-                        f'<span class="thoth-msg-stamp">{datetime.now().strftime("%H:%M")}</span>'
-                        '</div>',
-                        sanitize=False,
-                    )
-                    _reattach_gen.tool_col = ui.column().classes("w-full gap-1")
-                    for _tr in _reattach_gen.tool_results:
-                        with _reattach_gen.tool_col:
-                            with ui.expansion(f"\u2705 {_tr['name']}", icon="check_circle").classes("w-full"):
-                                if _tr.get('content'):
-                                    _disp = _tr['content'][:5_000]
-                                    if len(_tr['content']) > 5_000:
-                                        _disp += "\n\n\u2026 (truncated)"
-                                    ui.code(_disp).classes("w-full text-xs")
-                    for _cj in _reattach_gen.chart_data:
-                        try:
-                            import plotly.io as _pio
-                            _fig = _pio.from_json(_cj)
+    def _finalize_after_messages() -> None:
+        if _reattach_gen and _reattach_gen.detached and _reattach_gen.status == "streaming":
+            from identity import get_assistant_name as _gan_ra
+            from ui.status_bar import get_bot_avatar_html as _gba_ra
+            _ra_avatar = _gba_ra()
+            _ra_name = _gan_ra()
+            with p.chat_container:
+                with ui.element("div").classes("thoth-msg-row"):
+                    ui.html(f'<div class="thoth-avatar thoth-avatar-bot">{_ra_avatar}</div>', sanitize=False)
+                    with ui.column().classes("thoth-msg-body gap-1") as _ra_wrapper:
+                        ui.html(
+                            '<div class="thoth-msg-header">'
+                            f'<span class="thoth-msg-name">{_ra_name}</span>'
+                            f'<span class="thoth-msg-stamp">{datetime.now().strftime("%H:%M")}</span>'
+                            '</div>',
+                            sanitize=False,
+                        )
+                        _reattach_gen.tool_col = ui.column().classes("w-full gap-1")
+                        for _tr in _reattach_gen.tool_results:
                             with _reattach_gen.tool_col:
-                                ui.plotly(_fig).classes("w-full")
-                        except Exception:
-                            logger.debug("Chart rendering failed during reattach", exc_info=True)
-                    for _img in _reattach_gen.captured_images:
-                        try:
-                            with _reattach_gen.tool_col:
-                                render_image_with_save(_img)
-                        except Exception:
-                            logger.debug("Image rendering failed during reattach", exc_info=True)
-                    _reattach_gen.assistant_md = ui.markdown(
-                        _reattach_gen.accumulated,
-                        extras=['code-friendly', 'fenced-code-blocks', 'tables'],
-                    ).classes("thoth-msg w-full")
-                    _reattach_gen.wrapper = _ra_wrapper
-                    _reattach_gen.thinking_label = None
-                    _reattach_gen.thinking_md = None
-        _reattach_gen.detached = False
-        if p.stop_btn:
-            p.stop_btn.enable()
-    elif _reattach_gen and _reattach_gen.status in ("done", "error", "stopped", "interrupted"):
-        if _reattach_gen.accumulated:
-            a_msg: dict = {"role": "assistant", "content": _reattach_gen.accumulated}
-            if _reattach_gen.tool_results:
-                a_msg["tool_results"] = _reattach_gen.tool_results
-            if _reattach_gen.chart_data:
-                a_msg["charts"] = _reattach_gen.chart_data
-            if _reattach_gen.captured_images:
-                a_msg["images"] = _reattach_gen.captured_images
-                if _reattach_gen.captured_images_persist:
-                    a_msg["_media_persist_flags"] = list(_reattach_gen.captured_images_persist)
-                    if any(_reattach_gen.captured_images_persist):
-                        a_msg["_media_persist"] = True
-            state.messages.append(a_msg)
-            persist_thread_media_state(state.thread_id, state.messages)
-            add_chat_message(a_msg)
-        _active_generations.pop(state.thread_id, None)
+                                with ui.expansion(f"\u2705 {_tr['name']}", icon="check_circle").classes("w-full"):
+                                    if _tr.get('content'):
+                                        _disp = _tr['content'][:5_000]
+                                        if len(_tr['content']) > 5_000:
+                                            _disp += "\n\n\u2026 (truncated)"
+                                        ui.code(_disp).classes("w-full text-xs")
+                        for _cj in _reattach_gen.chart_data:
+                            try:
+                                import plotly.io as _pio
+                                _fig = _pio.from_json(_cj)
+                                with _reattach_gen.tool_col:
+                                    ui.plotly(_fig).classes("w-full")
+                            except Exception:
+                                logger.debug("Chart rendering failed during reattach", exc_info=True)
+                        for _img in _reattach_gen.captured_images:
+                            try:
+                                with _reattach_gen.tool_col:
+                                    render_image_with_save(_img)
+                            except Exception:
+                                logger.debug("Image rendering failed during reattach", exc_info=True)
+                        for _vid in _reattach_gen.captured_videos:
+                            try:
+                                with _reattach_gen.tool_col:
+                                    from ui.render import render_video_with_save
+                                    render_video_with_save(_vid.get("path", "") if isinstance(_vid, dict) else _vid)
+                            except Exception:
+                                logger.debug("Video rendering failed during reattach", exc_info=True)
+                        _reattach_gen.assistant_md = ui.markdown(
+                            _reattach_gen.accumulated,
+                            extras=['code-friendly', 'fenced-code-blocks', 'tables'],
+                        ).classes("thoth-msg w-full")
+                        _reattach_gen.wrapper = _ra_wrapper
+                        _reattach_gen.thinking_label = None
+                        _reattach_gen.thinking_md = None
+            _reattach_gen.detached = False
+            if p.stop_btn:
+                p.stop_btn.enable()
+        elif _reattach_gen and _reattach_gen.status in ("done", "error", "stopped", "interrupted"):
+            if _reattach_gen.accumulated:
+                a_msg: dict = {"role": "assistant", "content": _reattach_gen.accumulated}
+                if _reattach_gen.tool_results:
+                    a_msg["tool_results"] = _reattach_gen.tool_results
+                if _reattach_gen.chart_data:
+                    a_msg["charts"] = _reattach_gen.chart_data
+                if _reattach_gen.captured_images:
+                    a_msg["images"] = _reattach_gen.captured_images
+                    if _reattach_gen.captured_images_persist:
+                        a_msg["_media_persist_flags"] = list(_reattach_gen.captured_images_persist)
+                        if any(_reattach_gen.captured_images_persist):
+                            a_msg["_media_persist"] = True
+                if _reattach_gen.captured_videos:
+                    a_msg["videos"] = _reattach_gen.captured_videos
+                state.messages.append(a_msg)
+                persist_thread_media_state(state.thread_id, state.messages)
+                add_chat_message(a_msg)
+            _active_generations.pop(state.thread_id, None)
 
-    # Onboarding
-    if state.show_onboarding:
-        from identity import get_assistant_name as _gan_ob
-        from ui.status_bar import get_bot_avatar_html as _gba_ob
-        _ob_avatar = _gba_ob()
-        _ob_name = _gan_ob()
-        with p.chat_container:
-            with ui.element("div").classes("thoth-msg-row"):
-                ui.html(f'<div class="thoth-avatar thoth-avatar-bot">{_ob_avatar}</div>', sanitize=False)
-                with ui.column().classes("thoth-msg-body gap-1"):
-                    ui.html(
-                        '<div class="thoth-msg-header">'
-                        f'<span class="thoth-msg-name">{_ob_name}</span>'
-                        '</div>',
-                        sanitize=False,
-                    )
-                    _cloud_ob2 = is_cloud_model(_active_model)
-                    ui.markdown(welcome_message(cloud=_cloud_ob2), extras=['code-friendly', 'fenced-code-blocks', 'tables'])
-                    with ui.row().classes("flex-wrap gap-2"):
-                        for prompt in EXAMPLE_PROMPTS:
-                            def _try_inline(pr=prompt):
-                                state.show_onboarding = False
-                                asyncio.create_task(send_message(pr))
-                            ui.button(prompt, on_click=_try_inline).props("flat dense outline").style("text-transform:none;")
+        # Onboarding
+        if state.show_onboarding:
+            from identity import get_assistant_name as _gan_ob
+            from ui.status_bar import get_bot_avatar_html as _gba_ob
+            _ob_avatar = _gba_ob()
+            _ob_name = _gan_ob()
+            with p.chat_container:
+                with ui.element("div").classes("thoth-msg-row"):
+                    ui.html(f'<div class="thoth-avatar thoth-avatar-bot">{_ob_avatar}</div>', sanitize=False)
+                    with ui.column().classes("thoth-msg-body gap-1"):
+                        ui.html(
+                            '<div class="thoth-msg-header">'
+                            f'<span class="thoth-msg-name">{_ob_name}</span>'
+                            '</div>',
+                            sanitize=False,
+                        )
+                        _cloud_ob2 = is_cloud_model(_active_model)
+                        ui.markdown(welcome_message(cloud=_cloud_ob2), extras=['code-friendly', 'fenced-code-blocks', 'tables'])
+                        with ui.row().classes("flex-wrap gap-2"):
+                            for prompt in EXAMPLE_PROMPTS:
+                                def _try_inline(pr=prompt):
+                                    state.show_onboarding = False
+                                    asyncio.create_task(send_message(pr))
+                                ui.button(prompt, on_click=_try_inline).props("flat dense outline").style("text-transform:none;")
 
-                    def _dismiss():
-                        state.show_onboarding = False
-                        rebuild_main()
-                    ui.button("✕ Dismiss", on_click=_dismiss).props("flat dense")
+                        def _dismiss():
+                            state.show_onboarding = False
+                            rebuild_main()
+                        ui.button("✕ Dismiss", on_click=_dismiss).props("flat dense")
 
-    # Interrupt UI
-    if state.pending_interrupt:
-        show_interrupt(state.pending_interrupt)
+        # Interrupt UI
+        if state.pending_interrupt:
+            show_interrupt(state.pending_interrupt)
 
-    if p.chat_scroll:
-        p.chat_scroll.scroll_to(percent=1.0)
-        # Client-side auto-scroll: a MutationObserver scrolls to the
-        # bottom whenever content changes, unless the user has scrolled up.
-        # Uses wheel/touchstart timestamps to distinguish user-initiated
-        # scrolls from programmatic ones (MutationObserver).  On Mac
-        # WKWebView the old approach of checking scroll position in every
-        # scroll event caused a feedback loop because the programmatic
-        # scroll fired a scroll event that immediately re-enabled _tSS.
-        _sid = p.chat_scroll.id
-        ui.run_javascript(f"""(function(){{
-            var el = getElement({_sid});
-            if (!el || !el.$el) return;
-            var c = el.$el.querySelector('.q-scrollarea__container');
-            if (!c) return;
-            el._tSS = true;
-            var uTs = 0;
-            c.addEventListener('wheel', function() {{ uTs = Date.now(); }}, {{passive:true}});
-            c.addEventListener('touchstart', function() {{ uTs = Date.now(); }}, {{passive:true}});
-            c.addEventListener('scroll', function() {{
-                if (Date.now() - uTs > 1000) return;
-                el._tSS = (c.scrollHeight - c.scrollTop - c.clientHeight) < 50;
-            }});
-            new MutationObserver(function() {{
-                if (el._tSS) c.scrollTop = c.scrollHeight;
-            }}).observe(c, {{childList: true, subtree: true, characterData: true}});
-        }})()""")
+        if p.chat_scroll:
+            p.chat_scroll.scroll_to(percent=1.0)
+            # Client-side auto-scroll: a MutationObserver scrolls to the
+            # bottom whenever content changes, unless the user has scrolled up.
+            # Uses wheel/touchstart timestamps to distinguish user-initiated
+            # scrolls from programmatic ones (MutationObserver).  On Mac
+            # WKWebView the old approach of checking scroll position in every
+            # scroll event caused a feedback loop because the programmatic
+            # scroll fired a scroll event that immediately re-enabled _tSS.
+            _sid = p.chat_scroll.id
+            ui.run_javascript(f"""(function(){{
+                var el = getElement({_sid});
+                if (!el || !el.$el) return;
+                var c = el.$el.querySelector('.q-scrollarea__container');
+                if (!c) return;
+                el._tSS = true;
+                var uTs = 0;
+                c.addEventListener('wheel', function() {{ uTs = Date.now(); }}, {{passive:true}});
+                c.addEventListener('touchstart', function() {{ uTs = Date.now(); }}, {{passive:true}});
+                c.addEventListener('scroll', function() {{
+                    if (Date.now() - uTs > 1000) return;
+                    el._tSS = (c.scrollHeight - c.scrollTop - c.clientHeight) < 50;
+                }});
+                new MutationObserver(function() {{
+                    if (el._tSS) c.scrollTop = c.scrollHeight;
+                }}).observe(c, {{childList: true, subtree: true, characterData: true}});
+            }})()""")
+
+    # If there are leftover messages, stream them into the container
+    # in small chunks via chained ui.timer(once=True).  Each timer
+    # yields to the event loop so the UI stays responsive.  Finalize
+    # runs after the last chunk so reattach / onboarding land at the
+    # bottom of the chat.
+    if _remaining_msgs:
+        _chunk_state = {"idx": 0}
+        def _render_next_chunk():
+            start = _chunk_state["idx"]
+            end = min(start + _CHUNK_SIZE, len(_remaining_msgs))
+            try:
+                with p.chat_container:
+                    for msg in _remaining_msgs[start:end]:
+                        add_chat_message(msg)
+            except Exception:
+                logger.debug("chunked chat render failed", exc_info=True)
+                _finalize_after_messages()
+                return
+            _chunk_state["idx"] = end
+            if end < len(_remaining_msgs):
+                ui.timer(0.01, _render_next_chunk, once=True)
+            else:
+                _finalize_after_messages()
+        ui.timer(0.01, _render_next_chunk, once=True)
+    else:
+        _finalize_after_messages()
 
     # ── File chips (created early so _on_upload can reference) ──────
     # We'll parent these inside the input card below

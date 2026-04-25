@@ -105,7 +105,7 @@ def _new_thread(channel_id: int | str) -> str:
 def _run_agent_sync(user_text: str, config: dict,
                     event_queue=None) -> tuple[str, dict | None, list[bytes]]:
     from tools import registry as tool_registry
-    from channels.media_capture import grab_vision_capture, grab_generated_image
+    from channels.media_capture import grab_vision_capture, grab_generated_image, grab_generated_video
 
     config = {**config, "recursion_limit": agent_mod.RECURSION_LIMIT_CHAT}
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
@@ -114,6 +114,7 @@ def _run_agent_sync(user_text: str, config: dict,
     interrupt_data: dict | None = None
     used_vision = False
     used_image_gen = False
+    used_video_gen = False
 
     for event_type, payload in agent_mod.stream_agent(user_text, enabled, config):
         if event_type == "token":
@@ -128,6 +129,8 @@ def _run_agent_sync(user_text: str, config: dict,
                 used_vision = True
             if raw_name in ("generate_image", "edit_image"):
                 used_image_gen = True
+            if raw_name in ("generate_video", "animate_image"):
+                used_video_gen = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -148,6 +151,7 @@ def _run_agent_sync(user_text: str, config: dict,
         event_queue.put(None)  # sentinel
 
     captured_images: list[bytes] = []
+    captured_video_paths: list[str] = []
     if used_vision:
         img = grab_vision_capture()
         if img:
@@ -156,14 +160,18 @@ def _run_agent_sync(user_text: str, config: dict,
         img = grab_generated_image()
         if img:
             captured_images.append(img)
-    return answer or "_(No response)_", interrupt_data, captured_images
+    if used_video_gen:
+        vid_path = grab_generated_video()
+        if vid_path:
+            captured_video_paths.append(vid_path)
+    return answer or "_(No response)_", interrupt_data, captured_images, captured_video_paths
 
 
 def _resume_agent_sync(config: dict, approved: bool,
-                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, list[bytes]]:
+                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, list[bytes], list[str]]:
     """Resume a paused agent after interrupt approval/denial."""
     from tools import registry as tool_registry
-    from channels.media_capture import grab_vision_capture, grab_generated_image
+    from channels.media_capture import grab_vision_capture, grab_generated_image, grab_generated_video
 
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
     full_answer: list[str] = []
@@ -171,6 +179,7 @@ def _resume_agent_sync(config: dict, approved: bool,
     interrupt_data: dict | None = None
     used_vision = False
     used_image_gen = False
+    used_video_gen = False
 
     for event_type, payload in agent_mod.resume_stream_agent(
         enabled, config, approved, interrupt_ids=interrupt_ids
@@ -187,6 +196,8 @@ def _resume_agent_sync(config: dict, approved: bool,
                 used_vision = True
             if raw_name in ("generate_image", "edit_image"):
                 used_image_gen = True
+            if raw_name in ("generate_video", "animate_image"):
+                used_video_gen = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -202,6 +213,7 @@ def _resume_agent_sync(config: dict, approved: bool,
         answer = "\n".join(tool_reports)
 
     captured_images: list[bytes] = []
+    captured_video_paths: list[str] = []
     if used_vision:
         img = grab_vision_capture()
         if img:
@@ -210,7 +222,11 @@ def _resume_agent_sync(config: dict, approved: bool,
         img = grab_generated_image()
         if img:
             captured_images.append(img)
-    return answer or "_(No response)_", interrupt_data, captured_images
+    if used_video_gen:
+        vid_path = grab_generated_video()
+        if vid_path:
+            captured_video_paths.append(vid_path)
+    return answer or "_(No response)_", interrupt_data, captured_images, captured_video_paths
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -520,7 +536,7 @@ async def start_bot() -> bool:
                     interrupt.get("data")
                 )
 
-                answer, new_interrupt, captured = await asyncio.get_event_loop().run_in_executor(
+                answer, new_interrupt, captured, vid_paths = await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: _resume_agent_sync(
                         config, approved, interrupt_ids=interrupt_ids
@@ -536,6 +552,12 @@ async def start_bot() -> bool:
                         await message.channel.send(file=f)
                     except Exception as exc:
                         log.warning("Failed to send Discord image: %s", exc)
+                for vpath in vid_paths:
+                    try:
+                        f = discord.File(vpath, filename="video.mp4")
+                        await message.channel.send(file=f)
+                    except Exception as exc:
+                        log.warning("Failed to send Discord video: %s", exc)
                 if new_interrupt:
                     with _pending_lock:
                         _pending_interrupts[channel_id] = {
@@ -578,7 +600,7 @@ async def start_bot() -> bool:
                     consumer_task = asyncio.ensure_future(
                         _discord_edit_consumer(sent_msg, eq, loop)
                     )
-                answer, interrupt_data, captured_images = await executor_future
+                answer, interrupt_data, captured_images, captured_video_paths = await executor_future
                 if sent_msg:
                     streamed_display = await consumer_task
                 else:
@@ -661,6 +683,12 @@ async def start_bot() -> bool:
                         await message.channel.send(file=f)
                     except Exception as exc:
                         log.warning("Failed to send Discord image: %s", exc)
+                for vpath in captured_video_paths:
+                    try:
+                        f = discord.File(vpath, filename="video.mp4")
+                        await message.channel.send(file=f)
+                    except Exception as exc:
+                        log.warning("Failed to send Discord video: %s", exc)
             else:
                 # Streaming overflowed or wasn't available — delete placeholder, send normally
                 if sent_msg:
@@ -680,6 +708,12 @@ async def start_bot() -> bool:
                         await message.channel.send(file=f)
                     except Exception as exc:
                         log.warning("Failed to send Discord image: %s", exc)
+                for vpath in captured_video_paths:
+                    try:
+                        f = discord.File(vpath, filename="video.mp4")
+                        await message.channel.send(file=f)
+                    except Exception as exc:
+                        log.warning("Failed to send Discord video: %s", exc)
 
             # Store interrupt
             if interrupt_data:

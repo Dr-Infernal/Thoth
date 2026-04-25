@@ -398,6 +398,7 @@ class BrowserSession:
         self._launched = False
         self._closed = False
         self._thread_pages: dict[str, Any] = {}  # thread_id → Page
+        self._thread_pages_last_used: dict[str, float] = {}  # thread_id → monotonic ts
         self._browser_pid: int | None = None  # PID of the browser process
         self._launch_error: Exception | None = None  # Set if _pw_loop fails
 
@@ -651,11 +652,13 @@ class BrowserSession:
         if page is not None:
             try:
                 if not page.is_closed():
+                    self._thread_pages_last_used[thread_id] = time.monotonic()
                     return page
             except Exception:
                 pass
             # Page was closed externally — remove stale entry
             self._thread_pages.pop(thread_id, None)
+            self._thread_pages_last_used.pop(thread_id, None)
 
         # Claim an unowned *blank* page if available
         owned_pages = set(self._thread_pages.values())
@@ -664,6 +667,7 @@ class BrowserSession:
                 if (p not in owned_pages and not p.is_closed()
                         and p.url in self._BLANK_URLS):
                     self._thread_pages[thread_id] = p
+                    self._thread_pages_last_used[thread_id] = time.monotonic()
                     return p
             except Exception:
                 continue
@@ -671,6 +675,7 @@ class BrowserSession:
         # No blank unowned pages — open a new tab
         new_page = self._context.new_page()
         self._thread_pages[thread_id] = new_page
+        self._thread_pages_last_used[thread_id] = time.monotonic()
         return new_page
 
     @property
@@ -722,6 +727,7 @@ class BrowserSession:
         try:
             def _do():
                 page = self._thread_pages.pop(thread_id, None)
+                self._thread_pages_last_used.pop(thread_id, None)
                 if page is None:
                     return
                 try:
@@ -737,11 +743,39 @@ class BrowserSession:
         except Exception:
             # Browser may be crashed / closed — just drop the mapping
             self._thread_pages.pop(thread_id, None)
+            self._thread_pages_last_used.pop(thread_id, None)
+
+    def evict_idle(self, ttl_seconds: float = 600.0) -> int:
+        """Close tabs untouched for longer than *ttl_seconds*.
+
+        Tabs belonging to threads in ``ui.state._active_generations`` are
+        always preserved — a running generation may take the screenshot
+        minutes after its last navigate.  Returns the number of tabs
+        closed.  Safe to call from any thread.
+        """
+        if not self._launched or self._closed:
+            return 0
+        try:
+            from ui.state import _active_generations
+            active = set(_active_generations.keys())
+        except Exception:
+            active = set()
+        cutoff = time.monotonic() - ttl_seconds
+        to_close: list[str] = []
+        for tid, last in list(self._thread_pages_last_used.items()):
+            if tid in active:
+                continue
+            if last < cutoff:
+                to_close.append(tid)
+        for tid in to_close:
+            self.release_thread(tid)
+        return len(to_close)
 
     def close(self) -> None:
         """Shut down the browser and Playwright thread."""
         self._closed = True
         self._thread_pages.clear()
+        self._thread_pages_last_used.clear()
         try:
             self._work_q.put(None)  # sentinel to exit _pw_loop
         except Exception:

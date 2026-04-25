@@ -7,10 +7,15 @@ with live HTML/CSS preview, brand configuration, and export to PDF/PPTX/HTML/PNG
 from designer.state import (
     DesignerProject,
     DesignerPage,
+    DesignerInteraction,
     BrandConfig,
     ProjectBrief,
     ASPECT_RATIOS,
     DEFAULT_ASPECT_RATIO,
+    DESIGNER_MODES,
+    DEFAULT_DESIGNER_MODE,
+    normalize_designer_mode,
+    default_page_kind_for_mode,
 )
 from designer.storage import (
     save_project,
@@ -39,10 +44,15 @@ from designer.briefing import (
 __all__ = [
     "DesignerProject",
     "DesignerPage",
+    "DesignerInteraction",
     "BrandConfig",
     "ProjectBrief",
     "ASPECT_RATIOS",
     "DEFAULT_ASPECT_RATIO",
+    "DESIGNER_MODES",
+    "DEFAULT_DESIGNER_MODE",
+    "normalize_designer_mode",
+    "default_page_kind_for_mode",
     "save_project",
     "load_project",
     "list_projects",

@@ -56,9 +56,26 @@ BRIDGE_JS = r"""
     }
 
     function isEditable(el) {
+        if (!el || el.nodeType !== 1) return false;
         var tag = el.tagName.toLowerCase();
-        return ['h1','h2','h3','h4','h5','h6','p','span','a','li','td','th',
-                'label','figcaption','blockquote','button','dt','dd'].indexOf(tag) >= 0;
+        // Never treat structural roots or media as text-editable.
+        if (['html','body','head','script','style','img','video','audio',
+             'iframe','svg','canvas','input','textarea','select','picture',
+             'source'].indexOf(tag) >= 0) return false;
+        // Known text-bearing tags are always editable.
+        var known = ['h1','h2','h3','h4','h5','h6','p','span','a','li','td','th',
+                     'label','figcaption','blockquote','button','dt','dd',
+                     'strong','em','b','i','small','code','pre','caption',
+                     'summary','figcaption'];
+        if (known.indexOf(tag) >= 0) return true;
+        // Leaf text containers (e.g. a <div> holding only a label/email/etc.)
+        // are also editable so template copy wrapped in div/section still
+        // accepts double-click-to-edit.
+        if (el.children && el.children.length === 0) {
+            var txt = (el.textContent || '').trim();
+            return txt.length > 0;
+        }
+        return false;
     }
 
     function getElementInfo(el) {

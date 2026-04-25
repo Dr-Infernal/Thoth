@@ -405,9 +405,9 @@ def _new_thread(chat_id: str) -> str:
 # Agent execution
 # ──────────────────────────────────────────────────────────────────────
 def _run_agent_sync(user_text: str, config: dict,
-                    event_queue=None) -> tuple[str, dict | None, list[bytes]]:
+                    event_queue=None) -> tuple[str, dict | None, list[bytes], list[str]]:
     from tools import registry as tool_registry
-    from channels.media_capture import grab_vision_capture, grab_generated_image
+    from channels.media_capture import grab_vision_capture, grab_generated_image, grab_generated_video
 
     config = {**config, "recursion_limit": agent_mod.RECURSION_LIMIT_CHAT}
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
@@ -416,6 +416,7 @@ def _run_agent_sync(user_text: str, config: dict,
     interrupt_data: dict | None = None
     used_vision = False
     used_image_gen = False
+    used_video_gen = False
 
     for event_type, payload in agent_mod.stream_agent(user_text, enabled, config):
         if event_queue is not None:
@@ -432,6 +433,8 @@ def _run_agent_sync(user_text: str, config: dict,
                 used_vision = True
             if raw_name in ("generate_image", "edit_image"):
                 used_image_gen = True
+            if raw_name in ("generate_video", "animate_image"):
+                used_video_gen = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -450,6 +453,7 @@ def _run_agent_sync(user_text: str, config: dict,
         answer = "\n".join(tool_reports)
 
     captured_images: list[bytes] = []
+    captured_video_paths: list[str] = []
     if used_vision:
         img = grab_vision_capture()
         if img:
@@ -458,14 +462,18 @@ def _run_agent_sync(user_text: str, config: dict,
         img = grab_generated_image()
         if img:
             captured_images.append(img)
-    return answer or "_(No response)_", interrupt_data, captured_images
+    if used_video_gen:
+        vid_path = grab_generated_video()
+        if vid_path:
+            captured_video_paths.append(vid_path)
+    return answer or "_(No response)_", interrupt_data, captured_images, captured_video_paths
 
 
 def _resume_agent_sync(config: dict, approved: bool,
-                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, list[bytes]]:
+                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, list[bytes], list[str]]:
     """Resume a paused agent after interrupt approval/denial."""
     from tools import registry as tool_registry
-    from channels.media_capture import grab_vision_capture, grab_generated_image
+    from channels.media_capture import grab_vision_capture, grab_generated_image, grab_generated_video
 
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
     full_answer: list[str] = []
@@ -473,6 +481,7 @@ def _resume_agent_sync(config: dict, approved: bool,
     interrupt_data: dict | None = None
     used_vision = False
     used_image_gen = False
+    used_video_gen = False
 
     for event_type, payload in agent_mod.resume_stream_agent(
         enabled, config, approved, interrupt_ids=interrupt_ids
@@ -489,6 +498,8 @@ def _resume_agent_sync(config: dict, approved: bool,
                 used_vision = True
             if raw_name in ("generate_image", "edit_image"):
                 used_image_gen = True
+            if raw_name in ("generate_video", "animate_image"):
+                used_video_gen = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -504,6 +515,7 @@ def _resume_agent_sync(config: dict, approved: bool,
         answer = "\n".join(tool_reports)
 
     captured_images: list[bytes] = []
+    captured_video_paths: list[str] = []
     if used_vision:
         img = grab_vision_capture()
         if img:
@@ -512,7 +524,11 @@ def _resume_agent_sync(config: dict, approved: bool,
         img = grab_generated_image()
         if img:
             captured_images.append(img)
-    return answer or "_(No response)_", interrupt_data, captured_images
+    if used_video_gen:
+        vid_path = grab_generated_video()
+        if vid_path:
+            captured_video_paths.append(vid_path)
+    return answer or "_(No response)_", interrupt_data, captured_images, captured_video_paths
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -543,9 +559,22 @@ def _send_to_bridge(method: str, params: dict | None = None) -> int:
 def _send_and_wait(method: str, params: dict | None = None,
                    timeout: float = 15.0) -> dict | None:
     """Send a JSON-RPC message and wait for the response (blocking)."""
-    msg_id = _send_to_bridge(method, params)
+    global _msg_id_counter
+    if _bridge_proc is None or _bridge_proc.stdin is None:
+        raise RuntimeError("WhatsApp bridge not running")
+
     event = threading.Event()
-    _pending_responses[msg_id] = event
+    with _writer_lock:
+        _msg_id_counter += 1
+        msg_id = _msg_id_counter
+        _pending_responses[msg_id] = event
+        message = json.dumps({
+            "id": msg_id,
+            "method": method,
+            "params": params or {},
+        }) + "\n"
+        _bridge_proc.stdin.write(message)
+        _bridge_proc.stdin.flush()
     try:
         if event.wait(timeout):
             return _response_data.pop(msg_id, None)
@@ -683,7 +712,7 @@ def _process_inbound(data: dict) -> None:
         interrupt_ids = approval_helpers.extract_interrupt_ids(
             interrupt.get("data")
         )
-        answer, new_interrupt, captured = _resume_agent_sync(
+        answer, new_interrupt, captured, captured_video_paths = _resume_agent_sync(
             config, approved, interrupt_ids=interrupt_ids
         )
         if answer:
@@ -698,6 +727,11 @@ def _process_inbound(data: dict) -> None:
                 os.unlink(tmp_path)
             except Exception as exc:
                 log.warning("Failed to send WhatsApp image: %s", exc)
+        for vpath in captured_video_paths:
+            try:
+                _send_media_sync(chat_id, vpath, caption="🎬 Video")
+            except Exception as exc:
+                log.warning("Failed to send WhatsApp video: %s", exc)
         if new_interrupt:
             with _pending_lock:
                 _pending_interrupts[chat_id] = {
@@ -739,7 +773,7 @@ def _process_inbound(data: dict) -> None:
         consumer_thread.start()
 
     try:
-        answer, interrupt_data, captured_images = _run_agent_sync(body, config, eq)
+        answer, interrupt_data, captured_images, captured_video_paths = _run_agent_sync(body, config, eq)
     except Exception as exc:
         log.error("Agent error for chat %s: %s", chat_id, exc)
         # Drain queue so consumer exits
@@ -753,7 +787,7 @@ def _process_inbound(data: dict) -> None:
                 from agent import repair_orphaned_tool_calls
                 repair_orphaned_tool_calls(None, config)
                 log.info("Repaired orphaned tool calls for chat %s, retrying", chat_id)
-                answer, interrupt_data, captured_images = _run_agent_sync(body, config)
+                answer, interrupt_data, captured_images, captured_video_paths = _run_agent_sync(body, config)
             except Exception as retry_exc:
                 log.error("Retry after repair failed: %s", retry_exc)
                 if msg_key:
@@ -781,6 +815,11 @@ def _process_inbound(data: dict) -> None:
                     os.unlink(tmp_path)
                 except Exception as img_exc:
                     log.warning("Failed to send WhatsApp image: %s", img_exc)
+            for vpath in captured_video_paths:
+                try:
+                    _send_media_sync(chat_id, vpath, caption="🎬 Video")
+                except Exception as vid_exc:
+                    log.warning("Failed to send WhatsApp video: %s", vid_exc)
             if interrupt_data:
                 with _pending_lock:
                     _pending_interrupts[chat_id] = {
@@ -826,6 +865,11 @@ def _process_inbound(data: dict) -> None:
                 os.unlink(tmp_path)
             except Exception as exc:
                 log.warning("Failed to send WhatsApp image: %s", exc)
+        for vpath in captured_video_paths:
+            try:
+                _send_media_sync(chat_id, vpath, caption="🎬 Video")
+            except Exception as exc:
+                log.warning("Failed to send WhatsApp video: %s", exc)
         return
 
     # Streaming not used or placeholder not available — send normally
@@ -848,6 +892,12 @@ def _process_inbound(data: dict) -> None:
         except Exception as exc:
             log.warning("Failed to send WhatsApp image: %s", exc)
 
+    for vpath in captured_video_paths:
+        try:
+            _send_media_sync(chat_id, vpath, caption="🎬 Video")
+        except Exception as exc:
+            log.warning("Failed to send WhatsApp video: %s", exc)
+
     if interrupt_data:
         with _pending_lock:
             _pending_interrupts[chat_id] = {
@@ -857,6 +907,22 @@ def _process_inbound(data: dict) -> None:
         detail = approval_helpers.format_interrupt_text(interrupt_data)
         _send_message_sync(chat_id,
                             detail + "\n\nReply YES or NO.")
+
+
+def _cache_inbound_image(thread_id: str, filename: str, data: bytes) -> str:
+    """Make an inbound image available to image/video tools for this thread."""
+    cache_name = Path(filename or "image").name or "image"
+    try:
+        import tools.image_gen_tool as _igt_mod
+
+        same_thread = (_igt_mod._image_cache_thread_id == thread_id)
+        if not same_thread:
+            _igt_mod._image_cache.clear()
+        _igt_mod._image_cache_thread_id = thread_id
+        _igt_mod._image_cache[cache_name] = data
+    except Exception:
+        log.debug("Failed to cache inbound WhatsApp image '%s'", cache_name, exc_info=True)
+    return cache_name
 
 
 def _handle_media(chat_id: str, data: dict, caption: str) -> None:
@@ -885,17 +951,24 @@ def _handle_media(chat_id: str, data: dict, caption: str) -> None:
             user_text = f"[Voice message]: {transcript}"
             if caption:
                 user_text += f"\n\nCaption: {caption}"
-            answer, _, _ = _run_agent_sync(user_text, config)
+            answer, _, _, _ = _run_agent_sync(user_text, config)
             if answer:
                 _send_message_sync(chat_id, answer)
 
     elif media_type.startswith("image/"):
+        cache_name = _cache_inbound_image(thread_id, filename, file_data)
         analysis = analyze_image(file_data, caption or "Describe this image")
-        if analysis:
-            user_text = f"[Image analysis]: {analysis}"
+        if analysis or caption:
+            if analysis:
+                user_text = (
+                    f"[Attached image: {cache_name} — ALREADY ANALYZED, do NOT call analyze_image]\n"
+                    f"{analysis}"
+                )
+            else:
+                user_text = f"[Attached image: {cache_name}]"
             if caption:
                 user_text += f"\n\nUser said: {caption}"
-            answer, _, _ = _run_agent_sync(user_text, config)
+            answer, _, _, _ = _run_agent_sync(user_text, config)
             if answer:
                 _send_message_sync(chat_id, answer)
 
@@ -921,7 +994,7 @@ def _handle_media(chat_id: str, data: dict, caption: str) -> None:
             parts.append(f"\nUser's message: {caption}")
 
         user_text = "\n".join(parts)
-        answer, _, _ = _run_agent_sync(user_text, config)
+        answer, _, _, _ = _run_agent_sync(user_text, config)
         if answer:
             _send_message_sync(chat_id, answer)
 
@@ -1056,19 +1129,32 @@ def _send_raw_sync(chat_id: str, text: str) -> None:
 
 def _send_media_sync(chat_id: str, file_path: str,
                      caption: str | None = None) -> None:
-    """Send a media file via the bridge (blocking)."""
-    import base64
+    """Send a media file via the bridge and wait for send confirmation."""
     try:
         p = Path(file_path)
-        data = base64.b64encode(p.read_bytes()).decode()
-        _send_to_bridge("send_media", {
+        ext = p.suffix.lower()
+        params = {
             "chatId": chat_id,
             "filename": p.name,
-            "mediaData": data,
             "caption": caption or "",
-        })
+        }
+        timeout = 45.0
+        if ext in {".mp4", ".mov", ".avi", ".mkv"}:
+            # Send videos by path so the bridge can stream/upload directly
+            # without base64-encoding large files through stdin.
+            params["filePath"] = str(p)
+            timeout = 120.0
+        else:
+            params["mediaData"] = base64.b64encode(p.read_bytes()).decode()
+
+        resp = _send_and_wait("send_media", params, timeout=timeout)
+        if not resp:
+            raise RuntimeError(f"Timeout waiting for bridge response while sending '{p.name}'")
+        if not resp.get("ok"):
+            raise RuntimeError(resp.get("error") or f"Bridge rejected media '{p.name}'")
     except Exception as exc:
         log.warning("Failed to send WhatsApp media: %s", exc)
+        raise
 
 
 def send_outbound(chat_id: str, text: str) -> None:

@@ -2,6 +2,179 @@
 
 ---
 
+## v3.17.0 — Designer Studio II: Interactive Modes, Video Gen & Review Flow
+
+Designer graduates from a single-mode deck authoring tool into a full multi-mode design studio. Five project modes now ship — **deck**, **document**, **landing page**, **app mockup**, and **storyboard** — each with its own canvas rules, prompt guardrails, and curated template gallery. Interactive modes (landing / app_mockup / storyboard) run on a new sandboxed **runtime bridge** that turns declarative `data-thoth-action` attributes into real in-preview navigation, state toggles, and media playback without letting the agent write free-form `<script>`. A new **video generation tool** joins image generation as a first-class asset producer. A surgical tool surface — move, duplicate, restyle, refine-text, add-chart, insert-component, critique-page, apply-repairs — lets the agent edit pages without rewriting HTML. A new **review dialog** and **mutation diff** show exactly what changed turn over turn. The agent is bound by mode-specific **content budgets** and a **post-critique repair loop** so pages no longer clip at the canvas edge. Editable PPTX export is rewritten around isolated-page rasters so overlapping text no longer bleeds between slides. Designer assets now live under a **shared `utils/`** layer, and the home UI picks up bulk-select, skeleton loading, confirm dialogs, and richer sidebar + status bar states. Outside Designer, Thoth ships its own **in-app auto-updater** — packaged Windows and macOS builds now check GitHub Releases in the background, surface an `⬆ vX.Y.Z` pill in the status bar, and install SHA256- and code-signature-verified updates without leaving the app.
+
+### 🎨 Designer — Five Modes & Interactive Runtime
+
+Designer is no longer deck-only. Each mode has dedicated canvas semantics, prompt guidance, template gallery, and preview behaviour.
+
+- **Five project modes** — `deck`, `document`, `landing`, `app_mockup`, `storyboard` with mode-aware canvas rules (fixed-slide vs. scrollable vs. device viewport) and mode-aware prompt injection
+- **Interactive runtime bridge** — new `designer/runtime/` ships a sandboxed JS + CSS bridge loaded into preview, export, and published output; the agent uses declarative `data-thoth-action="navigate:…"`, `toggle_state:…`, and `play_media:…` attributes instead of `<script>` tags or `on*` handlers
+- **Multi-route / multi-screen projects** — `designer/page_navigator.py`, `designer/route_graph.py`, and `designer/interaction.py` let landing, app_mockup, and storyboard projects chain screens with real transitions (`fade`, `slide_left`, `slide_up`) and state-scoped overlays
+- **Hotspot recorder** — new `designer/hotspot_recorder.py` turns a click on any preview element into a wired navigate or toggle action without hand-editing HTML
+- **Command palette** — new `designer/command_palette.py` gives keyboard-driven access to every designer tool
+- **Zero-state quick-starts** — new `designer/zero_state.py` shows per-mode starter chips when a project is empty; the first-draft CTA and quick-start panel now dismiss themselves as soon as the user commits
+- **Template gallery overhaul** — `designer/template_gallery.py` and `designer/templates.py` add curated starters for every mode (pitch deck, brief, landing hero, three-route app scaffold, four-shot storyboard, SaaS dashboard, and more), upload-as-template, brand preset selection, and attached-file persistence through the setup flow
+
+### 🖼️ Media, Image Placement & Video Generation
+
+Designer media becomes more structured and more correct — agent-generated images land in the right containers, and video is a first-class asset type.
+
+- **Typed image slots + 5-path resolver** — `designer/ai_content.py` now fills images through (1) `data-thoth-image-slot` / `data-thoth-shot-visual` typed slots, (2) `position="replace:SELECTOR"` targeting, (3) heuristic empty-placeholder detection covering hero/product/photo/recipe/screen/phone/card visuals, (4) blank `<img>` replacement, and (5) an overlay fallback as a last resort
+- **Correct cover sizing** — when a wrapped image fragment drops into a slot, `object-fit:cover` is applied to the actual `<img>`/`<video>` element instead of an outer `<div>` where the property has no effect; stale width/height/margin from authored placeholders is stripped
+- **Video generation tool** — new `tools/video_gen_tool.py` plus `tool_guides/video_guide/` give Thoth a first-class video-generation surface with provider routing and documented guidance
+- **Editable PPTX raster isolation** — `designer/export.py` opens a fresh Playwright page per slide raster, captures `src`/`objectFit`/`objectPosition` for `<img>` and `svgOuterHTML` for inline `<svg>`, and renders at `device_scale_factor=2` so structured PPTX exports match the preview without text bleeding between slides
+- **Shared media helpers** — new `utils/media.py` and `utils/text.py` centralise asset normalisation used by Designer, export, and channels
+
+### 🧠 Agent Authoring Guardrails & Critique Loop
+
+Mode-specific content budgets and a mandatory repair loop stop the agent from shipping clipped, overlapping, or cramped pages.
+
+- **Content budgets per mode** — `designer/prompt.py` now enforces explicit per-page limits: document (130–160 words, ≥32–48 px bottom padding), deck (≤5 bullets, heading ≤4.5rem, 64–96 px edges), storyboard (one eyebrow + heading + paragraph + ≤2 metadata cards + direction + footer strip), landing (responsive sections with real padding), app_mockup (fixed device viewport with status/tab chrome)
+- **Authoring rules** — explicit guidance forbids decorative CSS art stacked on top of heading text, requires horizontal button rows with distinct ghost/outline secondaries, and mandates typed image slots over absolute-positioned overlays
+- **Post-critique repair loop** — after major rewrites the agent must call `designer_critique_page` and then either `designer_apply_repairs(["overflow"])` or split content to an additional page via `designer_add_page`; no mode ships a clipped page
+- **Expanded overflow detection** — `designer/critique.py` now flags card-heavy pages (≥7 card-like `<div>`s) in addition to section-heavy pages, catching storyboards and dashboards the old heuristic missed
+- **Brand lint** — new `designer/brand_lint.py` catches hardcoded colours and fonts before they leave the tool
+- **Mutation diff + review dialog** — new `designer/mutation_diff.py`, `designer/review.py`, and `designer/review_dialog.py` let the user inspect exactly what the agent changed, page by page, turn over turn
+
+### 🧰 New Designer Tooling
+
+The agent gets a surgical tool surface so it can make targeted edits instead of rewriting full-page HTML.
+
+- **Critique + repair** — `designer_critique_page` reports hierarchy / overflow / contrast / readability / spacing findings; `designer_apply_repairs` applies deterministic fixes for selected categories
+- **Curated blocks** — `designer_insert_component` inserts hero callouts, stats bands, testimonials, pricing cards, and timeline steps from a shared component library
+- **Surgical element edits** — `designer_move_image`, `designer_replace_image`, `designer_move_element`, `designer_duplicate_element`, `designer_restyle_element`, and `designer_refine_text` preserve existing layout and assets
+- **Interactive mode tools** — `designer_add_screen`, `designer_link_screens`, `designer_set_interaction`, `designer_preview_screen`, `designer_reorder_routes`, and `designer_set_mode` drive multi-route editing through the runtime bridge
+- **Share, publish, resize** — `designer_publish_link`, `designer_resize_project`, `designer_share_link`, and QR helpers in new `designer/qr_utils.py` round out the share-and-ship path
+
+### 💬 UI & Workflow Updates
+
+The home surface and chat stack pick up quality-of-life improvements shared by Designer and the main chat.
+
+- **Bulk select + confirm dialogs** — new `ui/bulk_select.py` and `ui/confirm.py` give every list-based surface batch actions with a consistent confirm flow
+- **Skeleton loading** — new `ui/skeleton.py` renders placeholder blocks while Designer gallery cards, threads, and published links hydrate
+- **Timer utilities** — new `ui/timer_utils.py` standardises polling and debounce patterns used across the home tab and designer editor
+- **Sidebar + command center** — `ui/sidebar.py` adds richer thread controls, batch operations, and pinned-thread affordances; `ui/command_center.py` tightens the insights panel
+- **Chat + streaming refresh** — `ui/chat.py`, `ui/streaming.py`, and `ui/render.py` polish the streaming message area, attachment handling, and tool-call rendering
+- **Home tab stability** — `ui/home.py` now polls for the chat container mount before dispatching an initial build so first-draft messages no longer race the UI
+
+### 🛰️ Channels
+
+All four messaging adapters pick up attachment and stability fixes introduced alongside the video generation tool.
+
+- **Shared media capture** — new `channels/media_capture.py` centralises image/audio/document handling reused by Discord, Slack, Telegram, and WhatsApp
+- **Discord** — voice-warning suppression and richer attachment flows in `channels/discord_channel.py`
+- **Slack / Telegram / WhatsApp** — consistent media attachment, streaming-edit, and link-preview handling across `channels/slack.py`, `channels/telegram.py`, `channels/whatsapp.py`, and the WhatsApp `channels/whatsapp_bridge/bridge.js`
+
+### 🔧 Tools & Status
+
+- **Video generation tool** — new `tools/video_gen_tool.py` with matching `tool_guides/video_guide/`
+- **Thoth Status** — `tools/thoth_status_tool.py` adds double-gated model normalisation, video-generation status, and syncs with the updated tool guide in `tool_guides/thoth_status_guide/SKILL.md`
+- **Browser tool** — `tools/browser_tool.py` stability fixes
+- **X tool** — `tools/x_tool.py` adds OAuth rate-limit-aware health checks
+- **Registry** — `tools/__init__.py` and `tools/registry.py` register the video tool alongside existing surfaces
+
+### 🐛 Bug Fixes
+
+- **First-draft CTA persistence** — the "Build First Draft" button and quick-start panel now delete themselves as soon as the user clicks, instead of lingering over the chat thread
+- **First-draft references** — attached files are persisted as project references before the first turn so their extracted content reaches the agent on the initial build
+- **Upload handler** — Designer file upload switches to `e.file.read()` with an async/sync dual path, fixing `AttributeError: UploadEventArguments.name` and `NoneType context manager` crashes on the first upload
+- **Initial chat container race** — `ui/home.py` polls up to 5 s for the chat container to mount before sending the initial build message instead of silently dropping it
+- **PPTX text duplication** — editable PPTX exports no longer overlay overlapping text between slides; each raster is rendered in an isolated Playwright page
+- **Image overlay fallback** — agent-generated images land in the correct container via typed slots and heuristic placeholder detection instead of floating as absolute overlays on top of existing content
+- **Slot sizing** — inner `<img>` elements get proper `width:100%;height:100%;object-fit:cover` styles; previously `object-fit` was applied to a wrapper `<div>` where it had no effect
+
+### ⬆ In-App Auto-Updates
+
+Thoth now ships its own background updater so users on packaged Windows / macOS builds get new releases without ever leaving the app.
+
+- **Background scheduler** — new stdlib-only `updater.py` polls the GitHub Releases API on a daemon thread (30-second startup delay, every 6 hours, 24-hour debounce). Checking is on by default; if there's no Internet the call fails silently and the next tick retries. Dev installs (running from a `.git/` checkout) are detected and the scheduler is skipped
+- **Status-bar pill** — `ui/status_bar.py` renders an `⬆ vX.Y.Z` chip when a newer release is available; the pill subscribes to updater state-change notifications and clears itself when the user installs or skips
+- **What's-New dialog** — new `ui/update_dialog.py` shows the release notes, an **Install now** primary action, and **Skip this version** / **Remind me later** secondary actions; skipped versions and dismissed banners persist to `~/.thoth/update_config.json`
+- **Settings surface** — Settings → Preferences → Updates exposes channel selection (stable / beta), the skip list with one-click un-skip, a manual **Check now** button, and the last-checked / last-success timestamps
+- **SHA256-verified downloads** — every release body embeds a `<!-- thoth-update-manifest -->` fenced block (`schema: 1`, per-asset sha256). The updater downloads the platform-specific asset, computes its hash, and refuses to launch the installer on mismatch
+- **OS code-signature gate** — Windows runs `signtool.exe verify /pa` (Authenticode); macOS runs `codesign --verify --deep --strict`. A failed signature check aborts the install before the OS installer is launched
+- **Per-platform asset routing** — Windows expects `ThothSetup_X.Y.Z.exe`, macOS expects `Thoth-X.Y.Z-macOS-{arm64|x86_64}.dmg`; arch detection picks the right Mac asset automatically
+- **Hand-off** — Windows launches the Inno Setup installer in silent mode (`/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS`) so it can swap files in place and re-launch Thoth; macOS opens the verified DMG
+- **Agent surface** — new `tools/updater_tool.py` registers `thoth_check_for_updates` (read-only) and `thoth_install_update` (interrupt-gated). The dynamic self-knowledge block surfaces "Update available: …" when applicable, and `thoth_status` adds an `updates` category
+- **Release plumbing** — new `scripts/append_sha_manifest.py` computes and patches the manifest block into a published GitHub release body; new `.github/workflows/update-manifest.yml` runs it automatically on `release: [published, edited]`; new `.github/workflows/notarize-submit.yml` and `.github/workflows/notarize-check.yml` handle Apple notarization with stapling
+
+### 🧰 Other Changes
+
+- **Shared utilities** — new top-level `utils/` package with `media.py` and `text.py` consolidates helpers previously duplicated across Designer, channels, and export
+- **Designer storage & history** — `designer/storage.py` and `designer/history.py` tighten snapshot handling and Windows-safe atomic writes
+- **Prompt scaffolding** — `prompts.py`, `self_knowledge.py`, and `memory.py` feed richer identity, self-knowledge, and threads context into the agent
+- **Installer packaging** — `installer/thoth_setup.iss` bumps to v3.17.0 and bundles the new Designer runtime assets and video-guide skills
+- **Skills & guides** — `bundled_skills/design_creator/SKILL.md` and `tool_guides/designer_guide/SKILL.md` are rewritten around the five modes, typed image slots, and the critique-repair loop
+
+### 🧪 Tests
+
+- **Regression expansion** — `test_suite.py` picks up **~2,700 new lines** of coverage, heavily focused on Designer modes, runtime bridge, export isolation, image slot resolution, critique thresholds, and the video generation tool
+- **Section 73: Auto-Update** — 16 dedicated tests covering the updater public API, config persistence, manifest parsing and SHA256 verification, per-platform asset selection, channel filtering and skip-list handling, state transitions, dev-install detection, and `thoth_check_for_updates` / `thoth_install_update` tool registration
+
+### 📁 Files Changed
+
+| File | Change |
+|------|--------|
+| **`designer/runtime/`** | **New** — sandboxed JS + CSS runtime bridge loaded into preview, export, and published output |
+| **`designer/brand_lint.py`** | **New** — catches hardcoded colours / fonts before they leave the tool |
+| **`designer/command_palette.py`** | **New** — keyboard-driven access to every designer tool |
+| **`designer/hotspot_recorder.py`** | **New** — click-to-wire navigate / toggle actions in preview |
+| **`designer/mutation_diff.py`** | **New** — turn-over-turn diff of agent-authored page changes |
+| **`designer/qr_utils.py`** | **New** — QR helpers for shareable published links |
+| **`designer/review.py`** | **New** — review model + state for inspecting agent mutations |
+| **`designer/review_dialog.py`** | **New** — UI surface for the review flow |
+| **`designer/route_graph.py`** | **New** — multi-route graph model for interactive modes |
+| **`designer/zero_state.py`** | **New** — per-mode quick-start chip suggestions |
+| **`tools/video_gen_tool.py`** | **New** — first-class video generation tool |
+| **`tool_guides/video_guide/`** | **New** — tool-usage guide for video generation |
+| **`utils/`** | **New** — shared `media.py` / `text.py` helpers used by Designer, export, and channels |
+| **`ui/bulk_select.py`** | **New** — batch-select primitive shared across home surfaces |
+| **`ui/confirm.py`** | **New** — standard confirm-dialog helper |
+| **`ui/skeleton.py`** | **New** — skeleton loading blocks for galleries and lists |
+| **`ui/timer_utils.py`** | **New** — polling / debounce utilities |
+| `designer/ai_content.py` | 5-path image slot resolver, `object-fit:cover` applied to the real media element, stripped stale author styles |
+| `designer/editor.py` | First-draft CTA + quick-start panel self-dismiss; reference-aware send path; richer chat wiring |
+| `designer/export.py` | Isolated-page raster per slide for editable PPTX; captures `objectFit` / `objectPosition` / `svgOuterHTML` |
+| `designer/templates.py` | Curated starters for every mode (pitch, brief, landing hero, three-route app, four-shot storyboard, SaaS dashboard, more) |
+| `designer/template_gallery.py` | Five-mode gallery, upload-as-template, brand preset selector, attached-file persistence |
+| `designer/tool.py` | Adds critique / repair / insert-component / move / duplicate / restyle / refine-text / video-gen / interactive-mode tools |
+| `designer/prompt.py` | Mode-specific canvas rules and content budgets, authoring guardrails, post-critique repair loop |
+| `designer/critique.py` | Overflow detection now also flags card-heavy pages |
+| `designer/page_navigator.py` | Interactive-mode route switching and preview wiring |
+| `designer/preview.py` | Multi-route interactive rendering, runtime bridge injection |
+| `designer/state.py` | Five-mode project model and interactive-mode metadata |
+| `designer/storage.py` | Tighter atomic writes and history handling |
+| `designer/interaction.py` | Declarative data-attribute action model |
+| `designer/presentation.py` | Presenter-mode support for storyboard and multi-route projects |
+| `designer/publish.py` · `designer/share_dialog.py` | Published-link + QR share flow |
+| `designer/setup_flow.py` · `designer/briefing.py` · `designer/session.py` · `designer/home_tab.py` · `designer/history.py` · `designer/render_assets.py` · `designer/html_ops.py` | Five-mode setup, briefing, session, home-tab, history, asset hydration, and HTML-ops refinements |
+| `channels/media_capture.py` | **New** — shared channel media helper |
+| `channels/discord_channel.py` · `channels/slack.py` · `channels/telegram.py` · `channels/whatsapp.py` · `channels/whatsapp_bridge/bridge.js` | Media capture, voice-warning suppression, and attachment fixes |
+| `ui/home.py` | Initial-build chat container polling; designer tab refinements |
+| `ui/sidebar.py` · `ui/command_center.py` · `ui/chat.py` · `ui/streaming.py` · `ui/render.py` · `ui/settings.py` · `ui/status_bar.py` · `ui/head_html.py` · `ui/helpers.py` · `ui/export.py` · `ui/state.py` | Sidebar batch actions, skeleton/confirm plumbing, chat streaming polish, settings and status bar updates |
+| `tools/__init__.py` · `tools/registry.py` | Registers the video generation tool |
+| `tools/browser_tool.py` · `tools/x_tool.py` | Browser stability + X OAuth rate-limit health check |
+| `tool_guides/designer_guide/SKILL.md` · `tool_guides/thoth_status_guide/SKILL.md` | Rewritten for five modes, typed slots, critique-repair loop, and video generation |
+| `bundled_skills/design_creator/SKILL.md` | Updated authoring behaviour for the five modes |
+| `agent.py` · `app.py` · `dream_cycle.py` · `memory.py` · `tasks.py` · `threads.py` · `self_knowledge.py` | Agent / app / dream-cycle / memory / tasks / threads / self-knowledge refinements |
+| `installer/thoth_setup.iss` | v3.17.0 packaging with bundled runtime and video guide; bundles `updater.py`, `ui/update_dialog.py`, `tools/updater_tool.py`, and `scripts/append_sha_manifest.py`; `CloseApplications=yes` / `RestartApplications=yes` for in-place auto-update swap |
+| **`updater.py`** | **New** — stdlib-only background update scheduler with channel selection, manifest verification, and OS code-signature gating |
+| **`ui/update_dialog.py`** | **New** — What's-New dialog with Install / Skip / Remind-me-later flow |
+| **`tools/updater_tool.py`** | **New** — agent-surface tools `thoth_check_for_updates` and `thoth_install_update` |
+| **`scripts/append_sha_manifest.py`** | **New** — computes SHA256 of release assets and patches the `<!-- thoth-update-manifest -->` block into the GitHub release body |
+| **`.github/workflows/update-manifest.yml`** | **New** — runs `append_sha_manifest.py` automatically on `release: [published, edited]` |
+| **`.github/workflows/notarize-submit.yml`** · **`.github/workflows/notarize-check.yml`** | **New** — Apple notarization submit + poll + staple workflow |
+| `.github/workflows/release.yml` | Builds Windows installer + signed macOS DMG/PKG; Authenticode signing block staged for Certum cert |
+| `app.py` | Calls `start_update_scheduler()` at boot |
+| `tools/thoth_status_tool.py` | Adds `updates` status category alongside double-gated model normalisation and video-generation status |
+| `self_knowledge.py` | Dynamic self-knowledge block surfaces "Update available: …" when the updater has detected one |
+| `docs/ARCHITECTURE.md` | Updated for the new Designer runtime, utilities layout, and Auto-Updates subsystem |
+| `README.md` | Adds the **⬆ Auto-Updates** section |
+| `test_suite.py` | ~2,700 lines of new Designer / runtime / export / image-slot / critique / video-tool coverage; **Section 73** adds 16 auto-update tests |
+
 ## v3.16.0 — Designer Studio, Self-Aware Status & Insight Engine
 
 Thoth gains a full **Designer Studio** for building multi-page presentations, one-pagers, marketing material, and reports inside the app. Designer ships with a home-screen gallery, unified setup flow, live editor, brand controls, reusable components, AI image generation, chart embedding, presenter mode, published deck links, and export to **PDF / HTML / PNG / PPTX**. Outside Designer, Thoth becomes more **self-aware** — a new **Thoth Status** tool can inspect live configuration, tools, channels, logs, and Designer state, **identity** is now configurable, and the dream cycle now produces actionable **insights** surfaced in the Workflow Console. The home UI gains a dedicated **Designer** tab, a new **status bar** with configurable avatar and live health pills, and extracted shared chat components used by both the main chat and Designer. Ships with major regression expansion, including dedicated coverage for Designer Studio, identity, self-knowledge, Thoth Status, and insights, bringing the suite to **1751 PASS / 0 FAIL / 4 WARN**.
@@ -33,8 +206,8 @@ Designer media now uses persisted asset references instead of bloating project H
 
 Thoth can now inspect and describe its own state more accurately, and selected self-management actions are exposed through a dedicated tool.
 
-- **New `thoth_status` tool** — query version, model, channels, memory, skills, tools, API keys, tasks, voice, image generation, config, logs, errors, and Designer project state from one place
-- **Controlled self-management** — `thoth_update_setting` can change selected settings such as model, context caps, dream-cycle settings, tool toggles, skill toggles, image-generation model, and self-improvement mode with explicit approval
+- **New `thoth_status` tool** — query version, model, channels, memory, skills, tools, API keys, tasks, voice, image generation, video generation, config, logs, errors, and Designer project state from one place
+- **Controlled self-management** — `thoth_update_setting` can change selected settings such as model, context caps, dream-cycle settings, tool toggles, skill toggles, image-generation model, video-generation model, and self-improvement mode with explicit approval
 - **Identity module** — new `identity.py` persists assistant name and personality in user config, sanitizes prompt-injection-like text, and stores the self-improvement toggle
 - **Dynamic prompt identity** — `prompts.py` now builds the agent system prompt from the configured identity instead of relying solely on the static fallback string
 - **Self-improvement hooks** — Thoth Status can create new user skills and patch existing skills with backups and bundled-skill overrides when self-improvement is enabled

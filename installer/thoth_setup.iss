@@ -1,5 +1,5 @@
 ; =============================================================================
-; Thoth v3.16.0 – Inno Setup Script
+; Thoth v3.17.0 – Inno Setup Script
 ; Self-contained installer: bundles embedded Python with all pip packages
 ; pre-installed.  No internet downloads at install time.
 ; =============================================================================
@@ -10,7 +10,7 @@
 ; Compile with:  iscc installer\thoth_setup.iss
 
 #define MyAppName      "Thoth"
-#define MyAppVersion   "3.16.0"
+#define MyAppVersion   "3.17.0"
 #define MyAppPublisher "Thoth"
 #define MyAppURL       "https://github.com/siddsachar/Thoth"
 #define MyAppExeName   "launch_thoth.vbs"
@@ -32,6 +32,8 @@ WizardStyle=modern
 SetupIconFile=..\thoth.ico
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
+CloseApplications=yes
+RestartApplications=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -71,6 +73,7 @@ Source: "..\tunnel.py";                DestDir: "{app}\app"; Flags: ignoreversio
 Source: "..\identity.py";              DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\self_knowledge.py";        DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\version.py";               DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\updater.py";               DestDir: "{app}\app"; Flags: ignoreversion
 ; ── Static assets (JS libraries) ──────────────────────────────────────────────
 Source: "..\static\*";                 DestDir: "{app}\app\static"; Flags: ignoreversion recursesubdirs createallsubdirs
 
@@ -98,6 +101,11 @@ Source: "..\channels\whatsapp.py";      DestDir: "{app}\app\channels"; Flags: ig
 Source: "..\channels\whatsapp_bridge\bridge.js";    DestDir: "{app}\app\channels\whatsapp_bridge"; Flags: ignoreversion
 Source: "..\channels\whatsapp_bridge\package.json"; DestDir: "{app}\app\channels\whatsapp_bridge"; Flags: ignoreversion
 Source: "..\channels\whatsapp_bridge\package-lock.json"; DestDir: "{app}\app\channels\whatsapp_bridge"; Flags: ignoreversion
+
+; ── Utils package ────────────────────────────────────────────────────────────
+Source: "..\utils\__init__.py";        DestDir: "{app}\app\utils"; Flags: ignoreversion
+Source: "..\utils\text.py";            DestDir: "{app}\app\utils"; Flags: ignoreversion
+Source: "..\utils\media.py";           DestDir: "{app}\app\utils"; Flags: ignoreversion
 
 ; ── Tools package ────────────────────────────────────────────────────────────
 Source: "..\tools\__init__.py";        DestDir: "{app}\app\tools"; Flags: ignoreversion
@@ -127,8 +135,10 @@ Source: "..\tools\shell_tool.py";      DestDir: "{app}\app\tools"; Flags: ignore
 Source: "..\tools\youtube_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\wiki_tool.py";      DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\image_gen_tool.py";  DestDir: "{app}\app\tools"; Flags: ignoreversion
+Source: "..\tools\video_gen_tool.py";  DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\x_tool.py";         DestDir: "{app}\app\tools"; Flags: ignoreversion
 Source: "..\tools\thoth_status_tool.py"; DestDir: "{app}\app\tools"; Flags: ignoreversion
+Source: "..\tools\updater_tool.py";    DestDir: "{app}\app\tools"; Flags: ignoreversion
 
 ; ── Plugins package ──────────────────────────────────────────────────────────
 Source: "..\plugins\__init__.py";       DestDir: "{app}\app\plugins"; Flags: ignoreversion
@@ -153,8 +163,10 @@ Source: "..\tool_guides\*";           DestDir: "{app}\app\tool_guides"; Flags: i
 Source: "..\skills.py";                 DestDir: "{app}\app"; Flags: ignoreversion
 ; ── UI package (modular frontend) ─────────────────────────────────────────────────
 Source: "..\ui\__init__.py";            DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\bulk_select.py";         DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\chat.py";               DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\chat_components.py";    DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\confirm.py";            DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\constants.py";          DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\export.py";             DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\graph_panel.py";        DestDir: "{app}\app\ui"; Flags: ignoreversion
@@ -165,6 +177,7 @@ Source: "..\ui\render.py";             DestDir: "{app}\app\ui"; Flags: ignorever
 Source: "..\ui\settings.py";           DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\setup_wizard.py";       DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\sidebar.py";            DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\skeleton.py";           DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\state.py";              DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\status_bar.py";         DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\status_checks.py";      DestDir: "{app}\app\ui"; Flags: ignoreversion
@@ -173,6 +186,10 @@ Source: "..\ui\task_dialog.py";        DestDir: "{app}\app\ui"; Flags: ignorever
 Source: "..\ui\command_center.py";     DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\entity_editor.py";      DestDir: "{app}\app\ui"; Flags: ignoreversion
 Source: "..\ui\terminal_widget.py";    DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\timer_utils.py";        DestDir: "{app}\app\ui"; Flags: ignoreversion
+Source: "..\ui\update_dialog.py";      DestDir: "{app}\app\ui"; Flags: ignoreversion
+; ── Updater scripts (used by maintainers — also shipped for self-help) ─────
+Source: "..\scripts\append_sha_manifest.py"; DestDir: "{app}\app\scripts"; Flags: ignoreversion
 ; ── Embedded Python (with all packages pre-installed) ────────────────────────
 Source: "build\python\*";              DestDir: "{app}\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 

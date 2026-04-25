@@ -10,7 +10,7 @@ from nicegui import events, run, ui
 
 from designer.references import delete_project_reference, persist_project_references
 from designer.render_assets import resolve_project_image_sources
-from designer.state import DesignerProject
+from designer.state import DesignerProject, normalize_designer_mode
 from designer.storage import save_project
 from designer.briefing import build_initial_design_request, project_has_build_brief
 from designer.preview import build_preview
@@ -95,19 +95,28 @@ def build_designer_editor(
     _existing_messages = state.messages if state is not None else []
 
     def _render_first_draft_cta() -> None:
-        if not project_has_build_brief(project) or _existing_messages:
+        if _existing_messages:
+            return
+        # Only show the CTA when the user actually wrote a build
+        # description in the setup dialog.  Other brief fields (brand
+        # preset, tone, audience) on their own produce a prompt with
+        # no subject — "Turn the current blank starting point into a
+        # real first draft" with nothing to draft from.  When there's
+        # no description we fall through to the zero-state quick-
+        # action chips instead.
+        brief = project.brief
+        if brief is None or not brief.build_description.strip():
             return
 
         request_text = build_initial_design_request(project)
-        description = ""
-        if project.brief is not None:
-            description = project.brief.build_description or project.brief.output_type
+        description = brief.build_description.strip() or brief.output_type
 
-        with ui.card().classes("w-full q-ma-sm").style(
+        cta_card = ui.card().classes("w-full q-ma-sm").style(
             surface_style(padding="16px", strong=True)
             + "background: linear-gradient(135deg, rgba(245,158,11,0.14), rgba(37,99,235,0.08));"
             + "border: 1px solid rgba(245,158,11,0.2);"
-        ):
+        )
+        with cta_card:
             ui.label("Ready to build the first draft").classes("font-bold")
             ui.label(
                 description or "Use the saved setup brief to generate the first real draft."
@@ -118,12 +127,82 @@ def build_designer_editor(
 
             async def _run_first_draft() -> None:
                 build_btn.disable()
+                # Remove the CTA card immediately so the user sees the
+                # chat start; if the send fails we'll still have the
+                # message in the thread explaining what happened.
                 try:
-                    await send_message(request_text)
-                finally:
-                    build_btn.enable()
+                    cta_card.delete()
+                except Exception:
+                    pass
+                try:
+                    # Route through the same path as the normal send so
+                    # any pending attached files are persisted as
+                    # project references and their extracted content
+                    # reaches the agent on this very first turn.
+                    await _send_with_references(request_text)
+                except Exception:
+                    # If the send raised before producing a visible
+                    # message, re-enable the button on the (now
+                    # removed) card is pointless — just log and move on.
+                    logger.exception("First-draft send failed")
 
             build_btn.on_click(lambda: asyncio.create_task(_run_first_draft()))
+
+    def _render_zero_state_quick_actions() -> None:
+        """Show per-mode quick-start chips when the project is empty.
+
+        Only renders if there are no existing messages, no build-brief CTA
+        will render, and the project has no meaningful content yet.
+        """
+        if _existing_messages:
+            return
+        brief = project.brief
+        if brief is not None and brief.build_description.strip():
+            # First-draft CTA takes priority when a real description
+            # was supplied.
+            return
+
+        from designer.zero_state import get_quick_actions, is_project_empty
+
+        if not is_project_empty(project, _existing_messages):
+            return
+
+        actions = get_quick_actions(project)
+        if not actions:
+            return
+
+        qs_card = ui.card().classes("w-full q-ma-sm").style(
+            surface_style(padding="14px", strong=True)
+            + "background: linear-gradient(135deg, rgba(37,99,235,0.10), rgba(148,163,184,0.06));"
+            + "border: 1px solid rgba(37,99,235,0.18);"
+        )
+        with qs_card:
+            ui.label("Quick start").classes("font-bold")
+            ui.label(
+                "Pick a starting point — we'll pre-fill the message and the "
+                "agent takes over."
+            ).classes("text-xs text-grey-4")
+
+            with ui.column().classes("w-full gap-1 q-mt-xs"):
+                for action in actions:
+                    def _make_handler(prompt: str):
+                        async def _run() -> None:
+                            # Dismiss the quick-start card as soon as
+                            # the user commits to a starting point so
+                            # the chat area takes focus.
+                            try:
+                                qs_card.delete()
+                            except Exception:
+                                pass
+                            await _send_with_references(prompt)
+                        return lambda: asyncio.create_task(_run())
+
+                    btn = ui.button(
+                        action.label, icon=action.icon,
+                        on_click=_make_handler(action.prompt),
+                    )
+                    style_secondary_button(btn, compact=True)
+                    btn.classes("w-full justify-start")
 
     def _on_element_click(detail: dict):
         """Handle click on an element in the preview iframe."""
@@ -131,6 +210,144 @@ def build_designer_editor(
         tag = detail.get("tag", "?")
         text = detail.get("text", "")[:40]
         logger.debug("Element clicked: <%s> %s", tag, text)
+
+        # Phase 2.2.J — in interactive modes, offer a hotspot recorder.
+        try:
+            from designer.hotspot_recorder import (
+                build_hotspot_recorder_spec,
+                is_interactive_project,
+                record_hotspot,
+            )
+        except Exception:
+            return
+        if not is_interactive_project(project):
+            return
+        spec = build_hotspot_recorder_spec(project, detail or {})
+        if not spec.get("available"):
+            return
+        _open_hotspot_recorder_popover(spec, record_hotspot)
+
+    def _open_hotspot_recorder_popover(spec: dict, record_fn) -> None:
+        """Render the hotspot-recorder popover dialog."""
+        action_choices = spec["action_choices"]
+        route_choices = spec["route_choices"]
+
+        selected_action = {"value": action_choices[0][0]}
+        selected_route = {"value": route_choices[0][0] if route_choices else ""}
+        target_input = {"value": ""}
+
+        with ui.dialog() as dlg, ui.card().style(
+            "min-width: 420px; max-width: 540px; padding: 14px 16px;"
+        ):
+            header = spec.get("element_tag", "element") or "element"
+            preview_text = spec.get("element_text", "")
+            ui.label(f"Link interaction to <{header}>").classes(
+                "text-h6 text-weight-bold"
+            )
+            if preview_text:
+                ui.label(f"\u201c{preview_text}\u201d").classes(
+                    "text-xs text-grey-5"
+                )
+            ui.label(
+                f"On screen: {spec['source_route']}"
+            ).classes("text-xs text-grey-5")
+            if spec.get("existing_action"):
+                ui.label(
+                    f"Current action: {spec['existing_action']}"
+                ).classes("text-xs text-amber-5")
+            ui.separator()
+
+            action_select = ui.select(
+                options={key: label for key, label in action_choices},
+                value=selected_action["value"],
+                label="Action",
+                on_change=lambda e: (
+                    selected_action.__setitem__("value", e.value),
+                    _render_detail_row(),
+                ),
+            ).classes("w-full")
+
+            detail_row = ui.column().classes("w-full gap-1")
+
+            def _render_detail_row() -> None:
+                detail_row.clear()
+                with detail_row:
+                    if selected_action["value"] == "navigate":
+                        if route_choices:
+                            ui.select(
+                                options={k: v for k, v in route_choices},
+                                value=selected_route["value"] or route_choices[0][0],
+                                label="Target screen",
+                                on_change=lambda e: selected_route.__setitem__(
+                                    "value", e.value
+                                ),
+                            ).classes("w-full")
+                        else:
+                            ui.label(
+                                "No other screens to navigate to yet."
+                            ).classes("text-xs text-amber-5")
+                    elif selected_action["value"] in {"toggle_state", "play_media"}:
+                        if selected_action["value"] == "toggle_state":
+                            ui.label(
+                                "State key — a short name you give this on/off "
+                                "flag (e.g. menu-open, dark, cart-open). Clicking "
+                                "flips it; CSS rules keyed on "
+                                "[data-thoth-state~=\u201ckey\u201d] respond."
+                            ).classes("text-xs text-grey-5")
+                            placeholder = "state key (e.g. menu-open)"
+                            label_text = "State key"
+                        else:
+                            ui.label(
+                                "Asset id — the data-thoth-id of a <video> or "
+                                "<audio> element that should start playing."
+                            ).classes("text-xs text-grey-5")
+                            placeholder = "asset id"
+                            label_text = "Asset id"
+                        ui.input(
+                            label=label_text,
+                            placeholder=placeholder,
+                            value=target_input["value"],
+                            on_change=lambda e: target_input.__setitem__(
+                                "value", e.value
+                            ),
+                        ).classes("w-full")
+                    else:  # clear
+                        ui.label(
+                            "Clears any existing interaction on this element."
+                        ).classes("text-xs text-grey-5")
+
+            _render_detail_row()
+
+            with ui.row().classes("w-full justify-end gap-2 q-mt-sm"):
+                ui.button("Cancel", on_click=dlg.close).props("flat")
+
+                def _confirm() -> None:
+                    action = selected_action["value"]
+                    if action == "navigate":
+                        tgt = selected_route["value"]
+                    elif action in {"toggle_state", "play_media"}:
+                        tgt = target_input["value"]
+                    else:
+                        tgt = ""
+                    prepare_project_mutation(project, f"hotspot_{action}")
+                    ok, msg = record_fn(
+                        project,
+                        source_route=spec["source_route"],
+                        selector=spec["selector"],
+                        action=action,
+                        target=tgt,
+                    )
+                    if ok:
+                        save_project(project)
+                        _refresh_editor()
+                        ui.notify(msg, type="positive")
+                        dlg.close()
+                    else:
+                        ui.notify(msg, type="negative")
+
+                ui.button("Apply", on_click=_confirm).props("color=primary")
+
+        dlg.open()
 
     def _on_text_edit(detail: dict):
         """Handle inline text edit from the preview iframe."""
@@ -291,6 +508,14 @@ def build_designer_editor(
         "border-bottom: 1px solid rgba(255,255,255,0.08);"
     ):
         def _go_back():
+            # Pin the home tab back to Designer before rebuilding so the
+            # user returns to the gallery instead of bouncing through the
+            # default "Workflows" tab.
+            try:
+                from ui.state import state as _state
+                _state.preferred_home_tab = "Designer"
+            except Exception:
+                pass
             set_active_project(None)
             on_back()
 
@@ -340,16 +565,84 @@ def build_designer_editor(
 
         ui.element("div").style("flex: 1;")  # spacer
 
-        # Present button
-        async def _show_presentation():
-            from designer.presentation import show_presentation
-            await show_presentation(project)
+        # ── Mode-aware toolbar gating ──────────────────────────────
+        # Each button below is shown only for modes where it makes
+        # sense. Modes: deck, landing, app_mockup, storyboard, document.
+        from designer.preview import INTERACTIVE_MODES as _INT_MODES
+        _project_mode = getattr(project, "mode", "deck") or "deck"
 
-        ui.button(icon="play_arrow", on_click=_show_presentation).props(
-            "outline dense round color=grey-6"
-        ).tooltip("Present")
+        # Edit / Preview toggle — only for interactive modes. In Edit
+        # mode clicks drive the authoring bridge (hotspot recorder,
+        # inline text edit). In Preview mode clicks flow through to the
+        # runtime bridge so prototypes can be exercised in place.
+        if _project_mode in _INT_MODES:
+            _mode_toggle_ref: list = [None]
+            _mode_hint_ref: list = [None]
 
-        # Brand button
+            def _apply_mode(e):
+                which = e.value if hasattr(e, "value") else e
+                is_preview = (which == "Preview")
+                ref = _preview_ref[0]
+                if ref and "set_preview_mode" in ref:
+                    try:
+                        ref["set_preview_mode"](is_preview)
+                    except Exception:
+                        pass
+                # Update status label so the user gets unambiguous feedback
+                # even if the Quasar selected-state styling is subtle.
+                hint = _mode_hint_ref[0]
+                if hint is not None:
+                    try:
+                        if is_preview:
+                            hint.text = "Preview — clicks trigger prototype"
+                            hint.classes(replace="text-xs text-primary q-ml-sm")
+                        else:
+                            hint.text = "Edit — click to select / edit"
+                            hint.classes(replace="text-xs text-grey-6 q-ml-sm")
+                    except Exception:
+                        pass
+                try:
+                    ui.notify(
+                        "Preview mode enabled — clicks run interactions."
+                        if is_preview else
+                        "Edit mode — clicks select elements.",
+                        type="info", position="bottom", timeout=1500,
+                    )
+                except Exception:
+                    pass
+
+            with ui.row().classes("items-center gap-0").style("margin-right: 8px;"):
+                _mode_toggle_ref[0] = ui.toggle(
+                    ["Edit", "Preview"],
+                    value="Edit",
+                    on_change=_apply_mode,
+                ).props(
+                    # Quasar QBtnToggle: `color` = unselected fill,
+                    # `toggle-color` = selected fill. Without splitting
+                    # these the two segments look identical.
+                    "dense no-caps rounded unelevated "
+                    "color=grey-9 text-color=grey-4 "
+                    "toggle-color=primary toggle-text-color=white"
+                ).tooltip(
+                    "Edit = click to select / edit · Preview = clicks "
+                    "trigger interactions (links, toggles, navigation)"
+                )
+                _mode_hint_ref[0] = ui.label(
+                    "Edit — click to select / edit"
+                ).classes("text-xs text-grey-6 q-ml-sm")
+
+        # Present — deck + storyboard only. app_mockup / landing /
+        # document have no slide semantics.
+        if _project_mode in {"deck", "storyboard"}:
+            async def _show_presentation():
+                from designer.presentation import show_presentation
+                await show_presentation(project)
+
+            ui.button(icon="play_arrow", on_click=_show_presentation).props(
+                "outline dense round color=grey-6"
+            ).tooltip("Present")
+
+        # Brand — all modes
         def _show_brand():
             from designer.brand_dialog import show_brand_dialog
             show_brand_dialog(project, on_apply=_refresh_editor)
@@ -358,94 +651,99 @@ def build_designer_editor(
             "outline dense round color=grey-6"
         ).tooltip("Brand & Theme")
 
-        # Curated block picker
-        def _show_blocks():
-            from designer.components import list_components, render_component_html
-            from designer.html_ops import insert_component_in_html
+        # Curated blocks — deck + landing only. The bundled blocks are
+        # desktop-slide / marketing-page oriented (Story, Evidence,
+        # Conversion). They don't fit app_mockup (mobile), storyboard
+        # (film), or document (long-form copy).
+        if _project_mode in {"deck", "landing"}:
+            def _show_blocks():
+                from designer.components import list_components, render_component_html
+                from designer.html_ops import insert_component_in_html
 
-            components = list_components()
-            categories = []
-            for component in components:
-                if component.category not in categories:
-                    categories.append(component.category)
+                components = list_components()
+                categories = []
+                for component in components:
+                    if component.category not in categories:
+                        categories.append(component.category)
 
-            with ui.dialog() as dlg, ui.card().style(
-                dialog_card_style(min_width="820px", max_width="980px", max_height="84vh")
-            ):
-                ui.label("Curated Blocks").classes("text-h6 text-weight-bold")
-                ui.label(
-                    "Insert reusable sections into the active page. These blocks are brand-aware and remain editable with the normal Designer tools."
-                ).classes("text-sm text-grey-5 q-mb-sm")
+                with ui.dialog() as dlg, ui.card().style(
+                    dialog_card_style(min_width="820px", max_width="980px", max_height="84vh")
+                ):
+                    ui.label("Curated Blocks").classes("text-h6 text-weight-bold")
+                    ui.label(
+                        "Insert reusable sections into the active page. These blocks are brand-aware and remain editable with the normal Designer tools."
+                    ).classes("text-sm text-grey-5 q-mb-sm")
 
-                with ui.tabs().classes("w-full") as tabs:
-                    for category in categories:
-                        ui.tab(category, label=category)
+                    with ui.tabs().classes("w-full") as tabs:
+                        for category in categories:
+                            ui.tab(category, label=category)
 
-                with ui.tab_panels(tabs, value=categories[0]).classes("w-full"):
-                    for category in categories:
-                        with ui.tab_panel(category):
-                            with ui.grid(columns=2).classes("w-full gap-3"):
-                                for component in [c for c in components if c.category == category]:
-                                    with ui.card().classes("q-pa-md").style(
-                                        "background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);"
-                                    ):
-                                        ui.label(component.label).classes("text-subtitle1 text-weight-medium")
-                                        ui.label(component.description).classes("text-sm text-grey-5")
-                                        if component.tags:
-                                            with ui.row().classes("w-full flex-wrap gap-1 q-mt-sm"):
-                                                for tag in component.tags:
-                                                    ui.badge(tag, color="grey-8").props("outline")
+                    with ui.tab_panels(tabs, value=categories[0]).classes("w-full"):
+                        for category in categories:
+                            with ui.tab_panel(category):
+                                with ui.grid(columns=2).classes("w-full gap-3"):
+                                    for component in [c for c in components if c.category == category]:
+                                        with ui.card().classes("q-pa-md").style(
+                                            "background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);"
+                                        ):
+                                            ui.label(component.label).classes("text-subtitle1 text-weight-medium")
+                                            ui.label(component.description).classes("text-sm text-grey-5")
+                                            if component.tags:
+                                                with ui.row().classes("w-full flex-wrap gap-1 q-mt-sm"):
+                                                    for tag in component.tags:
+                                                        ui.badge(tag, color="grey-8").props("outline")
 
-                                        def _insert_curated_block(component_name=component.name):
-                                            idx = max(0, min(project.active_page, len(project.pages) - 1))
-                                            prepare_project_mutation(project, f"insert_component_{component_name}")
-                                            page = project.pages[idx]
-                                            component_html = render_component_html(component_name)
-                                            page.html, element_id, selector_hint = insert_component_in_html(
-                                                page.html,
-                                                component_html,
-                                                component_name,
-                                            )
-                                            page.thumbnail_b64 = None
-                                            project.manual_edits.append(
-                                                f"User inserted the {component_name} curated block on page {idx + 1}."
-                                            )
-                                            save_project(project)
-                                            _refresh_editor(force_preview=True)
-                                            logger.info(
-                                                "Inserted curated block %s on page %d (%s / %s)",
-                                                component_name,
-                                                idx + 1,
-                                                element_id,
-                                                selector_hint,
-                                            )
-                                            dlg.close()
+                                            def _insert_curated_block(component_name=component.name):
+                                                idx = max(0, min(project.active_page, len(project.pages) - 1))
+                                                prepare_project_mutation(project, f"insert_component_{component_name}")
+                                                page = project.pages[idx]
+                                                component_html = render_component_html(component_name)
+                                                page.html, element_id, selector_hint = insert_component_in_html(
+                                                    page.html,
+                                                    component_html,
+                                                    component_name,
+                                                )
+                                                page.thumbnail_b64 = None
+                                                project.manual_edits.append(
+                                                    f"User inserted the {component_name} curated block on page {idx + 1}."
+                                                )
+                                                save_project(project)
+                                                _refresh_editor(force_preview=True)
+                                                logger.info(
+                                                    "Inserted curated block %s on page %d (%s / %s)",
+                                                    component_name,
+                                                    idx + 1,
+                                                    element_id,
+                                                    selector_hint,
+                                                )
+                                                dlg.close()
 
-                                        insert_btn = ui.button(
-                                            "Insert on current page",
-                                            icon="add_box",
-                                            on_click=_insert_curated_block,
-                                        ).classes("q-mt-sm")
-                                        style_secondary_button(insert_btn, compact=True)
+                                            insert_btn = ui.button(
+                                                "Insert on current page",
+                                                icon="add_box",
+                                                on_click=_insert_curated_block,
+                                            ).classes("q-mt-sm")
+                                            style_secondary_button(insert_btn, compact=True)
 
-                with ui.row().classes("w-full justify-end q-mt-sm"):
-                    close_blocks_btn = ui.button("Close", on_click=dlg.close)
-                    style_ghost_button(close_blocks_btn)
+                    with ui.row().classes("w-full justify-end q-mt-sm"):
+                        close_blocks_btn = ui.button("Close", on_click=dlg.close)
+                        style_ghost_button(close_blocks_btn)
 
-            dlg.open()
+                dlg.open()
 
-        ui.button(icon="view_quilt", on_click=_show_blocks).props(
-            "outline dense round color=grey-6"
-        ).tooltip("Curated Blocks")
+            ui.button(icon="view_quilt", on_click=_show_blocks).props(
+                "outline dense round color=grey-6"
+            ).tooltip("Curated Blocks")
 
-        # Import button
-        def _show_import():
-            from designer.import_dialog import show_import_dialog
-            show_import_dialog(project, on_done=_refresh_editor)
+        # Import PPTX / DOCX — deck + document only.
+        if _project_mode in {"deck", "document"}:
+            def _show_import():
+                from designer.import_dialog import show_import_dialog
+                show_import_dialog(project, on_done=_refresh_editor)
 
-        ui.button(icon="upload_file", on_click=_show_import).props(
-            "outline dense round color=grey-6"
-        ).tooltip("Import PPTX / DOCX")
+            ui.button(icon="upload_file", on_click=_show_import).props(
+                "outline dense round color=grey-6"
+            ).tooltip("Import PPTX / DOCX")
 
         # History button
         def _show_history():
@@ -455,87 +753,22 @@ def build_designer_editor(
             "outline dense round color=grey-6"
         ).tooltip("Version History")
 
-        # Review button
-        def _show_review():
-            from designer.critique import critique_page_html, apply_page_repairs
+        # Unified Review & Repair button (replaces Page Review + Brand Lint)
+        def _open_review() -> None:
+            from designer.review_dialog import open_review_dialog
 
-            _report: list[dict | None] = [None]
-            with ui.dialog() as dlg, ui.card().style(
-                dialog_card_style(min_width="620px", max_width="760px", max_height="84vh")
-            ):
-                ui.label("Page Review").classes("text-h6 text-weight-bold")
-                summary_label = ui.label("").classes("text-sm text-grey-5 q-mb-sm")
-                findings_col = ui.column().classes("w-full gap-2")
+            async def _send(text: str) -> None:
+                await send_message(text)
 
-                def _render_report() -> None:
-                    idx = max(0, min(project.active_page, len(project.pages) - 1))
-                    page = project.pages[idx]
-                    report = critique_page_html(page.html, project.canvas_width, project.canvas_height)
-                    _report[0] = report
-                    summary_label.text = f"Page {idx + 1}: {report['summary']} Score {report['score']}/100."
-                    summary_label.update()
-                    findings_col.clear()
-                    with findings_col:
-                        if not report["findings"]:
-                            ui.label("No obvious issues detected on the active page.").classes("text-sm text-positive")
-                        else:
-                            for finding in report["findings"]:
-                                with ui.card().classes("w-full q-pa-sm").style(
-                                    "background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);"
-                                ):
-                                    with ui.row().classes("w-full items-center justify-between"):
-                                        ui.label(finding["category"].title()).classes("text-sm text-weight-medium")
-                                        ui.badge(finding["severity"], color="amber" if finding["severity"] != "high" else "negative")
-                                    ui.label(finding["message"]).classes("text-sm")
-                                    if finding.get("excerpt"):
-                                        ui.label(finding["excerpt"]).classes("text-xs text-grey-5")
-                                    ui.label(f"Suggested fix: {finding['suggested_fix']}").classes("text-xs text-grey-4")
+            open_review_dialog(
+                project,
+                refresh_editor=_refresh_editor,
+                send_agent_message=_send,
+            )
 
-                def _apply_safe_repairs() -> None:
-                    if _report[0] is None:
-                        _render_report()
-                    if _report[0] is None or not _report[0]["findings"]:
-                        ui.notify("No safe repairs are suggested for this page.")
-                        return
-
-                    categories = sorted({finding["category"] for finding in _report[0]["findings"]})
-                    idx = max(0, min(project.active_page, len(project.pages) - 1))
-                    page = project.pages[idx]
-                    prepare_project_mutation(project, f"review_repairs_page_{idx}")
-                    new_html, changes = apply_page_repairs(
-                        page.html,
-                        project.canvas_width,
-                        project.canvas_height,
-                        categories,
-                    )
-                    if not changes or new_html == page.html:
-                        ui.notify("No safe repairs were applied.")
-                        return
-
-                    page.html = new_html
-                    page.thumbnail_b64 = None
-                    project.manual_edits.append(
-                        f"User applied review repairs on page {idx + 1} for {', '.join(categories)}."
-                    )
-                    save_project(project)
-                    _refresh_editor(force_preview=True)
-                    _render_report()
-                    ui.notify(f"Applied {len(changes)} safe repair(s).")
-
-                _render_report()
-                with ui.row().classes("w-full justify-end q-mt-sm"):
-                    refresh_btn = ui.button("Refresh", on_click=_render_report)
-                    style_ghost_button(refresh_btn)
-                    apply_fixes_btn = ui.button("Apply Safe Fixes", on_click=_apply_safe_repairs)
-                    style_primary_button(apply_fixes_btn)
-                    close_review_btn = ui.button("Close", on_click=dlg.close)
-                    style_ghost_button(close_review_btn)
-
-            dlg.open()
-
-        ui.button(icon="fact_check", on_click=_show_review).props(
+        ui.button(icon="rule", on_click=_open_review).props(
             "outline dense round color=grey-6"
-        ).tooltip("Review Active Page")
+        ).tooltip("Review & Repair (Ctrl/Cmd+Shift+R)")
 
         # Undo / Redo
         def _undo():
@@ -556,12 +789,50 @@ def build_designer_editor(
                 save_project(project)
                 _refresh_editor(force_preview=True)
 
+        def _open_command_palette() -> None:
+            from designer.command_palette import open_command_palette
+            from designer.tool import DesignerTool
+
+            try:
+                tools = DesignerTool().as_langchain_tools()
+                tool_names = [t.name for t in tools]
+            except Exception:
+                tool_names = []
+
+            def _prefill(text: str) -> None:
+                try:
+                    if p is not None and getattr(p, "chat_input", None) is not None:
+                        p.chat_input.value = text
+                        try:
+                            p.chat_input.run_method("focus")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            def _navigate(idx: int) -> None:
+                if 0 <= idx < len(project.pages):
+                    project.active_page = idx
+                    save_project(project)
+                    _refresh_editor(force_preview=True)
+
+            open_command_palette(
+                project,
+                tool_names=tool_names,
+                prefill_input=_prefill,
+                on_navigate_page=_navigate,
+            )
+
         def _handle_designer_shortcut(e):
             shortcut = (e.args or {}).get("shortcut")
             if shortcut == "redo":
                 _redo()
             elif shortcut == "undo":
                 _undo()
+            elif shortcut == "palette":
+                _open_command_palette()
+            elif shortcut == "review":
+                _open_review()
 
         ui.keyboard(repeating=False).on(
             "key",
@@ -570,11 +841,33 @@ def build_designer_editor(
                 const key = (e.key || '').toLowerCase();
                 if (e.action !== 'keydown') return;
                 if (!(e.ctrlKey || e.metaKey)) return;
+                if (key === 'k') {
+                    const ae = document.activeElement;
+                    const tag = ae ? (ae.tagName || '').toLowerCase() : '';
+                    const editable = ae && (ae.isContentEditable || tag === 'input' || tag === 'textarea');
+                    if (editable) return;
+                    emit({shortcut: 'palette'});
+                    e.event.preventDefault();
+                    return;
+                }
+                if (key === 'r' && e.shiftKey) {
+                    const ae = document.activeElement;
+                    const tag = ae ? (ae.tagName || '').toLowerCase() : '';
+                    const editable = ae && (ae.isContentEditable || tag === 'input' || tag === 'textarea');
+                    if (editable) return;
+                    emit({shortcut: 'review'});
+                    e.event.preventDefault();
+                    return;
+                }
                 if (key !== 'z') return;
                 emit({shortcut: e.shiftKey ? 'redo' : 'undo'});
                 e.event.preventDefault();
             }""",
         )
+
+        ui.button(icon="search", on_click=_open_command_palette).props(
+            "flat dense round color=grey-6"
+        ).tooltip("Command palette (Ctrl/Cmd+K)")
 
         ui.button(icon="undo", on_click=_undo).props(
             "flat dense round color=grey-6"
@@ -617,6 +910,7 @@ def build_designer_editor(
                     )
 
                     _render_first_draft_cta()
+                    _render_zero_state_quick_actions()
 
                     async def _send_with_references(text: str) -> None:
                         pending_snapshot = [
@@ -694,6 +988,7 @@ def build_designer_editor(
                     # Fallback: minimal chat using the current thread messages when available.
                     _fallback_messages = state.messages if state is not None else []
                     _render_first_draft_cta()
+                    _render_zero_state_quick_actions()
                     with ui.scroll_area().classes("w-full flex-grow") as _fb_scroll:
                         _fb_container = ui.column().classes("w-full q-pa-sm gap-2")
                         if p is not None:
@@ -756,36 +1051,45 @@ def build_designer_editor(
                         on_navigate=_on_nav_from_preview,
                     )
 
-                with ui.card().classes("w-full q-ma-sm q-mt-xs shrink-0").style(
-                    "min-height: 220px; max-height: 34vh; overflow: hidden; "
-                    "background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);"
-                ):
-                    with ui.column().classes("w-full h-full").style("gap: 8px; min-height: 0;"):
-                        with ui.row().classes("w-full items-center justify-between"):
-                            _notes_title_ref[0] = ui.label("Speaker Notes").classes("text-sm text-weight-medium")
-                            _notes_status_ref[0] = ui.label("").classes("text-xs text-grey-5")
-                            with ui.row().classes("items-center gap-1"):
-                                ui.button(
-                                    "Save",
-                                    icon="save",
-                                    on_click=_save_notes,
-                                ).props("flat dense no-caps color=grey-6")
-                                _notes_generate_btn_ref[0] = ui.button(
-                                    "Generate Notes",
-                                    icon="auto_awesome",
-                                    on_click=_generate_notes_for_active_page,
-                                )
-                                style_primary_button(_notes_generate_btn_ref[0], compact=True)
-                        ui.label(
-                            "Notes are saved per page and appear in presenter mode and PPTX notes slides."
-                        ).classes("text-xs text-grey-5")
-                        _notes_input_ref[0] = ui.textarea(
-                            placeholder="Add speaker notes for the active page…",
-                        ).props(
-                            'dense outlined input-style="min-height: 180px; max-height: 100%; overflow: auto;"'
-                        ).classes("w-full").style("flex: 1 1 auto; min-height: 180px;")
-                        _notes_input_ref[0].on("blur", _save_notes)
-                        _refresh_notes_panel()
+                # Speaker notes are only relevant for deck-style modes
+                # that export to PPTX notes slides / presenter mode.
+                # Landing pages, app mockups, and documents have no
+                # presenter surface, so the panel is hidden there to
+                # cut clutter.
+                _notes_modes = {"deck", "storyboard"}
+                _show_notes = normalize_designer_mode(project.mode) in _notes_modes
+
+                if _show_notes:
+                    with ui.card().classes("w-full q-ma-sm q-mt-xs shrink-0").style(
+                        "min-height: 220px; max-height: 34vh; overflow: hidden; "
+                        "background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);"
+                    ):
+                        with ui.column().classes("w-full h-full").style("gap: 8px; min-height: 0;"):
+                            with ui.row().classes("w-full items-center justify-between"):
+                                _notes_title_ref[0] = ui.label("Speaker Notes").classes("text-sm text-weight-medium")
+                                _notes_status_ref[0] = ui.label("").classes("text-xs text-grey-5")
+                                with ui.row().classes("items-center gap-1"):
+                                    ui.button(
+                                        "Save",
+                                        icon="save",
+                                        on_click=_save_notes,
+                                    ).props("flat dense no-caps color=grey-6")
+                                    _notes_generate_btn_ref[0] = ui.button(
+                                        "Generate Notes",
+                                        icon="auto_awesome",
+                                        on_click=_generate_notes_for_active_page,
+                                    )
+                                    style_primary_button(_notes_generate_btn_ref[0], compact=True)
+                            ui.label(
+                                "Notes are saved per page and appear in presenter mode and PPTX notes slides."
+                            ).classes("text-xs text-grey-5")
+                            _notes_input_ref[0] = ui.textarea(
+                                placeholder="Add speaker notes for the active page…",
+                            ).props(
+                                'dense outlined input-style="min-height: 180px; max-height: 100%; overflow: auto;"'
+                            ).classes("w-full").style("flex: 1 1 auto; min-height: 180px;")
+                            _notes_input_ref[0].on("blur", _save_notes)
+                            _refresh_notes_panel()
 
                 def _on_page_change():
                     if _preview_ref[0]:
@@ -803,17 +1107,23 @@ def _render_chat_bubble(msg: dict) -> None:
     """Render a single chat message bubble."""
     role = msg.get("role", "user")
     content = msg.get("content", "")
+    # Shared bubble styling that guarantees long content wraps instead
+    # of producing a horizontal scroll bar when the chat pane is narrow.
+    _bubble_wrap = (
+        "max-width: 85%; min-width: 0; white-space: pre-wrap; "
+        "word-break: break-word; overflow-wrap: anywhere; overflow-x: hidden;"
+    )
     if role == "user":
-        with ui.row().classes("w-full justify-end"):
-            ui.label(content).classes("q-pa-sm").style(
+        with ui.row().classes("w-full justify-end").style("min-width: 0;"):
+            ui.label(content).classes("q-pa-sm thoth-designer-bubble").style(
                 "background: rgba(37,99,235,0.2); border-radius: 12px 12px 0 12px; "
-                "max-width: 85%; white-space: pre-wrap; word-break: break-word;"
+                + _bubble_wrap
             )
     else:
-        with ui.row().classes("w-full"):
-            ui.markdown(content).classes("q-pa-sm").style(
+        with ui.row().classes("w-full").style("min-width: 0;"):
+            ui.markdown(content).classes("q-pa-sm thoth-designer-bubble").style(
                 "background: rgba(255,255,255,0.05); border-radius: 12px 12px 12px 0; "
-                "max-width: 85%;"
+                + _bubble_wrap
             )
 
 

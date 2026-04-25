@@ -18,13 +18,17 @@ from designer.canvas_resize import resolve_canvas_target, resize_project_canvas
 from designer.components import render_component_html
 from designer.critique import critique_page_html, apply_page_repairs
 from designer.html_ops import (
+    build_media_fragment,
     duplicate_element_in_html,
     find_asset_identifier_in_html,
     insert_component_in_html,
     move_element_in_html,
     move_asset_in_html,
+    preserve_app_mockup_widgets,
+    remove_asset_from_html,
     replace_asset_in_html,
     restyle_element_in_html,
+    sanitize_agent_html,
     summarize_page_html,
     wrap_asset_fragment,
 )
@@ -75,8 +79,13 @@ def _unresolved_asset_placeholder_error(placeholders: list[str]) -> str:
 
 
 def _pre_mutate(project: DesignerProject, label: str = "") -> None:
-    """Push undo state and save a persistent snapshot before a mutation."""
-    prepare_project_mutation(project, label=label)
+    """Push undo state and save a persistent snapshot before a mutation.
+
+    All agent tool calls flow through here, so the snapshot is tagged
+    with ``author="agent"`` — the editor diff view (Phase 2.2.L) uses
+    that flag to surface the most recent agent change.
+    """
+    prepare_project_mutation(project, label=label, author="agent")
 
 
 def _escape_attr(value: str) -> str:
@@ -187,6 +196,7 @@ def _set_pages(pages: list[dict]) -> str:
     if not pages:
         return "Error: pages list cannot be empty."
     source_htmls = [page.html for page in project.pages]
+    is_app_mockup = normalize_designer_mode(project.mode) == "app_mockup"
     _pre_mutate(project, "set_pages")
     new_pages = []
     for i, p in enumerate(pages):
@@ -195,7 +205,13 @@ def _set_pages(pages: list[dict]) -> str:
         notes = p.get("notes", "")
         if not html:
             return f"Error: page {i} has no HTML content."
+        html = sanitize_agent_html(html)
         html = restore_inline_asset_sources(html, source_htmls)
+        # For app_mockup projects, reinject widget CSS if the agent
+        # dropped it — stops Settings/Detail screens decaying into
+        # plain-text comma lists every time the agent rewrites them.
+        if is_app_mockup and i < len(source_htmls):
+            html = preserve_app_mockup_widgets(source_htmls[i], html)
         html, _ = normalize_inline_image_sources(html, project)
         html, _ = normalize_asset_reference_sources(html, project)
         unresolved_placeholders = find_unresolved_asset_placeholders(html)
@@ -218,8 +234,12 @@ def _update_page(index: int, html: str, title: Optional[str] = None,
         return f"Error: page index {index} out of range (0\u2013{len(project.pages) - 1})."
     if not html:
         return "Error: html cannot be empty."
+    html = sanitize_agent_html(html)
     source_htmls = [page.html for page in project.pages]
     html = restore_inline_asset_sources(html, source_htmls)
+    # Reinject widget CSS the agent may have dropped on rewrite.
+    if normalize_designer_mode(project.mode) == "app_mockup":
+        html = preserve_app_mockup_widgets(source_htmls[index], html)
     html, _ = normalize_inline_image_sources(html, project)
     html, _ = normalize_asset_reference_sources(html, project)
     unresolved_placeholders = find_unresolved_asset_placeholders(html)
@@ -243,7 +263,20 @@ def _add_page(html: str, title: str, index: int = -1,
     project = _require_project()
     if not html:
         return "Error: html cannot be empty."
-    html = restore_inline_asset_sources(html, [page.html for page in project.pages])
+    html = sanitize_agent_html(html)
+    source_htmls = [page.html for page in project.pages]
+    html = restore_inline_asset_sources(html, source_htmls)
+    # New app_mockup screens frequently inherit widget vocabulary from
+    # sibling screens but the agent forgets to include the style block.
+    # Seed the new page's <head> with widget CSS from the first sibling
+    # that has it, so toggle rows / tab bars / pill buttons keep their
+    # appearance.
+    if normalize_designer_mode(project.mode) == "app_mockup":
+        for sibling in source_htmls:
+            merged = preserve_app_mockup_widgets(sibling, html)
+            if merged != html:
+                html = merged
+                break
     html, _ = normalize_inline_image_sources(html, project)
     html, _ = normalize_asset_reference_sources(html, project)
     unresolved_placeholders = find_unresolved_asset_placeholders(html)
@@ -567,9 +600,45 @@ def _critique_page(page_index: int = -1) -> str:
     return json.dumps(payload, indent=2)
 
 
+def _brand_lint(page_index: int = -1) -> str:
+    """Run a read-only brand-lint scan.
+
+    ``page_index=-1`` (default) scans every page; otherwise scans the
+    specified 0-based page. Returns a JSON report with findings grouped
+    by category (contrast, off_palette, font, missing_alt, logo_safe_zone).
+    """
+    from designer.brand_lint import lint_project, lint_page
+
+    project = _require_project()
+    if page_index == -1 and not project.pages:
+        return json.dumps({"findings": [], "summary": "No pages."}, indent=2)
+
+    if page_index == -1:
+        report = lint_project(project)
+    else:
+        try:
+            idx = _resolve_page_index(project, page_index)
+        except ValueError as e:
+            return f"Error: {e}"
+        findings = lint_page(project.pages[idx].html, brand=project.brand, page_index=idx)
+        cat_counts: dict[str, int] = {}
+        sev_counts = {"low": 0, "medium": 0, "high": 0}
+        for f in findings:
+            cat_counts[f.category] = cat_counts.get(f.category, 0) + 1
+            if f.severity in sev_counts:
+                sev_counts[f.severity] += 1
+        report = {
+            "findings": [f.to_dict() for f in findings],
+            "summary": ("No brand issues detected." if not findings
+                        else f"{len(findings)} brand issue(s) on page {idx + 1}."),
+            "category_counts": cat_counts,
+            "severity_counts": sev_counts,
+        }
+    return json.dumps(report, indent=2)
+
+
 def _apply_repairs(page_index: int = -1, categories: Optional[list[str]] = None) -> str:
     """Apply safe deterministic repairs for critique categories on a page."""
-
     project = _require_project()
     try:
         page_index = _resolve_page_index(project, page_index)
@@ -824,6 +893,166 @@ def _insert_image(image_source: str, page_index: int = -1,
     )
 
 
+def _build_video_fragment(
+    project: DesignerProject,
+    asset,
+    *,
+    width: int = 800,
+    label: str = "",
+) -> tuple[str, str]:
+    """Wrap a persisted video ``DesignerAsset`` as an insertable HTML block."""
+    poster_src = ""
+    if asset.poster_asset_id:
+        poster_src = f"asset://{asset.poster_asset_id}"
+    inner = build_media_fragment(
+        asset_kind="video",
+        asset_id=asset.id,
+        src=f"asset://{asset.id}",
+        mime_type=asset.mime_type or "video/mp4",
+        label=label or asset.label or "video",
+        alt=label or asset.label or "video",
+        poster=poster_src,
+        width=width,
+        autoplay=bool(asset.autoplay),
+        loop=bool(asset.loop),
+        muted=bool(asset.muted),
+        controls=bool(asset.controls),
+    )
+    wrapped, _ = wrap_asset_fragment(
+        inner, "video", label=label or asset.label, asset_id=asset.id,
+    )
+    return wrapped, asset.id
+
+
+def _generate_video(prompt: str, page_index: int = -1,
+                    position: str = "bottom", width: int = 800,
+                    aspect_ratio: str = "", duration: int = 6,
+                    resolution: str = "720p",
+                    image_source: str = "") -> str:
+    """Generate an AI video clip (text-to-video or image-to-video) and embed it in a page.
+
+    ``aspect_ratio`` defaults to the project aspect. ``image_source`` enables
+    image-to-video when set (``"last"``, a filename, or path).
+    """
+    project = _require_project()
+    try:
+        page_index = _resolve_page_index(project, page_index)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    from designer.ai_content import generate_video_bytes, insert_image_into_page
+
+    try:
+        asset = generate_video_bytes(
+            prompt,
+            project=project,
+            duration_seconds=int(duration or 6),
+            aspect_ratio=(aspect_ratio or None),
+            resolution=resolution or "720p",
+            image_source=(image_source or None),
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    wrapped_fragment, asset_id = _build_video_fragment(
+        project, asset, width=width, label=prompt,
+    )
+
+    _pre_mutate(project, "generate_video")
+    page = project.pages[page_index]
+    page.html = insert_image_into_page(page.html, wrapped_fragment, position)
+    page.thumbnail_b64 = None
+    save_project(project)
+    return (
+        f"Generated AI video for \"{prompt}\" and inserted it at {position} of "
+        f"page {page_index + 1}. Asset id: {asset_id}."
+    )
+
+
+def _insert_video(video_source: str, page_index: int = -1,
+                  position: str = "bottom", width: int = 800,
+                  alt: str = "") -> str:
+    """Insert an attached, pasted, or local video file (mp4/webm) into a page.
+
+    ``video_source``: attachment filename/partial, 'last', or absolute path.
+    """
+    project = _require_project()
+    try:
+        page_index = _resolve_page_index(project, page_index)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    from pathlib import Path as _Path
+    from designer.ai_content import insert_image_into_page
+    from designer.state import DesignerAsset
+    from designer.storage import save_asset_bytes
+    import hashlib as _hl
+
+    src = (video_source or "").strip()
+    if not src:
+        return "Error: video_source cannot be empty."
+
+    # Resolve bytes from a local path. (Attachment lookup reuses the same
+    # channel as images: callers can pass a stored filename that exists on disk.)
+    try:
+        p = _Path(src).expanduser()
+        if not p.is_file():
+            # Try resolving via image_gen_tool helper which understands attachments/last
+            from tools.image_gen_tool import _resolve_image_source as _ris  # reuses attachment lookup
+            try:
+                data = _ris(src)
+            except Exception as exc:
+                return f"Error: could not resolve video_source '{src}': {exc}"
+        else:
+            data = p.read_bytes()
+    except Exception as exc:
+        return f"Error: could not read video_source '{src}': {exc}"
+
+    if not data:
+        return "Error: video file was empty."
+
+    # Sniff mime from extension
+    ext = (_Path(src).suffix or "").lower()
+    mime = {
+        ".mp4": "video/mp4",
+        ".m4v": "video/mp4",
+        ".webm": "video/webm",
+        ".mov": "video/quicktime",
+    }.get(ext, "video/mp4")
+
+    label = alt or _Path(src).name
+    asset = DesignerAsset(
+        kind="video",
+        label=label[:80],
+        mime_type=mime,
+        filename=_Path(src).name or f"video-{asset_id_hint()}.mp4",
+        muted=True, controls=True, autoplay=False, loop=False,
+    )
+    asset.stored_name = save_asset_bytes(project.id, asset.id, asset.filename, data)
+    asset.size_bytes = len(data)
+    asset.sha256 = _hl.sha256(data).hexdigest()
+    project.assets.append(asset)
+
+    wrapped_fragment, asset_id = _build_video_fragment(
+        project, asset, width=width, label=label,
+    )
+
+    _pre_mutate(project, "insert_video")
+    page = project.pages[page_index]
+    page.html = insert_image_into_page(page.html, wrapped_fragment, position)
+    page.thumbnail_b64 = None
+    save_project(project)
+    return (
+        f"Inserted video \"{label}\" on page {page_index + 1} at {position}. "
+        f"Asset id: {asset_id}."
+    )
+
+
+def asset_id_hint() -> str:
+    import uuid as _uuid
+    return _uuid.uuid4().hex[:8]
+
+
 def _move_image(page_index: int, image_ref: str,
                 position: str = "bottom", target_ref: str = "") -> str:
     """Move an existing inserted image or chart block within a page."""
@@ -854,6 +1083,32 @@ def _move_image(page_index: int, image_ref: str,
             f"Moved asset {asset_id or image_ref} {position} {target_ref} on page {page_index + 1}."
         )
     return f"Moved asset {asset_id or image_ref} to the {position} of page {page_index + 1}."
+
+
+def _remove_image(image_ref: str, page_index: int = -1) -> str:
+    """Remove an inserted image, chart, or video block from a page.
+
+    Leaves surrounding layout (shot-visual placeholders, slide grids) intact
+    so the slot reverts to its dashed-border preview. Does not delete the
+    stored asset file — only removes the reference from the page HTML.
+    """
+    project = _require_project()
+    try:
+        page_index = _resolve_page_index(project, page_index)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    page = project.pages[page_index]
+    try:
+        new_html, asset_id = remove_asset_from_html(page.html, image_ref)
+    except Exception as e:
+        return f"Error removing image: {e}"
+
+    _pre_mutate(project, "remove_image")
+    page.html = new_html
+    page.thumbnail_b64 = None
+    save_project(project)
+    return f"Removed asset {asset_id or image_ref} from page {page_index + 1}."
 
 
 def _replace_image(image_ref: str, image_source: str,
@@ -1016,6 +1271,275 @@ def _restyle_element(page_index: int, selector: str = "",
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Phase 2.2 — Interactive-mode sub-tools
+# (landing / app_mockup / storyboard only)
+# ═══════════════════════════════════════════════════════════════════════
+
+from designer.state import (  # noqa: E402
+    DESIGNER_MODES,
+    DesignerInteraction,
+    normalize_designer_mode,
+    default_page_kind_for_mode,
+)
+
+INTERACTIVE_PROJECT_MODES = {"landing", "app_mockup", "storyboard"}
+
+
+def _require_interactive(project: DesignerProject, tool_name: str) -> str:
+    if project.mode not in INTERACTIVE_PROJECT_MODES:
+        return (
+            f"Error: {tool_name} is only available in landing / app_mockup / "
+            f"storyboard modes. Current mode: {project.mode}."
+        )
+    return ""
+
+
+def _slugify_route_tool(value: str, fallback: str) -> str:
+    import re as _re
+    slug = _re.sub(r"[^a-zA-Z0-9]+", "-", (value or "")).strip("-").lower()
+    return slug or fallback
+
+
+def _ensure_unique_route_id(project: DesignerProject, candidate: str) -> str:
+    existing = {
+        (getattr(p, "route_id", "") or "").strip().lower()
+        for p in project.pages
+    }
+    base = candidate
+    rid = candidate
+    dedup = 2
+    while rid.lower() in existing:
+        rid = f"{base}-{dedup}"
+        dedup += 1
+    return rid
+
+
+def _find_page_by_route(project: DesignerProject, route_id: str) -> int:
+    target = (route_id or "").strip().lower()
+    for idx, page in enumerate(project.pages):
+        if (getattr(page, "route_id", "") or "").strip().lower() == target:
+            return idx
+    return -1
+
+
+def _set_mode(mode: str) -> str:
+    """Change the project mode. No migration side effects — caller must be OK
+    with a clean-slate mode change."""
+    project = _require_project()
+    m = normalize_designer_mode(mode)
+    if m not in DESIGNER_MODES:
+        return f"Error: unknown mode '{mode}'. Valid: {sorted(DESIGNER_MODES.keys())}."
+    if project.mode == m:
+        return f"Project is already in '{m}' mode."
+    _pre_mutate(project, f"set_mode_{m}")
+    project.mode = m
+    # Update page.kind so preview/nav pick the right variant.
+    new_kind = default_page_kind_for_mode(m)
+    for page in project.pages:
+        page.kind = new_kind
+    save_project(project)
+    return f"Project mode set to '{m}'. Pages converted to kind='{new_kind}'."
+
+
+def _add_screen(title: str, route_id: str = "", html: str = "",
+                copy_from: int = -1) -> str:
+    """Add a new screen/route in an interactive project."""
+    project = _require_project()
+    err = _require_interactive(project, "designer_add_screen")
+    if err:
+        return err
+    title = (title or "").strip() or f"Screen {len(project.pages) + 1}"
+    if copy_from is not None and copy_from >= 0 and copy_from < len(project.pages):
+        base_html = html or project.pages[copy_from].html
+    else:
+        base_html = html or ""
+    if not base_html:
+        # Minimal branded skeleton reused from page_navigator.
+        try:
+            from designer.page_navigator import _branded_blank_html
+            base_html = _branded_blank_html(project, title)
+        except Exception:
+            base_html = (
+                f"<!DOCTYPE html><html><head><title>{_escape_attr(title)}</title>"
+                f"</head><body><h1>{_escape_attr(title)}</h1></body></html>"
+            )
+    base_html = sanitize_agent_html(base_html)
+    # Resolve route_id
+    candidate = (route_id or "").strip()
+    if not candidate:
+        candidate = _slugify_route_tool(title, f"page-{len(project.pages) + 1}")
+    else:
+        candidate = _slugify_route_tool(candidate, candidate)
+    final_route = _ensure_unique_route_id(project, candidate)
+
+    _pre_mutate(project, "add_screen")
+    page = DesignerPage(
+        html=base_html,
+        title=title,
+        route_id=final_route,
+        kind=default_page_kind_for_mode(project.mode),
+    )
+    project.pages.append(page)
+    project.active_page = len(project.pages) - 1
+    save_project(project)
+    return (
+        f"Added screen \"{title}\" with route_id='{final_route}'. "
+        f"Total screens: {len(project.pages)}."
+    )
+
+
+def _patch_action_attribute(html: str, selector: str, action_value: str) -> tuple[str, bool]:
+    """Set data-thoth-action on the first element matching the selector."""
+    from bs4 import BeautifulSoup
+    from designer.html_ops import ensure_element_identifier
+    soup = BeautifulSoup(html, "html.parser")
+    target = None
+    try:
+        # Allow either a real CSS selector or a data-thoth-element-id token.
+        sel = (selector or "").strip()
+        if not sel:
+            return html, False
+        if sel.startswith("#") and " " not in sel and "[" not in sel:
+            target = soup.select_one(sel)
+        else:
+            try:
+                target = soup.select_one(sel)
+            except Exception:
+                target = None
+        if target is None:
+            # Try element-id attr.
+            target = soup.find(attrs={"data-thoth-element-id": sel})
+    except Exception:
+        target = None
+    if target is None:
+        return html, False
+    ensure_element_identifier(target)
+    target["data-thoth-action"] = action_value
+    return str(soup), True
+
+
+def _link_screens(source_route: str, selector: str, target_route: str,
+                  event: str = "click", transition: str = "fade") -> str:
+    """Wire a click on ``selector`` within ``source_route`` to navigate to
+    ``target_route``. Adds a DesignerInteraction and patches HTML."""
+    project = _require_project()
+    err = _require_interactive(project, "designer_link_screens")
+    if err:
+        return err
+    src_idx = _find_page_by_route(project, source_route)
+    if src_idx < 0:
+        return f"Error: source route '{source_route}' not found."
+    if _find_page_by_route(project, target_route) < 0:
+        return f"Error: target route '{target_route}' not found."
+    _pre_mutate(project, "link_screens")
+    action_value = f"navigate:{target_route}"
+    new_html, ok = _patch_action_attribute(
+        project.pages[src_idx].html, selector, action_value
+    )
+    if not ok:
+        return f"Error: selector '{selector}' matched nothing on '{source_route}'."
+    project.pages[src_idx].html = new_html
+    project.pages[src_idx].thumbnail_b64 = None
+    interaction = DesignerInteraction(
+        source_route=source_route,
+        selector=selector,
+        event=event or "click",
+        action="navigate",
+        target=target_route,
+        transition=transition or "fade",
+    )
+    project.interactions.append(interaction)
+    save_project(project)
+    return (
+        f"Linked '{selector}' on '{source_route}' → navigate to '{target_route}' "
+        f"(transition={transition})."
+    )
+
+
+def _set_interaction(source_route: str, selector: str, action: str,
+                     target: str = "", event: str = "click",
+                     transition: str = "fade") -> str:
+    """Generic — attach navigate/toggle_state/play_media to any selector."""
+    project = _require_project()
+    err = _require_interactive(project, "designer_set_interaction")
+    if err:
+        return err
+    action = (action or "").strip().lower()
+    if action not in {"navigate", "toggle_state", "play_media"}:
+        return (
+            "Error: action must be 'navigate', 'toggle_state', or 'play_media'."
+        )
+    src_idx = _find_page_by_route(project, source_route)
+    if src_idx < 0:
+        return f"Error: source route '{source_route}' not found."
+    if action == "navigate" and _find_page_by_route(project, target) < 0:
+        return f"Error: navigate target route '{target}' not found."
+    _pre_mutate(project, f"set_interaction_{action}")
+    action_value = f"{action}:{target}" if target else action
+    new_html, ok = _patch_action_attribute(
+        project.pages[src_idx].html, selector, action_value
+    )
+    if not ok:
+        return f"Error: selector '{selector}' matched nothing on '{source_route}'."
+    project.pages[src_idx].html = new_html
+    project.pages[src_idx].thumbnail_b64 = None
+    project.interactions.append(DesignerInteraction(
+        source_route=source_route,
+        selector=selector,
+        event=event or "click",
+        action=action,
+        target=target,
+        transition=transition or "fade",
+    ))
+    save_project(project)
+    return f"Set {action}:{target} on '{selector}' within '{source_route}'."
+
+
+def _preview_screen(route_id: str) -> str:
+    """Switch the editor's active screen to a specific route_id."""
+    project = _require_project()
+    err = _require_interactive(project, "designer_preview_screen")
+    if err:
+        return err
+    idx = _find_page_by_route(project, route_id)
+    if idx < 0:
+        return f"Error: route '{route_id}' not found."
+    project.active_page = idx
+    save_project(project)
+    return f"Switched preview to route '{route_id}' (page {idx + 1})."
+
+
+def _reorder_routes(route_ids: list) -> str:
+    """Reorder project.pages to match the provided route_id list."""
+    project = _require_project()
+    err = _require_interactive(project, "designer_reorder_routes")
+    if err:
+        return err
+    wanted = [(r or "").strip() for r in (route_ids or []) if r and (r or "").strip()]
+    if len(wanted) != len(project.pages):
+        return (
+            f"Error: expected {len(project.pages)} route_ids, got {len(wanted)}."
+        )
+    lookup: dict[str, int] = {}
+    for idx, p in enumerate(project.pages):
+        rid = (getattr(p, "route_id", "") or "").strip()
+        if rid:
+            lookup[rid] = idx
+    new_pages = []
+    for rid in wanted:
+        if rid not in lookup:
+            return f"Error: route '{rid}' not found."
+        new_pages.append(project.pages[lookup[rid]])
+    if len(new_pages) != len(project.pages):
+        return "Error: route_ids must reference every existing page exactly once."
+    _pre_mutate(project, "reorder_routes")
+    project.pages = new_pages
+    project.active_page = 0
+    save_project(project)
+    return f"Reordered routes: {', '.join(wanted)}."
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # TOOL REGISTRATION
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -1056,13 +1580,18 @@ class DesignerTool(BaseTool):
     def as_langchain_tools(self) -> list:
         if get_ui_active_project() is None:
             return []
-        return [
+        base_tools = [
             StructuredTool.from_function(
                 func=_set_pages,
                 name="designer_set_pages",
                 description=(
-                    "Replace ALL pages in the designer project. Use for creating "
-                    "new designs or full reworks. Input: list of {html, title, notes} dicts."
+                    "Replace ALL pages in the active designer project. Use for "
+                    "creating the first draft, new designs, or full reworks. "
+                    "REQUIRED parameter: pages (list of {html, title, notes} dicts). "
+                    "Each page's html must be a complete HTML document with inline "
+                    "<style>. Example call: designer_set_pages(pages=[{\"html\": "
+                    "\"<!doctype html>...\", \"title\": \"Cover\", \"notes\": \"\"}, ...]). "
+                    "Never call this tool with no arguments."
                 ),
             ),
             StructuredTool.from_function(
@@ -1156,6 +1685,15 @@ class DesignerTool(BaseTool):
                 ),
             ),
             StructuredTool.from_function(
+                func=_brand_lint,
+                name="designer_brand_lint",
+                description=(
+                    "Read-only brand-lint scan across contrast, off-palette colors, non-brand fonts, "
+                    "missing image alt text, and logo safe-zone overlaps. "
+                    "Input: optional page_index (-1=all pages). Returns structured JSON findings."
+                ),
+            ),
+            StructuredTool.from_function(
                 func=_set_brand,
                 name="designer_set_brand",
                 description=(
@@ -1210,10 +1748,30 @@ class DesignerTool(BaseTool):
                 ),
             ),
             StructuredTool.from_function(
+                func=_generate_video,
+                name="designer_generate_video",
+                description=(
+                    "Generate an AI video clip (MP4) from a text prompt (or image-to-video) and embed it "
+                    "in a page. Input: prompt, optional page_index (-1=active), position ('top'/'bottom'), "
+                    "width, aspect_ratio (e.g. '16:9', '9:16', '1:1' — defaults to project aspect), "
+                    "duration (seconds, default 6), resolution ('720p'/'1080p'), and optional image_source "
+                    "('last', attachment filename, or path) to animate an existing image."
+                ),
+            ),
+            StructuredTool.from_function(
+                func=_insert_video,
+                name="designer_insert_video",
+                description=(
+                    "Insert an attached, pasted, or local video file (mp4/webm/mov) into a page. "
+                    "Input: video_source (attachment filename, partial filename, 'last', or path), "
+                    "optional page_index (-1=active), position ('top'/'bottom'), width, alt."
+                ),
+            ),
+            StructuredTool.from_function(
                 func=_move_image,
                 name="designer_move_image",
                 description=(
-                    "Move an existing inserted image, stock image, or chart using its asset ID or label. "
+                    "Move an existing inserted image or chart using its asset ID or label. "
                     "Input: page_index, image_ref, position ('top'/'bottom'/'before'/'after'), optional target_ref."
                 ),
             ),
@@ -1221,8 +1779,18 @@ class DesignerTool(BaseTool):
                 func=_replace_image,
                 name="designer_replace_image",
                 description=(
-                    "Replace an existing inserted image, stock image, or chart using its asset ID or label. "
+                    "Replace an existing inserted image or chart using its asset ID or label. "
                     "Input: image_ref, image_source, optional page_index (-1=active), width, alt."
+                ),
+            ),
+            StructuredTool.from_function(
+                func=_remove_image,
+                name="designer_remove_image",
+                description=(
+                    "Remove an inserted image, chart, or video from a page, leaving the surrounding "
+                    "layout (shot-visual placeholders, slide grids) intact. Use this when the user asks "
+                    "to delete/remove a picture from a page WITHOUT deleting the page itself. "
+                    "Input: image_ref (asset ID or label), optional page_index (-1=active)."
                 ),
             ),
             StructuredTool.from_function(
@@ -1271,6 +1839,79 @@ class DesignerTool(BaseTool):
                 ),
             ),
         ]
+
+        # ── Phase 2.2 — mode-gated interactive sub-tools ───────────────
+        project = get_ui_active_project()
+        current_mode = getattr(project, "mode", "deck") if project else "deck"
+        is_interactive = current_mode in INTERACTIVE_PROJECT_MODES
+
+        if is_interactive:
+            # Remove designer_move_page — pages are routes in interactive
+            # modes and nav order is controlled by designer_reorder_routes.
+            base_tools = [
+                t for t in base_tools
+                if getattr(t, "name", "") != "designer_move_page"
+            ]
+            base_tools.extend([
+                StructuredTool.from_function(
+                    func=_add_screen,
+                    name="designer_add_screen",
+                    description=(
+                        "Add a new screen/route in an interactive project (landing or app_mockup). "
+                        "Input: title (display name), optional route_id (auto-slugified from title if empty), "
+                        "optional html (branded blank if empty), optional copy_from (page index to duplicate)."
+                    ),
+                ),
+                StructuredTool.from_function(
+                    func=_link_screens,
+                    name="designer_link_screens",
+                    description=(
+                        "Wire a click on one element to navigate to another screen. "
+                        "Input: source_route (existing route_id), selector (CSS selector or "
+                        "data-thoth-element-id), target_route (existing route_id), "
+                        "optional event ('click'), optional transition ('fade'/'slide_left'/'slide_up'/'none')."
+                    ),
+                ),
+                StructuredTool.from_function(
+                    func=_set_interaction,
+                    name="designer_set_interaction",
+                    description=(
+                        "Attach a generic interaction to an element. "
+                        "Input: source_route, selector, action ('navigate'|'toggle_state'|'play_media'), "
+                        "target (route_id / state key / asset_id), optional event, optional transition."
+                    ),
+                ),
+                StructuredTool.from_function(
+                    func=_preview_screen,
+                    name="designer_preview_screen",
+                    description=(
+                        "Switch the editor's active screen to a specific route_id. "
+                        "Input: route_id."
+                    ),
+                ),
+                StructuredTool.from_function(
+                    func=_reorder_routes,
+                    name="designer_reorder_routes",
+                    description=(
+                        "Reorder screens to match the given list of route_ids. "
+                        "Input: route_ids (list of every existing route_id in the desired order)."
+                    ),
+                ),
+            ])
+
+        base_tools.append(
+            StructuredTool.from_function(
+                func=_set_mode,
+                name="designer_set_mode",
+                description=(
+                    "Change project mode. Input: mode "
+                    "('deck'|'document'|'landing'|'app_mockup'|'storyboard'). "
+                    "Switches the available tool surface and preview layout."
+                ),
+            )
+        )
+
+        return base_tools
 
 
 # ── Auto-register ────────────────────────────────────────────────────────

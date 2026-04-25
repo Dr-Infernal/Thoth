@@ -271,6 +271,20 @@ def _should_dream() -> bool:
     if _is_ollama_busy():
         logger.info("Dream cycle deferred — Ollama is busy processing a request")
         return False
+    # Never run while any agent generation is in flight — a long dream
+    # cycle competes with live requests for LLM bandwidth and can
+    # starve the UI.
+    try:
+        from ui.state import _active_generations
+        if _active_generations:
+            logger.info(
+                "Dream cycle deferred — %d active generation(s) in flight",
+                len(_active_generations),
+            )
+            return False
+    except Exception:
+        # ui.state import failures should not prevent dreaming
+        pass
     return True
 
 

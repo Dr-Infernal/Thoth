@@ -50,6 +50,35 @@ class AppState:
         self.attached_data_cache: dict[str, bytes] = {}
         self.active_designer_project = None  # DesignerProject | None
         self.preferred_home_tab: str | None = None  # tab to select on next rebuild
+        # Per-thread message cache — avoids reading the LangGraph checkpoint
+        # on every thread switch.  Keys are thread_ids; values are the
+        # hydrated ``messages`` lists.  ``message_cache_dirty`` marks
+        # threads whose checkpoint has been written to by a background
+        # task (memory extraction, dream cycle, detached run finalize,
+        # summarization) and therefore MUST be re-read on next select.
+        self.message_cache: dict[str, list[dict]] = {}
+        self.message_cache_dirty: set[str] = set()
+
+    # ── Message-cache helpers ────────────────────────────────────────
+    def cache_active_messages(self) -> None:
+        """Snapshot ``self.messages`` into the per-thread cache."""
+        tid = self.thread_id
+        if tid:
+            self.message_cache[tid] = list(self.messages)
+            self.message_cache_dirty.discard(tid)
+
+    def invalidate_thread_cache(self, thread_id: str | None) -> None:
+        """Drop a cached thread (e.g. on delete)."""
+        if not thread_id:
+            return
+        self.message_cache.pop(thread_id, None)
+        self.message_cache_dirty.discard(thread_id)
+
+    def mark_thread_dirty(self, thread_id: str | None) -> None:
+        """Mark a thread's cache stale so the next select re-reads
+        the checkpoint.  Safe to call with ``None`` / unknown ids."""
+        if thread_id and thread_id in self.message_cache:
+            self.message_cache_dirty.add(thread_id)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -78,6 +107,8 @@ class GenerationState:
     chart_data: list = field(default_factory=list)
     captured_images: list = field(default_factory=list)
     captured_images_persist: list = field(default_factory=list)
+    captured_videos: list = field(default_factory=list)
+    captured_videos_persist: list = field(default_factory=list)
     interrupt_data: Any = None
     status: str = "streaming"  # streaming | done | error | stopped
     error: str = ""
@@ -123,6 +154,7 @@ class P:
     chat_scroll: ui.scroll_area = None  # type: ignore[assignment]
     chat_container: ui.column = None    # type: ignore[assignment]
     thread_container: ui.column = None  # type: ignore[assignment]
+    thread_filter_container: ui.row = None  # type: ignore[assignment]
     token_label: ui.label = None        # type: ignore[assignment]
     token_bar: ui.linear_progress = None  # type: ignore[assignment]
     voice_status_label: ui.label = None  # type: ignore[assignment]

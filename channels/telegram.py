@@ -163,13 +163,14 @@ def _new_thread(chat_id: int) -> dict:
 # ──────────────────────────────────────────────────────────────────────
 from channels.media_capture import grab_vision_capture as _grab_vision_capture
 from channels.media_capture import grab_generated_image as _grab_generated_image
+from channels.media_capture import grab_generated_video as _grab_generated_video
 
 
 def _run_agent_sync(user_text: str, config: dict,
-                    event_queue=None) -> tuple[str, dict | None, list[bytes]]:
+                    event_queue=None) -> tuple[str, dict | None, list[bytes], list[str]]:
     """Run the agent synchronously, collecting the full response.
 
-    Returns (answer_text, interrupt_data_or_None, captured_images).
+    Returns (answer_text, interrupt_data_or_None, captured_images, captured_video_paths).
     If *event_queue* is provided, also pushes (event_type, payload) tuples
     for live streaming.  Pushes ``None`` sentinel when done.
     """
@@ -182,6 +183,7 @@ def _run_agent_sync(user_text: str, config: dict,
     interrupt_data: dict | None = None
     used_vision = False
     used_image_gen = False
+    used_video_gen = False
 
     for event_type, payload in agent_mod.stream_agent(user_text, enabled, config):
         if event_type == "token":
@@ -196,6 +198,8 @@ def _run_agent_sync(user_text: str, config: dict,
                 used_vision = True
             if raw_name in ("generate_image", "edit_image"):
                 used_image_gen = True
+            if raw_name in ("generate_video", "animate_image"):
+                used_video_gen = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -216,6 +220,7 @@ def _run_agent_sync(user_text: str, config: dict,
         event_queue.put(None)  # sentinel
 
     captured_images: list[bytes] = []
+    captured_video_paths: list[str] = []
     if used_vision:
         img = _grab_vision_capture()
         if img:
@@ -224,11 +229,15 @@ def _run_agent_sync(user_text: str, config: dict,
         img = _grab_generated_image()
         if img:
             captured_images.append(img)
-    return answer or "_(No response)_", interrupt_data, captured_images
+    if used_video_gen:
+        vid_path = _grab_generated_video()
+        if vid_path:
+            captured_video_paths.append(vid_path)
+    return answer or "_(No response)_", interrupt_data, captured_images, captured_video_paths
 
 
 def _resume_agent_sync(config: dict, approved: bool,
-                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, list[bytes]]:
+                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, list[bytes], list[str]]:
     """Resume a paused agent after interrupt approval/denial."""
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
     full_answer: list[str] = []
@@ -236,6 +245,7 @@ def _resume_agent_sync(config: dict, approved: bool,
     interrupt_data: dict | None = None
     used_vision = False
     used_image_gen = False
+    used_video_gen = False
 
     for event_type, payload in agent_mod.resume_stream_agent(
         enabled, config, approved, interrupt_ids=interrupt_ids
@@ -252,6 +262,8 @@ def _resume_agent_sync(config: dict, approved: bool,
                 used_vision = True
             if raw_name in ("generate_image", "edit_image"):
                 used_image_gen = True
+            if raw_name in ("generate_video", "animate_image"):
+                used_video_gen = True
         elif event_type == "interrupt":
             interrupt_data = payload
         elif event_type == "error":
@@ -267,6 +279,7 @@ def _resume_agent_sync(config: dict, approved: bool,
         answer = "\n".join(tool_reports)
 
     captured_images: list[bytes] = []
+    captured_video_paths: list[str] = []
     if used_vision:
         img = _grab_vision_capture()
         if img:
@@ -275,7 +288,11 @@ def _resume_agent_sync(config: dict, approved: bool,
         img = _grab_generated_image()
         if img:
             captured_images.append(img)
-    return answer or "_(No response)_", interrupt_data, captured_images
+    if used_video_gen:
+        vid_path = _grab_generated_video()
+        if vid_path:
+            captured_video_paths.append(vid_path)
+    return answer or "_(No response)_", interrupt_data, captured_images, captured_video_paths
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -638,6 +655,7 @@ async def _send_agent_response(
     chat, message, chat_id: int, config: dict,
     answer: str, interrupt_data: dict | None,
     captured_images: list[bytes],
+    captured_video_paths: list[str] | None = None,
 ) -> None:
     """Send agent output back to the user (shared by all handlers)."""
     # Send captured images (vision captures + generated images)
@@ -649,6 +667,16 @@ async def _send_agent_response(
             )
         except Exception as exc:
             log.warning("Failed to send image to Telegram: %s", exc)
+
+    # Send captured videos
+    for vpath in (captured_video_paths or []):
+        try:
+            await chat.send_document(
+                document=open(vpath, "rb"), caption="🎬 Video",
+                filename=os.path.basename(vpath),
+            )
+        except Exception as exc:
+            log.warning("Failed to send video to Telegram: %s", exc)
 
     if interrupt_data:
         import time as _time
@@ -724,7 +752,7 @@ async def _run_agent_for_message(
             consumer_task = asyncio.ensure_future(
                 _tg_edit_consumer(update.effective_chat, sent_msg, eq, loop)
             )
-        answer, interrupt_data, captured_images = await executor_future
+        answer, interrupt_data, captured_images, captured_video_paths = await executor_future
         if sent_msg:
             streamed_display = await consumer_task
         else:
@@ -744,7 +772,7 @@ async def _run_agent_for_message(
                     None, repair_orphaned_tool_calls, None, config
                 )
                 log.info("Repaired orphaned tool calls for chat %s, retrying", chat_id)
-                answer, interrupt_data, captured_images = await loop.run_in_executor(
+                answer, interrupt_data, captured_images, captured_video_paths = await loop.run_in_executor(
                     None, _run_agent_sync, user_text, config
                 )
                 streamed_display = None
@@ -800,6 +828,15 @@ async def _run_agent_for_message(
                 )
             except Exception as exc_img:
                 log.warning("Failed to send image to Telegram: %s", exc_img)
+        # Send captured videos
+        for vpath in captured_video_paths:
+            try:
+                await update.effective_chat.send_document(
+                    document=open(vpath, "rb"), caption="🎬 Video",
+                    filename=os.path.basename(vpath),
+                )
+            except Exception as exc_vid:
+                log.warning("Failed to send video to Telegram: %s", exc_vid)
     else:
         # Streaming overflowed or wasn't available — delete placeholder, send normally
         if sent_msg:
@@ -810,6 +847,7 @@ async def _run_agent_for_message(
         await _send_agent_response(
             update.effective_chat, msg, chat_id, config,
             clean_answer, interrupt_data, captured_images,
+            captured_video_paths,
         )
         for url in yt_urls:
             await update.effective_chat.send_message(url)
@@ -900,7 +938,7 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     loop = asyncio.get_event_loop()
     try:
-        answer, new_interrupt, captured_images = await loop.run_in_executor(
+        answer, new_interrupt, captured_images, captured_video_paths = await loop.run_in_executor(
             None, lambda: _resume_agent_sync(config, approved, interrupt_ids=interrupt_ids),
         )
     except Exception as exc:
@@ -925,6 +963,16 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
         except Exception as exc:
             log.warning("Failed to send image to Telegram: %s", exc)
+
+    # Send captured videos
+    for vpath in captured_video_paths:
+        try:
+            await update.effective_chat.send_document(
+                document=open(vpath, "rb"), caption="🎬 Video",
+                filename=os.path.basename(vpath),
+            )
+        except Exception as exc:
+            log.warning("Failed to send video to Telegram: %s", exc)
 
     if new_interrupt:
         import time as _time
@@ -1015,6 +1063,20 @@ async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Take highest resolution
     photo = photos[-1]
 
+    # Resolve the same thread config that _run_agent_for_message will use so
+    # the attachment cache stays scoped correctly per Telegram conversation.
+    chat_id = update.effective_chat.id
+    config = context.chat_data.get("thread_config")
+    if config is not None:
+        cached_tid = (config.get("configurable") or {}).get("thread_id", "")
+        if not cached_tid or not _thread_exists(cached_tid):
+            config = None
+            context.chat_data.pop("thread_config", None)
+    if config is None:
+        config = _get_or_create_thread(chat_id)
+        context.chat_data["thread_config"] = config
+    thread_id = (config.get("configurable") or {}).get("thread_id", "")
+
     try:
         tg_file = await photo.get_file()
         data = await tg_file.download_as_bytearray()
@@ -1026,6 +1088,18 @@ async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     caption = (update.message.caption or "").strip()
     question = caption if caption else "Describe this image in detail."
 
+    cache_name = f"telegram_photo_{getattr(photo, 'file_unique_id', '') or 'image'}.jpg"
+    try:
+        import tools.image_gen_tool as _igt_mod
+
+        same_thread = (_igt_mod._image_cache_thread_id == thread_id)
+        if not same_thread:
+            _igt_mod._image_cache.clear()
+        _igt_mod._image_cache_thread_id = thread_id
+        _igt_mod._image_cache[cache_name] = bytes(data)
+    except Exception:
+        log.debug("Failed to cache inbound Telegram photo '%s'", cache_name, exc_info=True)
+
     from channels.media import analyze_image
     description = analyze_image(bytes(data), question=question)
 
@@ -1036,13 +1110,14 @@ async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Build context for the agent
     if caption:
         agent_text = (
-            f"[User sent a photo with caption: {caption}]\n\n"
-            f"Image analysis: {description}"
+            f"[Attached image: {cache_name} — ALREADY ANALYZED, do NOT call analyze_image]\n"
+            f"{description}\n\n"
+            f"User said: {caption}"
         )
     else:
         agent_text = (
-            f"[User sent a photo]\n\n"
-            f"Image analysis: {description}"
+            f"[Attached image: {cache_name} — ALREADY ANALYZED, do NOT call analyze_image]\n"
+            f"{description}"
         )
 
     await _run_agent_for_message(update, context, agent_text)

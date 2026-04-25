@@ -9,7 +9,7 @@ from typing import Callable
 from nicegui import ui
 
 from designer.state import BrandConfig
-from designer.storage import list_projects, load_project, delete_project, duplicate_project
+from designer.storage import list_projects, load_project, delete_project, duplicate_project, delete_projects
 from designer.thumbnail import compute_thumbnail_dimensions, render_static_page_thumbnail
 from designer.ui_theme import dialog_card_style, style_destructive_button, style_ghost_button, style_primary_button
 
@@ -30,6 +30,11 @@ def build_designer_tab(
     on_refresh : Callable | None
         Called to rebuild the whole home view (after delete, etc.).
     """
+    from ui.bulk_select import BulkSelect, render_bulk_action_bar
+    from ui.confirm import confirm_destructive
+
+    bulk = BulkSelect()
+
     with ui.scroll_area().classes("w-full h-full"):
         with ui.column().classes("w-full q-pa-sm gap-0"):
             # Header row
@@ -41,6 +46,24 @@ def build_designer_tab(
                     ).style("margin-top: -2px; letter-spacing: 0.3px;")
 
                 with ui.row().classes("gap-2"):
+                    # Project cards grid needs a forward ref so Select can
+                    # rebuild it when the mode flips.
+                    _grid_ref: list = [None]
+                    projects = list_projects()
+
+                    select_btn = ui.button("Select").props(
+                        "flat dense no-caps size=sm"
+                    )
+                    if not projects:
+                        select_btn.set_visibility(False)
+
+                    def _toggle_select():
+                        bulk.toggle_mode()
+                        select_btn.text = "Done" if bulk.active else "Select"
+                        _rebuild_grid()
+
+                    select_btn.on("click", _toggle_select)
+
                     def _new_design():
                         from designer.template_gallery import show_new_project_dialog
                         show_new_project_dialog(on_project_created=on_open_project)
@@ -54,21 +77,57 @@ def build_designer_tab(
             ui.separator().classes("q-my-sm")
 
             # Project cards grid
-            projects = list_projects()
-
             if projects:
-                with ui.element("div").classes("w-full").style(
+                grid = ui.element("div").classes("w-full").style(
                     "display: grid;"
                     "grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));"
                     "gap: 0.75rem;"
-                ):
-                    for proj_summary in projects:
-                        _render_project_card(
-                            proj_summary,
-                            on_open=on_open_project,
-                            on_refresh=on_refresh,
-                        )
+                )
+                _grid_ref[0] = grid
+
+                def _rebuild_grid() -> None:
+                    grid.clear()
+                    with grid:
+                        for proj_summary in projects:
+                            _render_project_card(
+                                proj_summary,
+                                on_open=on_open_project,
+                                on_refresh=on_refresh,
+                                bulk=bulk,
+                            )
+
+                _rebuild_grid()
+
+                def _do_bulk_delete(ids: list[str]) -> None:
+                    def _commit():
+                        deleted, failures = delete_projects(ids)
+                        msg = f"🗑️ Deleted {deleted} design{'s' if deleted != 1 else ''}."
+                        if failures:
+                            msg += f" {len(failures)} failed."
+                        ui.notify(msg, type="negative" if failures else "info")
+                        if on_refresh:
+                            on_refresh()
+
+                    noun = "design" if len(ids) == 1 else "designs"
+                    confirm_destructive(
+                        f"Delete {len(ids)} {noun}?",
+                        body=(
+                            "This cannot be undone. Pages, assets, and the "
+                            "linked conversation will be removed."
+                        ),
+                        on_confirm=_commit,
+                    )
+
+                render_bulk_action_bar(
+                    bulk,
+                    on_delete=_do_bulk_delete,
+                    label_singular="design",
+                    label_plural="designs",
+                    on_clear=_rebuild_grid,
+                )
             else:
+                def _rebuild_grid() -> None:  # no-op when empty
+                    pass
                 with ui.column().classes("w-full items-center q-mt-lg"):
                     ui.icon("design_services", size="3rem").classes("text-grey-6")
                     ui.label(
@@ -84,14 +143,22 @@ def _render_project_card(
     *,
     on_open: Callable,
     on_refresh: Callable | None,
+    bulk=None,
 ) -> None:
-    """Render a single project card in the gallery grid."""
+    """Render a single project card in the gallery grid.
+
+    When ``bulk`` is provided and active, the card shows a checkbox
+    overlay and card clicks toggle selection instead of opening.
+    """
     proj_id = summary["id"]
     name = summary.get("name", "Untitled")
     page_count = summary.get("page_count", 0)
     ratio = summary.get("aspect_ratio", "16:9")
     updated = summary.get("updated_at", "")
-    preview_project = load_project(proj_id)
+    # NOTE: We deliberately do NOT call ``load_project`` here — rendering the
+    # card only needs ``summary['preview_html']`` (written on every save).
+    # Eagerly loading every project on gallery open made the view appear
+    # frozen for 50-300 ms per card. The click handler does the load.
 
     # Format date
     date_str = ""
@@ -102,8 +169,13 @@ def _render_project_card(
         except (ValueError, TypeError):
             date_str = updated[:10]
 
+    selecting = bool(bulk and bulk.active)
+
     def _open_this():
-        project = preview_project or load_project(proj_id)
+        if selecting:
+            bulk.toggle_item(proj_id)
+            return
+        project = load_project(proj_id)
         if project:
             on_open(project)
         else:
@@ -111,10 +183,24 @@ def _render_project_card(
 
     with ui.card().classes("h-full").style(
         "padding: 0.75rem; cursor: pointer; transition: border-color 0.2s;"
+        " position: relative;"
     ).on("click", _open_this):
-        preview_page = preview_project.pages[0] if preview_project and preview_project.pages else None
-        preview_html = preview_page.html if preview_page else summary.get("preview_html", "")
-        preview_title = preview_page.title if preview_page else summary.get("preview_title", name)
+        if selecting:
+            # Checkbox overlay top-left
+            with ui.element("div").style(
+                "position: absolute; top: 6px; left: 6px; z-index: 5;"
+                "background: rgba(15,23,42,0.85); border-radius: 4px;"
+                "padding: 2px;"
+            ):
+                cb = ui.checkbox(value=bulk.is_selected(proj_id))
+                cb.on(
+                    "update:model-value",
+                    lambda e, p=proj_id: bulk.toggle_item(p, bool(e.args)),
+                )
+                cb.on("click", js_handler="(e) => e.stopPropagation()")
+        # Use the cached summary preview (updated on every save_project).
+        preview_html = summary.get("preview_html", "")
+        preview_title = summary.get("preview_title", name)
         brand_dict = summary.get("brand")
         brand = BrandConfig.from_dict(brand_dict) if brand_dict else None
         canvas_width = int(summary.get("canvas_width", 1920) or 1920)
@@ -132,7 +218,7 @@ def _render_project_card(
                     frame_id=f"gallery-preview-{proj_id[:8]}",
                     page_html=preview_html,
                     brand=brand,
-                    project=preview_project,
+                    project=None,
                     page_index=0,
                     canvas_width=canvas_width,
                     canvas_height=canvas_height,

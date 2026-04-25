@@ -18,6 +18,8 @@ from ui.constants import welcome_message, EXAMPLE_PROMPTS
 
 logger = logging.getLogger(__name__)
 
+# Persisted across rebuild_main() calls so selection mode survives re-render.
+_BULK_WF: "BulkSelect | None" = None
 
 def build_home(
     state: AppState,
@@ -113,6 +115,13 @@ def build_home(
                 def _refresh_home_tiles():
                     rebuild_main()
 
+                from ui.bulk_select import BulkSelect, render_bulk_action_bar
+                from ui.confirm import confirm_destructive
+                global _BULK_WF
+                if _BULK_WF is None:
+                    _BULK_WF = BulkSelect()
+                _bulk_wf = _BULK_WF
+
                 ui.separator()
                 with ui.row().classes("w-full items-center justify-between"):
                     with ui.column().classes("gap-0"):
@@ -120,11 +129,25 @@ def build_home(
                         ui.label("Background Agents").classes(
                             "text-xs text-grey-6"
                         ).style("margin-top: -2px; letter-spacing: 0.3px;")
-                    ui.button("New Workflow", icon="add", on_click=lambda: show_task_dialog(
-                        None, _refresh_home_tiles,
-                    )).props("outline dense no-caps color=amber").style(
-                        "font-weight: 600; font-size: 0.95rem;"
-                    )
+                    with ui.row().classes("gap-2 items-center"):
+                        if home_tasks:
+                            _wf_select_btn = ui.button(
+                                "Done" if _bulk_wf.active else "Select"
+                            ).props("flat dense no-caps size=sm")
+
+                            def _toggle_wf_select():
+                                _bulk_wf.toggle_mode()
+                                _wf_select_btn.text = (
+                                    "Done" if _bulk_wf.active else "Select"
+                                )
+                                _refresh_home_tiles()
+
+                            _wf_select_btn.on("click", _toggle_wf_select)
+                        ui.button("New Workflow", icon="add", on_click=lambda: show_task_dialog(
+                            None, _refresh_home_tiles,
+                        )).props("outline dense no-caps color=amber").style(
+                            "font-weight: 600; font-size: 0.95rem;"
+                        )
 
                 if home_tasks:
                     with ui.element("div").classes("w-full").style(
@@ -136,8 +159,28 @@ def build_home(
                             _is_disabled = not tk.get("enabled", True)
                             card_style = "opacity: 0.45;" if _is_disabled else ""
                             with ui.card().classes("h-full").style(
-                                f"padding: 0.75rem; {card_style}"
-                            ):
+                                f"padding: 0.75rem; position: relative; {card_style}"
+                            ) as _wf_card:
+                                if _bulk_wf.active:
+                                    # Checkbox overlay top-left
+                                    with ui.element("div").style(
+                                        "position: absolute; top: 6px; left: 6px; z-index: 5;"
+                                        "background: rgba(15,23,42,0.85); border-radius: 4px;"
+                                        "padding: 2px;"
+                                    ):
+                                        _cb = ui.checkbox(
+                                            value=_bulk_wf.is_selected(tk["id"]),
+                                        )
+                                        _cb.on(
+                                            "update:model-value",
+                                            lambda e, i=tk["id"]: _bulk_wf.toggle_item(
+                                                i, bool(e.args),
+                                            ),
+                                        )
+                                        _cb.on(
+                                            "click",
+                                            js_handler="(e) => e.stopPropagation()",
+                                        )
                                 # Icon in a subtle circular badge
                                 with ui.element("div").classes("w-full flex justify-center q-mb-xs"):
                                     ui.element("div").style(
@@ -211,7 +254,8 @@ def build_home(
                                                 f"Delete '{t['icon']} {t['name']}'?"
                                             ).classes("font-bold")
                                             ui.label(
-                                                "This cannot be undone."
+                                                "This removes the workflow, its run "
+                                                "history, and linked conversations."
                                             ).classes("text-grey-6 text-xs")
                                             with ui.row().classes("w-full justify-end mt-2"):
                                                 ui.button(
@@ -268,6 +312,35 @@ def build_home(
                                         ).tooltip("Run now")
                                         if _is_disabled:
                                             run_btn.disable()
+
+                    def _do_wf_bulk_delete(ids: list[str]) -> None:
+                        def _commit():
+                            from tasks import delete_tasks
+                            deleted, failures = delete_tasks(ids)
+                            msg = f"🗑️ Deleted {deleted} workflow{'s' if deleted != 1 else ''}."
+                            if failures:
+                                msg += f" {len(failures)} failed."
+                            ui.notify(msg, type="negative" if failures else "info")
+                            _refresh_home_tiles()
+
+                        noun = "workflow" if len(ids) == 1 else "workflows"
+                        confirm_destructive(
+                            f"Delete {len(ids)} {noun}?",
+                            body=(
+                                "This cannot be undone. Scheduled runs, run "
+                                "history, and the linked conversations will "
+                                "be removed."
+                            ),
+                            on_confirm=_commit,
+                        )
+
+                    render_bulk_action_bar(
+                        _bulk_wf,
+                        on_delete=_do_wf_bulk_delete,
+                        label_singular="workflow",
+                        label_plural="workflows",
+                        on_clear=_refresh_home_tiles,
+                    )
                 else:
                     ui.label("No workflows yet — click + New Workflow to get started.").classes(
                         "text-grey-6 text-sm q-mt-sm"
@@ -277,7 +350,7 @@ def build_home(
         with ui.tab_panel(designer_tab).classes("h-full").style("padding: 0;"):
             from designer.home_tab import build_designer_tab
 
-            def _open_designer_project(project, initial_prompt: str | None = None):
+            def _open_designer_project(project, initial_prompt: str | None = None, staged_files=None):
                 from threads import _save_thread_meta, _set_thread_project_id
                 from designer.storage import save_project
                 from memory_extraction import set_active_thread
@@ -300,6 +373,39 @@ def build_home(
                 from ui.helpers import load_thread_messages
                 state.messages = load_thread_messages(project.thread_id)
                 p.pending_files.clear()
+                # Phase 2.3.I (dialog v3) — staged attachments from the
+                # New Design dialog. If we're about to send an initial
+                # build prompt, push them into p.pending_files so the
+                # existing _send_with_references pipeline persists them.
+                # Otherwise persist directly now.
+                if staged_files:
+                    if initial_prompt:
+                        for item in staged_files:
+                            if item.get("name") and item.get("data"):
+                                p.pending_files.append({
+                                    "name": item["name"],
+                                    "data": bytes(item["data"]),
+                                })
+                    else:
+                        try:
+                            from designer.references import persist_project_references
+                            added_refs = persist_project_references(
+                                project,
+                                [
+                                    {"name": it["name"], "data": bytes(it["data"])}
+                                    for it in staged_files
+                                    if it.get("name") and it.get("data")
+                                ],
+                                state.vision_service,
+                                state.attached_data_cache,
+                                state.thread_model_override or None,
+                            )
+                            if added_refs:
+                                save_project(project)
+                        except Exception as _e:  # noqa: BLE001
+                            logger.warning(
+                                "Failed to persist staged Designer attachments: %s", _e
+                            )
                 set_active_thread(project.thread_id, previous_id=prev)
 
                 state.active_designer_project = project
@@ -308,7 +414,19 @@ def build_home(
 
                 if initial_prompt:
                     async def _start_initial_build() -> None:
-                        await asyncio.sleep(0)
+                        # rebuild_main() schedules the Designer editor
+                        # to render, which is what sets
+                        # p.chat_container.  Wait for it (bounded) so
+                        # _build_assistant_placeholder has a container.
+                        for _ in range(100):  # ~5s max
+                            if getattr(p, "chat_container", None) is not None:
+                                break
+                            await asyncio.sleep(0.05)
+                        if getattr(p, "chat_container", None) is None:
+                            logger.warning(
+                                "Initial Designer build skipped: chat container never mounted."
+                            )
+                            return
                         await send_message(initial_prompt)
 
                     asyncio.create_task(_start_initial_build())

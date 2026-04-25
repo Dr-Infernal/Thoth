@@ -203,12 +203,14 @@ def _line_height_value(value: str | None) -> float | None:
 
 
 def _add_finding(findings: list[dict], category: str, severity: str, message: str,
-                 suggested_fix: str, tag: Tag | None = None) -> None:
+                 suggested_fix: str, tag: Tag | None = None,
+                 *, auto_fixable: bool = True) -> None:
     payload = {
         "category": category,
         "severity": severity,
         "message": message,
         "suggested_fix": suggested_fix,
+        "auto_fixable": auto_fixable,
     }
     if tag is not None:
         payload["element_ref"] = ensure_element_identifier(tag)
@@ -226,6 +228,7 @@ def _add_hierarchy_findings(root: Tag | BeautifulSoup, findings: list[dict]) -> 
             "high",
             "The page has no visible heading tags, so the information hierarchy may feel flat.",
             "Introduce at least one primary heading and clear subheads.",
+            auto_fixable=False,
         )
         return
 
@@ -267,6 +270,23 @@ def _add_overflow_findings(root: Tag | BeautifulSoup, canvas_width: int, canvas_
     word_budget = int(220 * scale)
     total_words = _word_count(root)
     structural_blocks = len(root.find_all(["section", "article"]))
+    # Also count top-level card-like blocks inside a body/main/section so we
+    # catch fixed-slide pages that stack many <div class="card"> blocks
+    # without using <section>. Limit depth to 3 to avoid over-counting
+    # deeply nested decorative wrappers.
+    card_like = 0
+    body = root.find("body") or root
+    for child in body.descendants:
+        if not hasattr(child, "name") or child.name != "div":
+            continue
+        cls = " ".join(child.get("class") or []).lower()
+        style = (child.get("style") or "").lower()
+        looks_card = (
+            any(k in cls for k in ("card", "panel", "tile", "metric", "stat", "chip", "pill", "callout"))
+            or ("background" in style and ("border-radius" in style or "padding" in style))
+        )
+        if looks_card:
+            card_like += 1
     if total_words > word_budget:
         _add_finding(
             findings,
@@ -275,7 +295,7 @@ def _add_overflow_findings(root: Tag | BeautifulSoup, canvas_width: int, canvas_
             f"The page carries about {total_words} words, which risks overflow for a {canvas_width}x{canvas_height} canvas.",
             "Condense copy, tighten spacing, or split the content across more pages.",
         )
-    elif structural_blocks >= 5:
+    elif structural_blocks >= 5 or card_like >= 7:
         _add_finding(
             findings,
             "overflow",

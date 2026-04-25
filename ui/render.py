@@ -51,8 +51,8 @@ def render_image_with_save(b64_or_fname: str, extra_style: str = "", thread_id: 
 
     # Resolve filename → base64 if needed
     b64 = b64_or_fname
-    if thread_id and not b64_or_fname.startswith(("iVBOR", "UklGR", "R0lGO", "/9j/", "AAAA")):
-        # Looks like a filename, not base64 — load from disk
+    from utils.media import is_image_filename
+    if thread_id and is_image_filename(b64_or_fname):
         from threads import load_media_file
         raw = load_media_file(thread_id, b64_or_fname)
         if raw is None:
@@ -83,6 +83,81 @@ def render_image_with_save(b64_or_fname: str, extra_style: str = "", thread_id: 
             "background: rgba(0,0,0,0.5); color: white; min-width: 28px; "
             "min-height: 28px; padding: 2px;"
         ).tooltip("Save image")
+
+
+def render_video_with_save(path_or_fname: str, thread_id: str | None = None) -> None:
+    """Render an HTML5 video player with a download button.
+
+    *path_or_fname* is either an absolute file path or a media filename
+    (resolved via thread media).  The video is served through the
+    ``/_media`` static route so the browser can stream it natively.
+    """
+    from html import escape as _html_escape
+    from pathlib import Path as _Path
+    from ui.export import _save_export
+
+    # Resolve to an absolute path
+    abs_path: str | None = None
+    if _Path(path_or_fname).is_absolute() and _Path(path_or_fname).exists():
+        abs_path = path_or_fname
+    elif thread_id:
+        from threads import _MEDIA_DIR
+        candidate = _MEDIA_DIR / thread_id / path_or_fname
+        if candidate.exists():
+            abs_path = str(candidate)
+
+    if not abs_path:
+        ui.label("⚠ Video file not found").classes("text-xs text-grey-6")
+        return
+
+    # Build a URL through the /_media static route
+    # Path format: /_media/<thread_id>/<filename>
+    p = _Path(abs_path)
+    # Extract thread_id/filename from the path (…/media/<thread_id>/<filename>)
+    try:
+        parts = p.parts
+        # Find 'media' folder in path parts
+        for i, part in enumerate(parts):
+            if part == "media" and i + 2 < len(parts):
+                tid = parts[i + 1]
+                fname = parts[i + 2]
+                video_url = f"/_media/{tid}/{fname}"
+                break
+        else:
+            # Fallback: serve as absolute file URI
+            video_url = p.as_uri() if hasattr(p, "as_uri") else f"file:///{abs_path}"
+    except Exception:
+        video_url = f"file:///{abs_path}"
+
+    safe_video_url = _html_escape(video_url, quote=True)
+
+    style = "position: relative; display: inline-block;"
+    with ui.element("div").style(style):
+        ui.html(
+            f'<video controls preload="metadata" style="max-width: 480px; border-radius: 8px;">'
+            f'<source src="{safe_video_url}" type="video/mp4">'
+            f"Your browser does not support video playback.</video>",
+            sanitize=False,
+        )
+        _path_copy = abs_path
+
+        def _save(video_path=_path_copy):
+            try:
+                raw = _Path(video_path).read_bytes()
+                from datetime import datetime as _dt
+                ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+                _save_export(raw, f"thoth_video_{ts}.mp4")
+            except Exception:
+                logger.warning("Failed to save video", exc_info=True)
+
+        ui.button(
+            icon="download", on_click=_save,
+        ).props("flat dense round size=xs").classes(
+            "absolute bottom-1 right-1"
+        ).style(
+            "background: rgba(0,0,0,0.5); color: white; min-width: 28px; "
+            "min-height: 28px; padding: 2px;"
+        ).tooltip("Save video")
 
 
 # ── Bare-URL auto-linking ────────────────────────────────────────────
@@ -399,7 +474,19 @@ def render_message_content(msg: dict, thread_id: str | None = None) -> None:
         for img_entry in images:
             render_image_with_save(img_entry, thread_id=thread_id)
             ui.label(caption).classes("text-xs text-grey-6")
-    elif tool_results and any(
+
+    # Videos (generated clips)
+    videos = msg.get("videos")
+    if videos:
+        for vid_entry in videos:
+            if isinstance(vid_entry, dict):
+                fname = vid_entry.get("filename") or vid_entry.get("path", "")
+            else:
+                fname = str(vid_entry)
+            render_video_with_save(fname, thread_id=thread_id)
+            ui.label("🎬 Generated video").classes("text-xs text-grey-6")
+
+    if not images and tool_results and any(
         tr.get("name") in ("analyze_image", "👁️ Vision") for tr in tool_results
     ):
         with ui.row().classes("items-center gap-2").style(

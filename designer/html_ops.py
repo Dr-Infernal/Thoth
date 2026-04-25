@@ -74,6 +74,79 @@ _COMPONENT_CONTAINER_AVOID_HINTS = (
 )
 
 
+def build_media_fragment(
+    *,
+    asset_kind: str,
+    asset_id: str,
+    src: str,
+    mime_type: str = "",
+    label: str = "",
+    alt: str = "",
+    poster: str = "",
+    width: int | None = None,
+    height: int | None = None,
+    autoplay: bool = False,
+    loop: bool = False,
+    muted: bool = True,
+    controls: bool = True,
+) -> str:
+    """Return an inner-media HTML fragment for images or videos.
+
+    The returned fragment is the INNER media tag (``<img>`` or ``<video>``)
+    that callers should pass to :func:`wrap_asset_fragment`. All provided
+    attributes are escaped. Video extras (poster/autoplay/loop/muted/
+    controls) are ignored for non-video kinds.
+    """
+
+    kind = (asset_kind or "").strip().lower()
+    is_video = kind == "video" or (mime_type or "").lower().startswith("video/")
+
+    safe_src = _escape_attr(src or "")
+    safe_public_id = _escape_attr(asset_id or "")
+    safe_label = _escape_attr(label or "")
+    safe_alt = _escape_attr(alt or label or "")
+    style = "max-width:100%; height:auto; display:block;"
+
+    if is_video:
+        attrs: list[str] = [
+            f'src="{safe_src}"',
+            f'{PUBLIC_ASSET_ID_ATTR}="{safe_public_id}"',
+            f'{ASSET_KIND_ATTR}="video"',
+            f'style="{style}"',
+        ]
+        if poster:
+            attrs.append(f'poster="{_escape_attr(poster)}"')
+        if width:
+            attrs.append(f'width="{int(width)}"')
+        if height:
+            attrs.append(f'height="{int(height)}"')
+        if muted:
+            attrs.append("muted")
+        if autoplay:
+            attrs.append("autoplay")
+        if loop:
+            attrs.append("loop")
+        if controls:
+            attrs.append("controls")
+        attrs.append("playsinline")
+        if safe_label:
+            attrs.append(f'aria-label="{safe_label}"')
+        return "<video " + " ".join(attrs) + "></video>"
+
+    attrs = [
+        f'src="{safe_src}"',
+        f'alt="{safe_alt}"',
+        f'{PUBLIC_ASSET_ID_ATTR}="{safe_public_id}"',
+        f'{ASSET_KIND_ATTR}="{_escape_attr(kind or "image")}"',
+        f'style="{style}"',
+    ]
+    if width:
+        attrs.append(f'width="{int(width)}"')
+    if height:
+        attrs.append(f'height="{int(height)}"')
+    return "<img " + " ".join(attrs) + " />"
+
+
 def wrap_asset_fragment(
     fragment_html: str,
     asset_kind: str,
@@ -179,6 +252,7 @@ def summarize_page_html(page_html: str) -> dict:
             "paragraphs": len(root.find_all("p")),
             "lists": len(root.find_all(["ul", "ol"])),
             "images": len(root.find_all("img")),
+            "videos": len(root.find_all("video")),
             "buttons": len(root.find_all("button")),
             "links": len(root.find_all("a")),
         },
@@ -234,6 +308,39 @@ def find_asset_identifier_in_html(page_html: str, asset_ref: str) -> str:
     if asset_block is None:
         raise ValueError(f"Could not find image or asset '{asset_ref}'.")
     return _asset_identifier(asset_block)
+
+
+def remove_asset_from_html(page_html: str, asset_ref: str) -> tuple[str, str]:
+    """Remove an asset block (image / video / chart wrapper) from a page.
+
+    Returns ``(new_html, removed_identifier)``. Raises ``ValueError`` when
+    the asset cannot be located. If the wrapper contained a bare ``<img>``
+    tag directly in the body (no wrapping div), that ``<img>`` element is
+    removed on its own.
+    """
+    soup = BeautifulSoup(page_html or "", "html.parser")
+    root = soup.body or soup
+    asset_block = _find_asset_block(root, asset_ref)
+    if asset_block is None:
+        raise ValueError(f"Could not find image or asset '{asset_ref}'.")
+    identifier = _asset_identifier(asset_block)
+    # If the asset lives inside a shot-visual / image-slot placeholder,
+    # drop ONLY the asset block and leave the placeholder intact so the
+    # slot restores its dashed-border preview cleanly.
+    parent = asset_block.parent
+    asset_block.decompose()
+    # Also strip any ancestor wrappers that only existed to host the
+    # asset (e.g. the center-overlay div added by the fallback insert
+    # path). Walk up at most two levels and prune empty <div>s with
+    # no text/content.
+    while parent is not None and parent is not root:
+        if parent.name == "div" and not parent.get_text(strip=True) and not parent.find(["img", "video", "audio", "iframe"]):
+            next_parent = parent.parent
+            parent.decompose()
+            parent = next_parent
+            continue
+        break
+    return str(soup), identifier
 
 
 def replace_asset_in_html(
@@ -501,6 +608,9 @@ def _iter_asset_blocks(root: Tag):
     for img in root.find_all("img"):
         if img.find_parent(attrs={ASSET_ID_ATTR: True}) is None:
             yield img
+    for video in root.find_all("video"):
+        if video.find_parent(attrs={ASSET_ID_ATTR: True}) is None:
+            yield video
 
 
 def _iter_targetable_elements(root: Tag):
@@ -552,6 +662,7 @@ def _find_asset_block(root: Tag, asset_ref: str) -> Tag | None:
 
 def _asset_match_values(block: Tag) -> list[str]:
     img = block if block.name == "img" else block.find("img")
+    video = block if block.name == "video" else block.find("video")
     values = [
         block.get(ASSET_ID_ATTR, ""),
         block.get(PUBLIC_ASSET_ID_ATTR, ""),
@@ -564,6 +675,13 @@ def _asset_match_values(block: Tag) -> list[str]:
             img.get("id", ""),
             img.get("alt", ""),
             img.get("title", ""),
+        ])
+    if video is not None:
+        values.extend([
+            video.get(PUBLIC_ASSET_ID_ATTR, ""),
+            video.get("id", ""),
+            video.get("title", ""),
+            video.get("aria-label", ""),
         ])
     text_hint = _clean_text(block.get_text(" ", strip=True))
     if text_hint:
@@ -584,9 +702,34 @@ def _element_match_values(tag: Tag) -> list[str]:
 
 def _describe_asset(block: Tag) -> dict | None:
     img = block if block.name == "img" else block.find("img")
-    if img is None:
+    video = block if block.name == "video" else block.find("video")
+    media = img or video
+    if media is None:
         return None
-    label = block.get(ASSET_LABEL_ATTR) or img.get("alt", "") or _clean_text(block.get_text(" ", strip=True))
+    if video is not None:
+        label = (
+            block.get(ASSET_LABEL_ATTR)
+            or video.get("aria-label", "")
+            or video.get("title", "")
+            or _clean_text(block.get_text(" ", strip=True))
+        )
+        src = video.get("src", "")
+        if not src:
+            source_tag = video.find("source")
+            if source_tag is not None:
+                src = source_tag.get("src", "")
+        return {
+            "id": _asset_identifier(block),
+            "kind": block.get(ASSET_KIND_ATTR) or "video",
+            "label": (label or "")[:120],
+            "alt": (video.get("aria-label", "") or video.get("title", ""))[:120],
+            "src_type": _source_type(src),
+        }
+    label = (
+        block.get(ASSET_LABEL_ATTR)
+        or img.get("alt", "")
+        or _clean_text(block.get_text(" ", strip=True))
+    )
     return {
         "id": _asset_identifier(block),
         "kind": block.get(ASSET_KIND_ATTR) or _infer_asset_kind(block, img),
@@ -622,12 +765,14 @@ def _source_type(src: str) -> str:
 
 def _asset_identifier(block: Tag) -> str:
     img = block if block.name == "img" else block.find("img")
+    video = block if block.name == "video" else block.find("video")
+    media = img if img is not None else video
     return (
         block.get(ASSET_ID_ATTR)
         or block.get(PUBLIC_ASSET_ID_ATTR)
         or block.get("id")
-        or (img.get(PUBLIC_ASSET_ID_ATTR) if img is not None else "")
-        or (img.get("id") if img is not None else "")
+        or (media.get(PUBLIC_ASSET_ID_ATTR) if media is not None else "")
+        or (media.get("id") if media is not None else "")
         or ""
     )
 
@@ -937,3 +1082,150 @@ def _escape_attr(value: str) -> str:
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
+
+
+# ── Agent-HTML sanitizer ────────────────────────────────────────────────
+# Strips any executable content that could escape the controlled runtime
+# contract. Called on every agent-authored page before save, regardless of
+# project mode.  The runtime bridge itself is injected by
+# ``designer/runtime/loader.py`` AFTER sanitation and carries the reserved
+# ``data-thoth-runtime`` attribute so we can spot it explicitly.
+
+_EVENT_HANDLER_RE = re.compile(r"^on[a-z]+$", re.IGNORECASE)
+_JS_URL_RE = re.compile(r"^\s*javascript:", re.IGNORECASE)
+
+
+def sanitize_agent_html(html: str) -> str:
+    """Remove scripts, inline event handlers, and javascript: URLs.
+
+    Safe to run on any HTML string, including strings produced by
+    ``build_media_fragment`` / ``wrap_asset_fragment``. Never touches
+    ``<script data-thoth-runtime="1">`` so runtime bridge injection is
+    idempotent.
+    """
+    if not html or "<" not in html:
+        return html or ""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 1) Remove <script> tags unless they carry the reserved runtime marker.
+    for script_tag in list(soup.find_all("script")):
+        if script_tag.get("data-thoth-runtime"):
+            continue
+        script_tag.decompose()
+
+    # 2) Strip inline event handlers (onclick, onmouseover, …) and
+    #    javascript: URLs on any element.
+    for tag in soup.find_all(True):
+        for attr in list(tag.attrs.keys()):
+            if _EVENT_HANDLER_RE.match(attr):
+                del tag.attrs[attr]
+                continue
+            value = tag.attrs.get(attr)
+            if isinstance(value, str) and _JS_URL_RE.match(value):
+                del tag.attrs[attr]
+
+    return str(soup)
+
+
+# ── App-mockup widget preservation ───────────────────────────────────
+#
+# When the agent rewrites an app_mockup page it frequently drops the
+# <style> block or strips the widget DOM (toggle pills, list rows,
+# .btn pills, tab bars). The page then renders as a wall of underlined
+# links and comma-separated labels — exactly what the screenshots in
+# the bug report show. This helper runs after sanitize_agent_html on
+# the agent's output and, when the *previous* version of the page had
+# widget CSS that the new version lost, splices the old <style> block
+# back in so the existing class names still resolve.
+
+_WIDGET_SELECTORS: tuple[str, ...] = (
+    ".toggle",
+    ".toggle-row",
+    ".row",
+    ".btn",
+    ".tab",
+    ".tabbar",
+    ".topbar",
+    ".screen",
+    ".screen-body",
+    ".title",
+    ".sub",
+    ".icon",
+    "aria-pressed",
+)
+
+
+def _style_text(soup: BeautifulSoup) -> str:
+    return "\n".join(tag.get_text() for tag in soup.find_all("style"))
+
+
+def _selectors_present(css_text: str) -> set[str]:
+    """Return the subset of ``_WIDGET_SELECTORS`` that appears in ``css_text``."""
+    return {sel for sel in _WIDGET_SELECTORS if sel in css_text}
+
+
+def _has_widget_css(css_text: str) -> bool:
+    return bool(_selectors_present(css_text))
+
+
+def preserve_app_mockup_widgets(old_html: str, new_html: str) -> str:
+    """Re-inject widget CSS from ``old_html`` if ``new_html`` lost it.
+
+    Compares widget selectors block-by-block rather than as a single
+    boolean so that *partial* preservation (agent kept ``.tabbar`` but
+    dropped ``.row`` / ``.topbar`` / ``.title`` / ``.sub``) still
+    triggers injection. Without this, pages where the agent only kept
+    some of the widget vocabulary render as a wall of default blue
+    underlined links with collapsed row contents — the exact decay
+    reported in the bug screenshots.
+
+    - Nothing is mutated unless the old page had widget CSS AND the
+      new page is missing at least one selector the old page had.
+    - The preserved blocks from the old page are appended inside
+      ``<head>`` (synthesised if missing). Because they come *before*
+      any further CSS the agent wrote but *after* the agent's own
+      head blocks in document order, the agent's styles still win on
+      specificity ties.
+    """
+    if not new_html or not old_html or "<style" not in old_html.lower():
+        return new_html or ""
+    try:
+        old_soup = BeautifulSoup(old_html, "html.parser")
+        new_soup = BeautifulSoup(new_html, "html.parser")
+    except Exception:
+        return new_html
+
+    old_present = _selectors_present(_style_text(old_soup))
+    if not old_present:
+        return new_html  # nothing worth preserving
+    new_present = _selectors_present(_style_text(new_soup))
+    missing = old_present - new_present
+    if not missing:
+        return new_html  # every widget selector the old page had is covered
+
+    # Pull each old <style> block that provides at least one of the
+    # missing selectors. Keep document order to preserve cascade.
+    preserved_blocks: list[str] = []
+    for tag in old_soup.find_all("style"):
+        text = tag.get_text()
+        if any(sel in text for sel in missing):
+            preserved_blocks.append(str(tag))
+    if not preserved_blocks:
+        return new_html
+    preserved_html = (
+        "<!-- thoth:preserved-widget-css -->\n"
+        + "\n".join(preserved_blocks)
+    )
+
+    head = new_soup.find("head")
+    if head is None:
+        # Wrap: prepend <head>…</head> to the document.
+        new_head = new_soup.new_tag("head")
+        new_head.append(BeautifulSoup(preserved_html, "html.parser"))
+        if new_soup.html:
+            new_soup.html.insert(0, new_head)
+        else:
+            new_soup.insert(0, new_head)
+    else:
+        head.append(BeautifulSoup(preserved_html, "html.parser"))
+    return str(new_soup)

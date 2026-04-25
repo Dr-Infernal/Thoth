@@ -6,7 +6,7 @@ from a project's stored setup brief.
 
 from __future__ import annotations
 
-from designer.state import DesignerProject, ProjectBrief
+from designer.state import DESIGNER_MODES, DesignerProject, ProjectBrief
 
 
 def project_has_build_brief(project: DesignerProject) -> bool:
@@ -19,12 +19,28 @@ def build_initial_design_request(project: DesignerProject) -> str:
     """Build the canonical first-draft request from the project's stored brief."""
 
     brief = project.brief or ProjectBrief()
-    output_type = brief.output_type.strip() or "design"
+    # Phase 2.3.F — Derive the output label from project.mode rather
+    # than the legacy free-text brief.output_type field. The mode is
+    # set by the setup dialog (2.3.C) and is the single source of
+    # truth. If brief.output_type still carries a value (legacy JSON,
+    # or a tool caller) we honour it as an override.
+    mode = getattr(project, "mode", "deck") or "deck"
+    mode_info = DESIGNER_MODES.get(mode, DESIGNER_MODES["deck"])
+    mode_label = mode_info["label"]
+    output_type = brief.output_type.strip() or mode_label.lower()
     lines = [
         f"Create the first draft of this {output_type} using the current project as the starting point.",
     ]
 
-    if project.template_id and project.template_id != "blank_canvas":
+    if mode != "deck":
+        lines.append(
+            f"Project type: {mode_info['label']} (mode='{mode}'). "
+            "Follow the interactive-runtime rules — navigation and state "
+            "toggles must use data-thoth-action attributes only, never raw "
+            "JavaScript."
+        )
+
+    if project.template_id and not project.template_id.startswith("blank_"):
         lines.append(
             "Use the selected template as a starting structure, but replace placeholder content with real content tailored to the brief."
         )

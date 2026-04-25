@@ -1,0 +1,94 @@
+# =============================================================================
+# update-manifest.yml — Append a SHA256 manifest to a GitHub release body
+#
+# When a release is published (or this workflow is dispatched), this job
+# downloads the release's installer + DMG assets, computes their SHA256
+# hashes, and PATCHes the release body with a `<!-- thoth-update-manifest -->`
+# fenced block. Thoth's in-app updater requires this manifest to verify
+# downloads.
+#
+# Trigger automatically when a release is published, OR manually with a tag.
+# =============================================================================
+
+name: Update Manifest
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v3.18.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "value=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+
+          # release.yml uploads installer + DMG assets asynchronously after the
+          # release is published, so the first `release: published` event may
+          # fire before any assets exist. Poll up to 30 minutes for at least
+          # one matching asset before bailing out — the `release: edited`
+          # trigger will retry if we still time out.
+          tag="${{ steps.tag.outputs.value }}"
+          repo="${{ github.repository }}"
+          attempts=60        # 60 × 30s = 30 min
+          for i in $(seq 1 $attempts); do
+            rm -rf artifacts/* 2>/dev/null || true
+            gh release download "$tag" \
+              --repo "$repo" \
+              --dir artifacts \
+              --pattern "ThothSetup_*.exe" \
+              --pattern "Thoth-*-macOS-*.dmg" || true
+            shopt -s nullglob
+            files=(artifacts/ThothSetup_*.exe artifacts/Thoth-*-macOS-*.dmg)
+            if [ ${#files[@]} -gt 0 ]; then
+              echo "Found ${#files[@]} asset(s) on attempt $i"
+              break
+            fi
+            echo "Attempt $i/$attempts: no installer assets yet, waiting 30s…"
+            sleep 30
+          done
+          ls -la artifacts/
+
+      - name: Append SHA256 manifest to release body
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Collect every artifact we downloaded
+          shopt -s nullglob
+          files=(artifacts/ThothSetup_*.exe artifacts/Thoth-*-macOS-*.dmg)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No installer artifacts found for ${{ steps.tag.outputs.value }} — skipping manifest"
+            exit 0
+          fi
+          python scripts/append_sha_manifest.py \
+            --tag "${{ steps.tag.outputs.value }}" \
+            --files "${files[@]}"

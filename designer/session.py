@@ -93,12 +93,17 @@ def get_undo_stack() -> UndoStack | None:
     return _undo_stacks_by_key.get(_ui_active_key)
 
 
-def prepare_project_mutation(project: DesignerProject, label: str = "") -> None:
-    """Capture undo state and save a persistent snapshot before a mutation."""
+def prepare_project_mutation(project: DesignerProject, label: str = "",
+                              *, author: str = "user") -> None:
+    """Capture undo state and save a persistent snapshot before a mutation.
+
+    ``author`` should be ``"agent"`` when the mutation originates from a
+    designer-agent tool call; it defaults to ``"user"`` for UI actions.
+    """
 
     stack = _undo_stacks_by_key.setdefault(_project_key(project), UndoStack())
     stack.push(project)
     try:
-        snapshot(project, label=label)
+        snapshot(project, label=label, author=author)
     except Exception:
         logger.debug("Failed to save snapshot before mutation", exc_info=True)

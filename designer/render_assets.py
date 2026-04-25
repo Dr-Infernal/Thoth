@@ -97,6 +97,26 @@ def normalize_inline_image_sources(
     return (str(soup), True) if changed else (html, False)
 
 
+def normalize_inline_media_sources(
+    html: str,
+    project: DesignerProject | None,
+    *,
+    default_asset_kind: str = "uploaded-image",
+) -> tuple[str, bool]:
+    """Media-aware wrapper around :func:`normalize_inline_image_sources`.
+
+    Phase 2.1.B: videos typically arrive as ``<video src="asset://...">``
+    since raw MP4 data URIs are impractical. This function therefore
+    delegates to the image normalizer but is the forward-compatible entry
+    point for future media kinds (audio, lottie, etc.).
+    """
+    return normalize_inline_image_sources(
+        html,
+        project,
+        default_asset_kind=default_asset_kind,
+    )
+
+
 def normalize_project_inline_assets(project: DesignerProject | None) -> bool:
     """Migrate inline page image data URIs in a project to persisted assets."""
 
@@ -212,6 +232,82 @@ def resolve_project_image_sources(html: str, project: DesignerProject | None) ->
         encoded = base64.b64encode(data).decode("ascii")
         image["src"] = f"data:{mime};base64,{encoded}"
         changed = True
+
+    return str(soup) if changed else html
+
+
+def resolve_project_media_sources(html: str, project: DesignerProject | None) -> str:
+    """Resolve persisted video/audio references to data URIs alongside images.
+
+    Images still flow through :func:`resolve_project_image_sources`. For
+    video/audio assets referenced as ``asset://<id>`` or by filename, this
+    inlines the bytes as a ``data:`` URI so the srcdoc iframe preview can
+    play them without a backing HTTP route. The missing-asset fallback is
+    a silent no-op (the ``<video>`` tag will show broken-media chrome).
+    """
+    html = resolve_project_image_sources(html, project)
+    if not html or project is None:
+        return html
+    lowered = html.lower()
+    if "<video" not in lowered and "<audio" not in lowered:
+        return html
+    if not project.assets:
+        return html
+
+    soup = BeautifulSoup(html, "html.parser")
+    asset_lookup = _build_asset_lookup(project.assets)
+    changed = False
+
+    for tag_name in ("video", "audio"):
+        for media in soup.find_all(tag_name):
+            # Resolve either the inline src or the first <source> child.
+            target: Tag | None = media if media.get("src") else None
+            if target is None:
+                target = media.find("source")
+            if target is None:
+                continue
+            source = (target.get("src") or "").strip()
+            if not source or source.startswith("data:"):
+                continue
+
+            asset = _match_asset(asset_lookup, source, media)
+            if asset is None:
+                continue
+            if not asset.stored_name:
+                continue
+
+            data = load_asset_bytes(project.id, asset.stored_name)
+            if not data:
+                continue
+
+            mime = (
+                asset.mime_type
+                or mimetypes.guess_type(asset.filename or asset.stored_name)[0]
+                or ("video/mp4" if tag_name == "video" else "audio/mpeg")
+            )
+            encoded = base64.b64encode(data).decode("ascii")
+            target["src"] = f"data:{mime};base64,{encoded}"
+            changed = True
+
+            # If the video has an asset-wrapper with a poster asset id on
+            # the asset record, resolve it into the <video poster="..."> attr.
+            if tag_name == "video" and not media.get("poster") and asset.poster_asset_id:
+                poster_asset = next(
+                    (a for a in project.assets if a.id == asset.poster_asset_id),
+                    None,
+                )
+                if poster_asset and poster_asset.stored_name:
+                    poster_data = load_asset_bytes(project.id, poster_asset.stored_name)
+                    if poster_data:
+                        poster_mime = (
+                            poster_asset.mime_type
+                            or mimetypes.guess_type(
+                                poster_asset.filename or poster_asset.stored_name
+                            )[0]
+                            or "image/png"
+                        )
+                        poster_encoded = base64.b64encode(poster_data).decode("ascii")
+                        media["poster"] = f"data:{poster_mime};base64,{poster_encoded}"
 
     return str(soup) if changed else html
 

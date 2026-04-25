@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from nicegui import ui
+from ui.timer_utils import safe_timer
 
 from ui.state import AppState, P, _active_generations
 
@@ -254,7 +255,7 @@ def build_command_center(
                             ).classes("text-xs text-grey-6")
 
                 _rebuild_live()
-                ui.timer(3.0, _rebuild_live)
+                safe_timer(3.0, _rebuild_live)
 
                 # ════════════════════════════════════════════════════
                 # §2  PENDING APPROVALS
@@ -354,7 +355,7 @@ def build_command_center(
                             ).style("color: #ff6b6b;")
 
                 _rebuild_approvals()
-                ui.timer(5.0, _rebuild_approvals)
+                safe_timer(5.0, _rebuild_approvals)
 
                 # ════════════════════════════════════════════════════
                 # §3  UPCOMING SCHEDULE
@@ -394,7 +395,7 @@ def build_command_center(
                                 )
 
                 _rebuild_upcoming()
-                ui.timer(30.0, _rebuild_upcoming)
+                safe_timer(30.0, _rebuild_upcoming)
 
                 # ════════════════════════════════════════════════════
                 # §4  QUICK LAUNCH
@@ -421,7 +422,7 @@ def build_command_center(
                     _task_select.update()
 
                 _refresh_task_options()
-                ui.timer(3.0, _refresh_task_options)
+                safe_timer(3.0, _refresh_task_options)
 
                 with ui.row().classes("w-full gap-1"):
                     def _run_selected():
@@ -565,7 +566,7 @@ def build_command_center(
                             )
 
                 _rebuild_recent()
-                ui.timer(10.0, _rebuild_recent)
+                safe_timer(10.0, _rebuild_recent)
 
             # ════════════════════════════════════════════════════
             # §6  INSIGHTS  (separate inner panel)
@@ -798,7 +799,7 @@ def build_command_center(
                                 ).style("color: #66bb6a;")
 
                 _rebuild_insights()
-                ui.timer(30.0, _rebuild_insights)
+                safe_timer(30.0, _rebuild_insights)
 
 
 def _apply_skill_draft(

@@ -729,6 +729,9 @@ class XTool(BaseTool):
             )
             if resp.status_code == 200:
                 return ("valid", "Token is valid")
+            if resp.status_code == 429:
+                # Rate limiting is transient and does not indicate an invalid token.
+                return ("valid", "Token is valid (rate limited by X API)")
             if resp.status_code == 401:
                 return ("expired", "Token rejected by X API — re-authenticate in Settings")
             return ("error", f"X API returned {resp.status_code}")

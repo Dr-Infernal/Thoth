@@ -497,18 +497,74 @@ def update_task(task_id: str, **kwargs) -> None:
 def delete_task(task_id: str) -> None:
     _remove_job(task_id)
     conn = _get_conn()
-    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    # Clean up associated pipeline state and approval requests.
-    # Task runs are preserved for audit history (get_recent_runs
-    # handles orphaned runs via COALESCE to "(deleted)").
+    # Clean up pipeline_state and cancel pending approval_requests up-front
+    # so the cleanup is co-located with the DELETE that removes the task row.
+    # Task runs are preserved for audit history (get_recent_runs handles
+    # orphaned runs via COALESCE to "(deleted)").
     conn.execute("DELETE FROM pipeline_state WHERE task_id = ?", (task_id,))
     conn.execute(
         "UPDATE approval_requests SET status = 'cancelled', responded_at = ? "
         "WHERE task_id = ? AND status = 'pending'",
         (datetime.now().isoformat(), task_id),
     )
+    # Collect all threads linked to this task BEFORE we tear down the rows.
+    linked_thread_ids: set[str] = set()
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(persistent_thread_id, '') FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if row and row[0]:
+            linked_thread_ids.add(row[0])
+        for (tid,) in conn.execute(
+            "SELECT DISTINCT thread_id FROM task_runs "
+            "WHERE task_id = ? AND thread_id IS NOT NULL AND thread_id != ''",
+            (task_id,),
+        ):
+            linked_thread_ids.add(tid)
+    except Exception:
+        logger.debug("Could not enumerate run threads for task %s",
+                     task_id, exc_info=True)
+
+    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     conn.commit()
     conn.close()
+
+    # Cascade thread cleanup (LangGraph checkpoints, media, external state).
+    if linked_thread_ids:
+        try:
+            from threads import _delete_thread, purge_external_state
+            for tid in linked_thread_ids:
+                try:
+                    purge_external_state(tid)
+                    _delete_thread(tid)
+                except Exception:
+                    logger.exception(
+                        "Failed to cascade thread deletion for task %s (thread %s)",
+                        task_id, tid,
+                    )
+        except Exception:
+            logger.exception(
+                "threads module unavailable while cascading task %s", task_id,
+            )
+
+
+def delete_tasks(task_ids: list[str]) -> tuple[int, list[tuple[str, str]]]:
+    """Delete several tasks at once.
+
+    Wraps :func:`delete_task` in a loop so the scheduler-job removal,
+    pipeline state cleanup, and approval-request cancellation run for
+    every id. Returns ``(deleted_count, failures)``.
+    """
+    deleted = 0
+    failures: list[tuple[str, str]] = []
+    for tid in task_ids:
+        try:
+            delete_task(tid)
+            deleted += 1
+        except Exception as exc:
+            failures.append((tid, str(exc)))
+    return deleted, failures
 
 
 def duplicate_task(task_id: str) -> str | None:
@@ -858,6 +914,16 @@ def _deliver_to_channel(task: dict, text: str) -> tuple[str, str]:
                 raise RuntimeError("TELEGRAM_USER_ID is not configured")
         else:
             resolved_target = target
+            if not resolved_target:
+                # No explicit target — fall back to the channel's
+                # configured default (we no longer target-filter in
+                # the workflow UI).
+                try:
+                    resolved_target = ch.get_default_target()
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"{ch.display_name} has no default target configured"
+                    ) from exc
 
         ch.send_message(resolved_target, prefix + text)
         logger.info(
@@ -907,7 +973,18 @@ def _deliver_to_channels(task: dict, text: str) -> tuple[str, str]:
                     failed.append(f"{ch.display_name} (no user ID)")
                     continue
             else:
+                # Prefer task-level delivery_target; fall back to the
+                # channel's configured default. No target configured =>
+                # delivery fails for that channel.
                 target = task.get("delivery_target") or None
+                if target is None:
+                    try:
+                        target = ch.get_default_target()
+                    except Exception as exc:
+                        logger.debug(
+                            "No default target for %s: %s", ch.name, exc,
+                        )
+                        target = None
                 if target is None:
                     failed.append(f"{ch.display_name} (no target configured)")
                     continue

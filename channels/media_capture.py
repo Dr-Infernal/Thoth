@@ -33,3 +33,15 @@ def grab_generated_image() -> bytes | None:
     except Exception:
         pass
     return None
+
+
+def grab_generated_video() -> str | None:
+    """Return the saved file path of the last generated video, if any."""
+    try:
+        from tools.video_gen_tool import get_and_clear_last_video
+        vid = get_and_clear_last_video()
+        if vid and vid.get("path"):
+            return vid["path"]
+    except Exception:
+        pass
+    return None

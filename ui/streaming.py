@@ -37,6 +37,63 @@ from ui.render import autolink_urls, _auto_fence_mermaid, render_image_with_save
 logger = logging.getLogger(__name__)
 
 
+# ── Captured-image memory cap ────────────────────────────────────────
+# During long tool-heavy runs (dozens of browser snapshots) the per-gen
+# ``captured_images`` list can hold hundreds of megabytes of base64.  We
+# cap in-memory base64 entries to this many; older entries get spilled
+# to disk and the list slot is replaced with the on-disk filename
+# (which ``persist_thread_media_state`` treats as already-persisted).
+_MAX_CAPTURED_B64_IN_MEMORY = 20
+
+
+def _spill_excess_captured_images(gen: GenerationState) -> None:
+    """Spill older base64 image entries to disk to keep memory bounded.
+
+    No-op unless more than ``_MAX_CAPTURED_B64_IN_MEMORY`` b64 entries
+    are resident.  The list LENGTH is unchanged; only its contents are
+    swapped (b64 → filename).  ``captured_images_persist`` stays aligned.
+    """
+    imgs = gen.captured_images
+    flags = gen.captured_images_persist
+    from utils.media import is_image_filename
+    # Count how many entries are still base64 (not filenames).  Anything
+    # that isn't a persisted-media filename is treated as base64.
+    def _is_b64(x: Any) -> bool:
+        return isinstance(x, str) and bool(x) and not is_image_filename(x)
+
+    b64_count = sum(1 for x in imgs if _is_b64(x))
+    if b64_count <= _MAX_CAPTURED_B64_IN_MEMORY:
+        return
+    try:
+        from threads import save_media_file, _next_media_filename
+        from utils.media import image_ext_from_b64
+    except Exception:
+        logger.debug("spill: imports failed", exc_info=True)
+        return
+
+    to_spill = b64_count - _MAX_CAPTURED_B64_IN_MEMORY
+    for i in range(len(imgs)):
+        if to_spill <= 0:
+            break
+        if not _is_b64(imgs[i]):
+            continue
+        b64 = imgs[i]
+        persist = bool(flags[i]) if i < len(flags) else False
+        try:
+            raw = b64.split(",", 1)[-1] if b64.startswith("data:") else b64
+            data = _b64.b64decode(raw)
+            ext = image_ext_from_b64(raw)
+            prefix = "gen" if persist else "cap"
+            fname = _next_media_filename(gen.thread_id, prefix, ext)
+            save_media_file(gen.thread_id, fname, data)
+            imgs[i] = fname
+            to_spill -= 1
+        except Exception:
+            logger.debug("spill: failed to write b64 to disk", exc_info=True)
+            # Move on — next tick may succeed
+            break
+
+
 def _format_assistant_markdown(text: str) -> str:
     """Normalise assistant markdown before rendering in streaming UI."""
     return autolink_urls(_auto_fence_mermaid(text or ""))
@@ -51,6 +108,45 @@ def _img_data_uri(b64: str) -> str:
     if b64.startswith("R0lGO"):
         return f"data:image/gif;base64,{b64}"
     return f"data:image/jpeg;base64,{b64}"
+
+
+def _detach_generation(gen: GenerationState, state: AppState, reason: str) -> None:
+    """Convert a live run into a detached run after the client disappears."""
+    if gen.detached:
+        return
+
+    gen.detached = True
+    gen.assistant_md = None
+    gen.thinking_label = None
+    gen.thinking_md = None
+    gen.tool_col = None
+    gen.wrapper = None
+    gen.pending_tools.clear()
+
+    if gen.tts_active:
+        try:
+            state.tts_service.stop()
+        except Exception:
+            logger.debug("Failed to stop TTS during detach", exc_info=True)
+        gen.tts_active = False
+
+    logger.info("Detached generation for thread %s after %s", gen.thread_id, reason)
+
+
+def _handle_ui_runtime_error(
+    gen: GenerationState,
+    state: AppState,
+    exc: Exception,
+    reason: str,
+) -> bool:
+    """Detach the generation when NiceGUI raises after the client is gone."""
+    if not isinstance(exc, RuntimeError):
+        return False
+    message = str(exc).strip().lower()
+    if "client" not in message or "deleted" not in message:
+        return False
+    _detach_generation(gen, state, reason)
+    return True
 
 
 # ── Type alias for the callback bundle ───────────────────────────────
@@ -95,7 +191,7 @@ async def consume_generation(
     """
     from agent import get_agent_graph, repair_orphaned_tool_calls
     from langchain_core.messages import AIMessage
-    from ui.helpers import persist_thread_media_state
+    from ui.helpers import persist_detached_thread_media, persist_thread_media_state
 
     _stopped_shown = False
     _drain_deadline = 0.0
@@ -165,7 +261,8 @@ async def consume_generation(
                                     ).classes("w-full text-xs")
                     if gen.assistant_md:
                         gen.assistant_md.set_visibility(True)
-                except Exception:
+                except Exception as exc:
+                    _handle_ui_runtime_error(gen, state, exc, "first-content transition")
                     logger.error("Error rendering thinking collapse", exc_info=True)
 
         if event_type == "error":
@@ -179,7 +276,8 @@ async def consume_generation(
                     if gen.assistant_md:
                         gen.assistant_md.set_visibility(True)
                         gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
-                except Exception:
+                except Exception as exc:
+                    _handle_ui_runtime_error(gen, state, exc, "error-event cleanup")
                     logger.debug("Error-event UI cleanup failed", exc_info=True)
             try:
                 repair_orphaned_tool_calls(gen.enabled_tools, gen.config)
@@ -202,12 +300,16 @@ async def consume_generation(
                         _pending_exp = ui.expansion(
                             f"\U0001f504 {payload}\u2026", icon="hourglass_empty"
                         ).classes("w-full")
-                        gen.pending_tools[payload] = _pending_exp
-                except Exception:
+                        # FIFO queue per tool name — parallel calls to the
+                        # same tool must each get their own pending slot so
+                        # later tool_done events can still match them.
+                        gen.pending_tools.setdefault(payload, []).append(_pending_exp)
+                except Exception as exc:
+                    _handle_ui_runtime_error(gen, state, exc, "tool-call expansion")
                     logger.debug("Tool-call expansion creation failed", exc_info=True)
 
         elif event_type == "tool_done":
-            _handle_tool_done(gen, state, p, payload, cb)
+            await _handle_tool_done(gen, state, p, payload, cb)
 
         elif event_type == "summarizing":
             if not gen.detached and gen.wrapper:
@@ -222,7 +324,8 @@ async def consume_generation(
                             '<span>.</span><span>.</span><span>.</span></span></span>',
                             sanitize=False,
                         )
-                except Exception:
+                except Exception as exc:
+                    _handle_ui_runtime_error(gen, state, exc, "summarizing label")
                     logger.debug("Summarizing label update failed", exc_info=True)
 
         elif event_type == "thinking":
@@ -244,7 +347,8 @@ async def consume_generation(
                             )
                     if gen.thinking_md:
                         gen.thinking_md.set_content(gen.thinking_text)
-                except Exception:
+                except Exception as exc:
+                    _handle_ui_runtime_error(gen, state, exc, "thinking-token rendering")
                     logger.debug("Thinking-token rendering failed", exc_info=True)
 
         elif event_type == "token":
@@ -252,7 +356,8 @@ async def consume_generation(
             if not gen.detached and gen.assistant_md:
                 try:
                     gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
-                except Exception:
+                except Exception as exc:
+                    _handle_ui_runtime_error(gen, state, exc, "token content update")
                     logger.debug("Token content update failed", exc_info=True)
 
             # Streaming TTS (only when attached)
@@ -306,7 +411,8 @@ async def consume_generation(
                     if gen.assistant_md:
                         gen.assistant_md.set_visibility(True)
                         gen.assistant_md.set_content(_format_assistant_markdown(gen.accumulated))
-                except Exception:
+                except Exception as exc:
+                    _handle_ui_runtime_error(gen, state, exc, "done-event finalization")
                     logger.debug("Done-event UI finalization failed", exc_info=True)
 
         if _break_loop:
@@ -330,14 +436,16 @@ async def consume_generation(
                 if gen.assistant_md:
                     try:
                         gen.assistant_md.delete()
-                    except (ValueError, RuntimeError):
+                    except (ValueError, RuntimeError) as exc:
+                        _handle_ui_runtime_error(gen, state, exc, "assistant markdown delete")
                         logger.debug("assistant_md already removed from DOM", exc_info=True)
                     gen.assistant_md = None
                 if gen.wrapper:
                     try:
                         with gen.wrapper:
                             cb.render_text_with_embeds(gen.accumulated)
-                    except RuntimeError:
+                    except RuntimeError as exc:
+                        _handle_ui_runtime_error(gen, state, exc, "final response render")
                         logger.debug("Client deleted during render_text_with_embeds", exc_info=True)
 
             try:
@@ -349,13 +457,22 @@ async def consume_generation(
                     "  mermaid.run({nodes: document.querySelectorAll('pre.mermaid'), suppressErrors: true});"
                     "}, 150);"
                 )
-            except RuntimeError:
+            except RuntimeError as exc:
+                _handle_ui_runtime_error(gen, state, exc, "post-render javascript")
                 logger.debug("JS runtime unavailable for hljs/mermaid", exc_info=True)
     except Exception:
         logger.error("Error in post-stream finalization", exc_info=True)
 
     # Store assistant message
-    if gen.accumulated:
+    _has_final_output = bool(
+        gen.accumulated
+        or gen.tool_results
+        or gen.chart_data
+        or gen.captured_images
+        or gen.captured_videos
+    )
+    _persisted_detached = False
+    if _has_final_output:
         a_msg: dict = {"role": "assistant", "content": gen.accumulated}
         if gen.tool_results:
             a_msg["tool_results"] = gen.tool_results
@@ -367,18 +484,46 @@ async def consume_generation(
                 a_msg["_media_persist_flags"] = list(gen.captured_images_persist)
                 if any(gen.captured_images_persist):
                     a_msg["_media_persist"] = True
-        if state.thread_id == gen.thread_id:
+        if gen.captured_videos:
+            a_msg["videos"] = gen.captured_videos
+        if state.thread_id == gen.thread_id and not gen.detached:
             state.messages.append(a_msg)
             persist_thread_media_state(state.thread_id, state.messages)
+            state.cache_active_messages()
+            _persisted_detached = True
+        else:
+            _persisted_detached = persist_detached_thread_media(
+                gen.thread_id,
+                gen.accumulated,
+                images=gen.captured_images,
+                image_persist_flags=gen.captured_images_persist,
+                videos=gen.captured_videos,
+            )
+            # Detached run wrote straight to the checkpoint; mark its
+            # cached message list stale so the next select re-reads.
+            state.mark_thread_dirty(gen.thread_id)
 
     # Cleanup
-    _active_generations.pop(gen.thread_id, None)
+    if not _has_final_output or _persisted_detached:
+        _active_generations.pop(gen.thread_id, None)
 
     # Update UI if this is still the active thread
     if state.thread_id == gen.thread_id:
+        # If we detached mid-stream but the client came back and is
+        # still looking at this thread, the in-DOM element handles are
+        # stale.  Rebuild the chat view so the persisted final message
+        # renders without forcing the user to click the sidebar.
+        if gen.detached:
+            try:
+                cb.rebuild_main()
+            except Exception:
+                logger.debug("rebuild_main after detached finalize failed", exc_info=True)
         if p.stop_btn:
-            p.stop_btn.props('icon=stop')
-            p.stop_btn.disable()
+            try:
+                p.stop_btn.props('icon=stop')
+                p.stop_btn.disable()
+            except Exception:
+                logger.debug("stop_btn reset failed", exc_info=True)
         if state.voice_enabled and not (state.tts_service and state.tts_service.enabled):
             state.voice_service.unmute()
         if gen.interrupt_data:
@@ -386,18 +531,20 @@ async def consume_generation(
             cb.show_interrupt(gen.interrupt_data)
         try:
             cb.update_token_counter()
-        except RuntimeError:
+        except RuntimeError as exc:
+            _handle_ui_runtime_error(gen, state, exc, "token counter update")
             logger.debug("Client deleted during update_token_counter", exc_info=True)
 
     try:
         cb.rebuild_thread_list()
-    except RuntimeError:
+    except RuntimeError as exc:
+        _handle_ui_runtime_error(gen, state, exc, "thread list rebuild")
         logger.debug("Client deleted during rebuild_thread_list", exc_info=True)
 
 
 # ── Tool-done sub-handler ────────────────────────────────────────────
 
-def _handle_tool_done(
+async def _handle_tool_done(
     gen: GenerationState,
     state: AppState,
     p: P,
@@ -442,6 +589,7 @@ def _handle_tool_done(
             display_text = tool_content[marker_end + 2:]
         gen.captured_images.append(_img_b64)
         gen.captured_images_persist.append(True)  # Tier 1: plugin-generated
+        _spill_excess_captured_images(gen)
         if not gen.detached and gen.tool_col:
             try:
                 with gen.tool_col:
@@ -470,7 +618,10 @@ def _handle_tool_done(
     # Update the pending expansion or create a new one
     if not gen.detached and gen.tool_col:
         try:
-            matched_exp = gen.pending_tools.pop(tool_name, None)
+            _queue = gen.pending_tools.get(tool_name)
+            matched_exp = _queue.pop(0) if _queue else None
+            if _queue is not None and not _queue:
+                gen.pending_tools.pop(tool_name, None)
             if matched_exp:
                 matched_exp._props["icon"] = "check_circle"
                 matched_exp._text = f"\u2705 {tool_name}"
@@ -501,6 +652,7 @@ def _handle_tool_done(
             b64_img = _b64.b64encode(vsvc.last_capture).decode("ascii")
             gen.captured_images.append(b64_img)
             gen.captured_images_persist.append(False)  # Tier 2: vision capture
+            _spill_excess_captured_images(gen)
             if not gen.detached and gen.tool_col:
                 try:
                     with gen.tool_col:
@@ -509,19 +661,24 @@ def _handle_tool_done(
                     logger.debug("Vision capture rendering failed", exc_info=True)
             vsvc.last_capture = None
 
-    # Browser screenshot thumbnail
-    if not gen.detached and raw_tool_name.startswith("browser_"):
+    # Browser screenshot thumbnail — run on a thread so the Playwright
+    # round-trip (200-800 ms) does not block the asyncio loop; otherwise
+    # socket.io pings stall and the client is considered disconnected.
+    if raw_tool_name.startswith("browser_"):
         try:
             from tools.browser_tool import get_session_manager as _get_bsm
             _bsm = _get_bsm()
             if _bsm.has_active_session():
                 _bs = _bsm.get_session()
-                _screenshot_bytes = _bs.take_screenshot(thread_id=gen.thread_id)
+                _screenshot_bytes = await run.io_bound(
+                    _bs.take_screenshot, gen.thread_id
+                )
                 if _screenshot_bytes:
                     _b64_ss = _b64.b64encode(_screenshot_bytes).decode("ascii")
                     gen.captured_images.append(_b64_ss)
                     gen.captured_images_persist.append(False)  # Tier 2: browser capture
-                    if gen.tool_col:
+                    _spill_excess_captured_images(gen)
+                    if not gen.detached and gen.tool_col:
                         with gen.tool_col:
                             render_image_with_save(
                                 _b64_ss,
@@ -538,6 +695,7 @@ def _handle_tool_done(
             if _fs_img:
                 gen.captured_images.append(_fs_img["b64"])
                 gen.captured_images_persist.append(False)  # Tier 2: filesystem display
+                _spill_excess_captured_images(gen)
                 if not gen.detached and gen.tool_col:
                     with gen.tool_col:
                         render_image_with_save(_fs_img["b64"])
@@ -552,11 +710,27 @@ def _handle_tool_done(
             if _gen_img:
                 gen.captured_images.append(_gen_img)
                 gen.captured_images_persist.append(True)  # Tier 1: generated image
+                _spill_excess_captured_images(gen)
                 if not gen.detached and gen.tool_col:
                     with gen.tool_col:
                         render_image_with_save(_gen_img)
         except Exception:
             logger.debug("Image generation rendering failed", exc_info=True)
+
+    # Video generation display (generate_video / animate_image)
+    if raw_tool_name in ("generate_video", "animate_image"):
+        try:
+            from tools.video_gen_tool import get_and_clear_last_video
+            _gen_vid = get_and_clear_last_video()
+            if _gen_vid and _gen_vid.get("path"):
+                gen.captured_videos.append(_gen_vid)
+                gen.captured_videos_persist.append(True)
+                if not gen.detached and gen.tool_col:
+                    with gen.tool_col:
+                        from ui.render import render_video_with_save
+                        render_video_with_save(_gen_vid["path"])
+        except Exception:
+            logger.debug("Video generation rendering failed", exc_info=True)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -591,7 +765,14 @@ async def send_message(
         state.thread_name = name
         state.messages = []
         state.show_onboarding = False
-        cb.rebuild_main()
+        # ``immediate=True`` so ``p.chat_container`` is ready for the
+        # user-message render and streaming placeholder below (no
+        # skeleton-then-hydrate race on first-send).
+        try:
+            cb.rebuild_main(immediate=True)
+        except TypeError:
+            # Older callback signature without kwargs — fall back.
+            cb.rebuild_main()
         cb.rebuild_thread_list()
 
     gen_thread_id = state.thread_id
@@ -623,6 +804,7 @@ async def send_message(
         user_msg["images"] = user_images
     state.messages.append(user_msg)
     persist_thread_media_state(state.thread_id, state.messages)
+    state.cache_active_messages()
     cb.add_chat_message(user_msg)
 
     # ── Process attached files (slow — vision analysis etc.) ─────────

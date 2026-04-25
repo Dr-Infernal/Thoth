@@ -3876,20 +3876,20 @@ try:
     assert _vc30 is None, f"expected None when no capture, got type {type(_vc30)}"
     record("PASS", "v3.6: _grab_vision_capture returns None when no capture")
 
-    # ── 30zi. _run_agent_sync returns 3-tuple ─────────────────────────────
+# ── 30zi. _run_agent_sync returns tuple with captured media ────────────
     _sig30zi = _insp30.signature(
         __import__("channels.telegram", fromlist=["_run_agent_sync"])._run_agent_sync
     )
-    # Check return annotation includes 3 elements (bytes | None at end)
+    # Check return annotation includes list[bytes] and list[str] for images and video paths
     _tg_src30zi = Path("channels/telegram.py").read_text(encoding="utf-8")
-    assert "list[bytes]]" in _tg_src30zi, "return type should include list[bytes]"
+    assert "list[bytes]" in _tg_src30zi, "return type should include list[bytes]"
     assert "captured_image" in _tg_src30zi, "should track captured_images"
-    record("PASS", "v3.6: _run_agent_sync returns 3-tuple with captured images")
+    record("PASS", "v3.6: _run_agent_sync returns tuple with captured images")
 
-    # ── 30zj. _resume_agent_sync returns 3-tuple ─────────────────────────
+    # ── 30zj. _resume_agent_sync returns tuple with captured media ────────
     assert "used_vision" in _tg_src30zi, "should track used_vision flag"
     assert "send_photo" in _tg_src30zi, "should call send_photo for vision captures"
-    record("PASS", "v3.6: _resume_agent_sync returns 3-tuple with captured image")
+    record("PASS", "v3.6: _resume_agent_sync returns tuple with captured media")
 
     # ── 30zk–30zp. Email channel tests removed (email channel deleted) ──
     record("PASS", "v3.6: email channel tests removed (channel deleted)")
@@ -6203,6 +6203,78 @@ try:
     os.remove(_txt_path38)
     os.rmdir(_td38j)
     record("PASS", "image: filesystem read_file still works for text files")
+
+    # ── 38k. utils.media helpers: is_image_filename / is_base64_image ────
+    from utils.media import (
+        is_image_filename as _iif38k,
+        is_base64_image as _ib638k,
+        image_ext_from_b64 as _ie638k,
+        image_mime_from_bytes as _imb38k,
+    )
+    assert _iif38k("gen_001.png") is True
+    assert _iif38k("cap_042.jpeg") is True
+    assert _iif38k("/abs/path.png") is False
+    assert _iif38k("\\win\\path.png") is False
+    assert _iif38k("data:image/png;base64,iVBOR") is False
+    assert _iif38k("iVBORw0KGgoAAAANSUhEUg" * 20) is False  # too long
+    assert _iif38k("no_ext") is False
+    assert _iif38k("") is False
+    assert _iif38k(None) is False
+    assert _ib638k("iVBORw0KGg") is True
+    assert _ib638k("data:image/png;base64,XYZ") is True
+    assert _ib638k("/9j/4AAQ") is True
+    assert _ib638k("gen_001.png") is False
+    assert _ie638k("iVBORxxx") == "png"
+    assert _ie638k("UklGRxxx") == "webp"
+    assert _ie638k("R0lGOxxx") == "gif"
+    assert _ie638k("/9j/xxxx") == "jpg"
+    # Magic-byte MIME detection
+    _png38k = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+    assert _imb38k(_png38k) == "image/png"
+    _jpg38k = b"\xff\xd8\xff\xe0" + b"\x00" * 10
+    assert _imb38k(_jpg38k) == "image/jpeg"
+    _gif38k = b"GIF89a" + b"\x00" * 10
+    assert _imb38k(_gif38k) == "image/gif"
+    _webp38k = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"\x00" * 10
+    assert _imb38k(_webp38k) == "image/webp"
+    record("PASS", "image: utils.media helpers detect filenames/b64/mime correctly")
+
+    # ── 38l. PDF export _build_conversation_html hydrates filename images
+    # Regression for D1: after a thread reload, msg["images"] entries are
+    # filenames, not base64.  The HTML builder must load them from disk.
+    import uuid as _uuid38l
+    _tid38l = f"test_d1_{_uuid38l.uuid4().hex[:8]}"
+    # Write a tiny PNG to the thread's media dir
+    from threads import save_media_file as _smf38l
+    _png_bytes38l = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+        b"\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05"
+        b"\x00\x01\r\n\x2d\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    _fname38l = "gen_000.png"
+    _smf38l(_tid38l, _fname38l, _png_bytes38l)
+    _msgs38l = [{"role": "assistant", "content": "hi", "images": [_fname38l]}]
+    from ui.helpers import _build_conversation_html as _bch38l
+    _html38l = _bch38l("test thread", _msgs38l, thread_id=_tid38l)
+    assert "data:image/png;base64," in _html38l, \
+        f"filename-only image not hydrated to data URI (html len={len(_html38l)})"
+    # Cleanup
+    import shutil as _sh38l
+    from pathlib import Path as _P38l
+    _mdir38l = _P38l.home() / ".thoth" / "media" / _tid38l
+    if _mdir38l.exists():
+        _sh38l.rmtree(_mdir38l, ignore_errors=True)
+    record("PASS", "image: _build_conversation_html hydrates filename → data URI")
+
+    # ── 38m. PDF export still accepts raw base64 entries (backward compat)
+    _b64_38m = _b6438.b64encode(_png_bytes38l).decode("ascii")
+    _msgs38m = [{"role": "assistant", "content": "hi", "images": [_b64_38m]}]
+    _html38m = _bch38l("test thread", _msgs38m, thread_id=None)
+    assert "data:image/png;base64," in _html38m, \
+        "base64 image passthrough failed in _build_conversation_html"
+    record("PASS", "image: _build_conversation_html accepts raw base64")
 
 except Exception as e:
     record("FAIL", "image handling improvements", f"{type(e).__name__}: {e}")
@@ -8947,6 +9019,202 @@ try:
 
 except Exception as e:
     record("FAIL", "image-gen-tool", f"{type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 52½ · Video Generation Tool
+# ═════════════════════════════════════════════════════════════════════════════
+print("=" * 70)
+print("52½. VIDEO GENERATION TOOL")
+print("=" * 70)
+
+try:
+    import unittest.mock as _mock52v
+    from pathlib import Path as _Path52v
+
+    from tools import video_gen_tool as _vgt
+    from tools.video_gen_tool import (
+        VideoGenTool,
+        VIDEO_GEN_MODELS,
+        DEFAULT_MODEL as _VG_DEFAULT,
+        _PROVIDERS as _VG_PROVIDERS,
+        _GOOGLE_MODELS as _VG_GOOGLE_MODELS,
+        _XAI_MODELS as _VG_XAI_MODELS,
+        _PROVIDER_MODELS as _VG_PROVIDER_MODELS,
+        _normalize_google_params,
+        _normalize_xai_params,
+        _GenerateVideoInput,
+        _AnimateImageInput,
+        get_and_clear_last_video,
+        get_available_video_models,
+        _parse_model_config as _vg_parse,
+    )
+    record("PASS", "video_gen: module imports successfully")
+
+    # ── 52½a. VideoGenTool class basics ──────────────────────────────
+    _vtool = VideoGenTool()
+    assert _vtool.name == "video_gen", f"name={_vtool.name!r}"
+    assert _vtool.display_name == "🎬 Video Generation"
+    assert "video" in _vtool.description.lower()
+    record("PASS", "video_gen: VideoGenTool.name / display_name / description")
+
+    # ── 52½b. config_schema is empty ─────────────────────────────────
+    assert _vtool.config_schema == {}, f"got {_vtool.config_schema}"
+    record("PASS", "video_gen: config_schema is empty (model in Models tab)")
+
+    # ── 52½c. as_langchain_tools returns generate_video & animate_image
+    _lc_v = _vtool.as_langchain_tools()
+    _lc_v_names = sorted([t.name for t in _lc_v])
+    assert _lc_v_names == ["animate_image", "generate_video"], f"got {_lc_v_names}"
+    record("PASS", "video_gen: as_langchain_tools returns [animate_image, generate_video]")
+
+    # ── 52½d. Pydantic input schemas validate ────────────────────────
+    _gvi = _GenerateVideoInput(prompt="a sunset timelapse")
+    assert _gvi.prompt == "a sunset timelapse"
+    assert _gvi.duration_seconds == 8
+    assert _gvi.aspect_ratio == "16:9"
+    assert _gvi.resolution == "720p"
+
+    _aii = _AnimateImageInput(prompt="zoom in slowly", image_source="photo.jpg")
+    assert _aii.image_source == "photo.jpg"
+    assert _aii.duration_seconds == 8
+    record("PASS", "video_gen: Pydantic schemas validate with defaults")
+
+    # ── 52½e. get_and_clear_last_video side-channel ──────────────────
+    _vgt._last_generated_video = {"path": "/tmp/vid.mp4", "filename": "vid.mp4"}
+    _gotv = get_and_clear_last_video()
+    assert _gotv["path"] == "/tmp/vid.mp4"
+    assert _vgt._last_generated_video is None
+    assert get_and_clear_last_video() is None
+    record("PASS", "video_gen: get_and_clear_last_video works correctly")
+
+    # ── 52½f. _parse_model_config ────────────────────────────────────
+    assert _vg_parse("google/veo-3.1-generate-preview") == ("google", "veo-3.1-generate-preview")
+    assert _vg_parse("xai/grok-imagine-video") == ("xai", "grok-imagine-video")
+    assert _vg_parse("veo-3.1-generate-preview") == ("google", "veo-3.1-generate-preview")
+    record("PASS", "video_gen: _parse_model_config parses provider/model")
+
+    # ── 52½g. Google parameter normalization ─────────────────────────
+    # Duration snaps to valid values
+    assert _normalize_google_params(3, "16:9", "720p") == (4, "16:9", "720p")
+    assert _normalize_google_params(5, "16:9", "720p") == (6, "16:9", "720p")
+    assert _normalize_google_params(7, "16:9", "720p") == (8, "16:9", "720p")
+    assert _normalize_google_params(10, "16:9", "720p") == (8, "16:9", "720p")
+    # Invalid aspect ratio defaults to 16:9
+    assert _normalize_google_params(8, "4:3", "720p") == (8, "16:9", "720p")
+    # 9:16 is valid
+    assert _normalize_google_params(8, "9:16", "720p") == (8, "9:16", "720p")
+    # 1080p forces duration to 8
+    assert _normalize_google_params(4, "16:9", "1080p") == (8, "16:9", "1080p")
+    assert _normalize_google_params(6, "16:9", "4k") == (8, "16:9", "4k")
+    # Invalid resolution defaults to 720p
+    assert _normalize_google_params(8, "16:9", "360p") == (8, "16:9", "720p")
+    record("PASS", "video_gen: Google param normalization (duration, aspect, resolution)")
+
+    # ── 52½h. xAI parameter normalization ────────────────────────────
+    assert _normalize_xai_params(0, "16:9", "480p") == (1, "16:9", "480p")
+    assert _normalize_xai_params(20, "16:9", "720p") == (15, "16:9", "720p")
+    assert _normalize_xai_params(10, "1:1", "720p") == (10, "1:1", "720p")
+    assert _normalize_xai_params(10, "4:3", "480p") == (10, "4:3", "480p")
+    # Invalid aspect ratio defaults to 16:9
+    assert _normalize_xai_params(10, "5:4", "480p") == (10, "16:9", "480p")
+    # Invalid resolution defaults to 480p
+    assert _normalize_xai_params(10, "16:9", "1080p") == (10, "16:9", "480p")
+    record("PASS", "video_gen: xAI param normalization (duration, aspect, resolution)")
+
+    # ── 52½i. get_available_video_models ─────────────────────────────
+    # Google key only
+    def _mock_google_key(k):
+        return "gk-test" if k == "GOOGLE_API_KEY" else None
+    with _mock52v.patch("api_keys.get_key", _mock_google_key):
+        _avail_v = get_available_video_models()
+    assert len(_avail_v) == len(_VG_GOOGLE_MODELS), f"expected {len(_VG_GOOGLE_MODELS)}, got {len(_avail_v)}"
+    assert "google/veo-3.1-generate-preview" in _avail_v
+    assert not any(k.startswith("xai/") for k in _avail_v)
+    record("PASS", "video_gen: get_available_video_models lists Google only")
+
+    # xAI key only
+    def _mock_xai_key(k):
+        return "xk-test" if k == "XAI_API_KEY" else None
+    with _mock52v.patch("api_keys.get_key", _mock_xai_key):
+        _avail_vx = get_available_video_models()
+    assert len(_avail_vx) == len(_VG_XAI_MODELS)
+    assert "xai/grok-imagine-video" in _avail_vx
+    record("PASS", "video_gen: get_available_video_models lists xAI only")
+
+    # No keys
+    with _mock52v.patch("api_keys.get_key", return_value=None):
+        _avail_vn = get_available_video_models()
+    assert _avail_vn == {}
+    record("PASS", "video_gen: get_available_video_models empty with no keys")
+
+    # ── 52½j. Provider registry structure ────────────────────────────
+    assert "google" in _VG_PROVIDERS
+    assert "xai" in _VG_PROVIDERS
+    assert _VG_PROVIDERS["google"]["key"] == "GOOGLE_API_KEY"
+    assert _VG_PROVIDERS["xai"]["key"] == "XAI_API_KEY"
+    assert "google" in _VG_PROVIDER_MODELS
+    assert "xai" in _VG_PROVIDER_MODELS
+    record("PASS", "video_gen: provider registry structure is correct")
+
+    # ── 52½k. VIDEO_GEN_MODELS flat list ─────────────────────────────
+    assert len(VIDEO_GEN_MODELS) == len(_VG_GOOGLE_MODELS) + len(_VG_XAI_MODELS)
+    _vg_ids = [m["id"] for m in VIDEO_GEN_MODELS]
+    assert "veo-3.1-generate-preview" in _vg_ids
+    assert "grok-imagine-video" in _vg_ids
+    record("PASS", "video_gen: VIDEO_GEN_MODELS flat list covers all models")
+
+    # ── 52½l. Tool is registered in the registry ─────────────────────
+    from tools import registry as _treg52v
+    _reg_v = _treg52v.get_tool("video_gen")
+    assert _reg_v is not None, "video_gen not found in registry"
+    assert _reg_v.name == "video_gen"
+    record("PASS", "video_gen: tool is registered in the registry")
+
+    # ── 52½m. Status tool knows about video_gen ──────────────────────
+    from tools.thoth_status_tool import _QUERY_HANDLERS as _qh52v
+    assert "video_gen" in _qh52v, "video_gen not in status query handlers"
+    record("PASS", "video_gen: status tool has video_gen query handler")
+
+    # ── 52½n. Video tool guide exists ────────────────────────────────
+    _vg_guide_path = _Path52v(__file__).parent / "tool_guides" / "video_guide" / "SKILL.md"
+    assert _vg_guide_path.exists(), f"video guide not found at {_vg_guide_path}"
+    _vg_guide_text = _vg_guide_path.read_text(encoding="utf-8")
+    assert "video_gen" in _vg_guide_text, "video_gen not referenced in guide"
+    assert "generate_video" in _vg_guide_text
+    assert "animate_image" in _vg_guide_text
+    record("PASS", "video_gen: tool guide exists and references tools")
+
+    # ── 52½o. Side-channel for media_capture ─────────────────────────
+    from channels.media_capture import grab_generated_video as _grab_vid
+    _vgt._last_generated_video = {"path": "/tmp/test.mp4", "filename": "test.mp4"}
+    _grabbed = _grab_vid()
+    assert _grabbed == "/tmp/test.mp4"
+    assert _vgt._last_generated_video is None  # cleared by grab
+    # Second call returns None
+    assert _grab_vid() is None
+    record("PASS", "video_gen: media_capture.grab_generated_video works")
+
+    # ── 52½p. GenerationState has video fields ───────────────────────
+    from ui.state import GenerationState as _GS52v
+    import threading as _thr52v
+    import queue as _q52v
+    _gs = _GS52v(thread_id="test", q=_q52v.Queue(), stop_event=_thr52v.Event(),
+                 config={}, enabled_tools=[])
+    assert hasattr(_gs, "captured_videos"), "GenerationState missing captured_videos"
+    assert hasattr(_gs, "captured_videos_persist"), "GenerationState missing captured_videos_persist"
+    assert _gs.captured_videos == []
+    assert _gs.captured_videos_persist == []
+    record("PASS", "video_gen: GenerationState has captured_videos fields")
+
+    # ── 52½q. render_video_with_save exists ──────────────────────────
+    from ui.render import render_video_with_save as _rvws
+    assert callable(_rvws)
+    record("PASS", "video_gen: render_video_with_save is importable and callable")
+
+except Exception as e:
+    record("FAIL", "video-gen-tool", f"{type(e).__name__}: {e}")
     traceback.print_exc()
 
 
@@ -14250,7 +14518,7 @@ except Exception as e:
 # SECTION 72 · DESIGNER STUDIO
 # ═════════════════════════════════════════════════════════════════════════════
 # Covers: module imports, state, history, undo, interaction, tool sub-tools,
-#         AI content helpers (Phase 5A), unsplash client, and chart embedding.
+#         AI content helpers (Phase 5A) and chart embedding.
 # Merged from tests_phase4_final.py.
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -14314,7 +14582,2398 @@ try:
 except Exception as e:
     record("FAIL", "72b-state", f"{type(e).__name__}: {e}")
 
-# ── 72b1. BrandConfig persists logo placement metadata ───────────────────
+# ── 72b-phase21a. Designer mode taxonomy + interaction graph + asset media fields ──
+try:
+    from designer.state import (
+        DESIGNER_MODES, DEFAULT_DESIGNER_MODE,
+        normalize_designer_mode, default_page_kind_for_mode,
+        DesignerInteraction, DesignerAsset,
+    )
+
+    # Mode taxonomy
+    assert set(DESIGNER_MODES) == {"deck", "document", "landing", "app_mockup", "storyboard"}
+    assert DEFAULT_DESIGNER_MODE == "deck"
+    assert normalize_designer_mode("landing") == "landing"
+    assert normalize_designer_mode("BOGUS") == "deck"
+    assert normalize_designer_mode(None) == "deck"
+    assert default_page_kind_for_mode("app_mockup") == "screen"
+    assert default_page_kind_for_mode("storyboard") == "shot"
+    assert default_page_kind_for_mode("deck") == "slide"
+
+    # New project defaults
+    _p21a = DesignerProject(name="Phase21A")
+    assert _p21a.mode == "deck"
+    assert _p21a.interactions == []
+    assert _p21a.runtime_version == "0"
+    # __post_init__ synthesizes route_id/kind on existing pages
+    assert _p21a.pages[0].route_id == "page-1"
+    assert _p21a.pages[0].kind == "slide"
+
+    # Round-trip with mode, interactions, page route/kind/states
+    _p21a.mode = "app_mockup"
+    _p21a.pages = [
+        DesignerPage(html="<h1>Home</h1>", title="Home", route_id="home", kind="screen",
+                     states=["default", "cart-open"]),
+        DesignerPage(html="<h1>Pricing</h1>", title="Pricing", route_id="pricing", kind="screen"),
+    ]
+    _p21a.interactions = [
+        DesignerInteraction(
+            source_route="home", selector="#cta", event="click",
+            action="navigate", target="pricing", transition="slide_left",
+            data={"note": "primary CTA"},
+        ),
+    ]
+    _d21a = _p21a.to_dict()
+    assert _d21a["mode"] == "app_mockup"
+    assert _d21a["interactions"][0]["target"] == "pricing"
+    assert _d21a["pages"][0]["route_id"] == "home"
+    assert _d21a["pages"][0]["states"] == ["default", "cart-open"]
+    _rt21a = DesignerProject.from_dict(_d21a)
+    assert _rt21a.mode == "app_mockup"
+    assert _rt21a.pages[0].route_id == "home"
+    assert _rt21a.pages[0].kind == "screen"
+    assert _rt21a.pages[0].states == ["default", "cart-open"]
+    assert len(_rt21a.interactions) == 1
+    assert _rt21a.interactions[0].source_route == "home"
+    assert _rt21a.interactions[0].data == {"note": "primary CTA"}
+
+    # Legacy project (no mode / no route_id) migrates cleanly
+    _legacy21a = {
+        "id": "legacy-21a",
+        "name": "Legacy",
+        "pages": [{"html": "<p>x</p>", "title": "Old"}, {"html": "<p>y</p>", "title": "Old2"}],
+    }
+    _m21a = DesignerProject.from_dict(_legacy21a)
+    assert _m21a.mode == "deck"
+    assert _m21a.pages[0].route_id == "page-1"
+    assert _m21a.pages[1].route_id == "page-2"
+    assert _m21a.pages[0].kind == "slide"
+    assert _m21a.interactions == []
+    assert _m21a.runtime_version == "0"
+
+    # Invalid mode in stored dict falls back to deck
+    _bad21a = DesignerProject.from_dict({"id": "x", "name": "x", "mode": "bogus"})
+    assert _bad21a.mode == "deck"
+
+    # DesignerAsset media fields round-trip
+    _vid21a = DesignerAsset(
+        kind="video", label="hero clip",
+        mime_type="video/mp4", stored_name="hero.mp4",
+        duration_ms=6000, poster_asset_id="asset-abc123",
+        autoplay=True, loop=True, muted=True, controls=False,
+    )
+    _vd21a = _vid21a.to_dict()
+    assert _vd21a["kind"] == "video"
+    assert _vd21a["duration_ms"] == 6000
+    assert _vd21a["poster_asset_id"] == "asset-abc123"
+    assert _vd21a["autoplay"] is True
+    assert _vd21a["controls"] is False
+    _rtvid21a = DesignerAsset.from_dict(_vd21a)
+    assert _rtvid21a.duration_ms == 6000
+    assert _rtvid21a.poster_asset_id == "asset-abc123"
+    assert _rtvid21a.autoplay is True
+
+    # Legacy image asset (no new fields) loads with safe defaults
+    _img21a = DesignerAsset.from_dict({
+        "id": "asset-legacy", "kind": "image", "label": "logo",
+        "mime_type": "image/png", "stored_name": "logo.png",
+    })
+    assert _img21a.kind == "image"
+    assert _img21a.duration_ms == 0
+    assert _img21a.poster_asset_id == ""
+    assert _img21a.muted is True  # default
+
+    record("PASS", "72b-phase21a: mode taxonomy, interactions, media asset fields")
+except Exception as e:
+    record("FAIL", "72b-phase21a-schema", f"{type(e).__name__}: {e}")
+
+# ── 72b-phase21b. Media-aware fragment builder + summary + resolution ────
+try:
+    from designer.html_ops import (
+        build_media_fragment, wrap_asset_fragment, summarize_page_html,
+    )
+    from designer.render_assets import (
+        normalize_inline_media_sources, resolve_project_media_sources,
+    )
+    from designer.storage import save_asset_bytes, delete_project
+    from designer.state import DesignerAsset as _DA21b, DesignerProject as _DP21b, DesignerPage as _DPg21b
+
+    # build_media_fragment — image path
+    _img_frag = build_media_fragment(
+        asset_kind="image", asset_id="asset-im001",
+        src="asset://asset-im001", label="hero",
+    )
+    assert "<img " in _img_frag
+    assert 'data-asset-id="asset-im001"' in _img_frag
+    assert 'data-thoth-kind="image"' in _img_frag
+
+    # build_media_fragment — video path
+    _vid_frag = build_media_fragment(
+        asset_kind="video", asset_id="asset-vid001",
+        src="asset://asset-vid001", mime_type="video/mp4",
+        label="promo", poster="asset://asset-im001",
+        autoplay=True, loop=True, muted=True, controls=True,
+    )
+    assert "<video " in _vid_frag
+    assert 'data-asset-id="asset-vid001"' in _vid_frag
+    assert 'data-thoth-kind="video"' in _vid_frag
+    assert "autoplay" in _vid_frag
+    assert "loop" in _vid_frag
+    assert "muted" in _vid_frag
+    assert "controls" in _vid_frag
+    assert 'poster="asset://asset-im001"' in _vid_frag
+    assert "playsinline" in _vid_frag
+
+    # wrap + summarize — video asset is described
+    _wrapped_vid, _vid_id = wrap_asset_fragment(_vid_frag, "video", label="Promo clip", asset_id="asset-vid001")
+    _page_html21b = "<html><body>" + _wrapped_vid + "</body></html>"
+    _sum21b = summarize_page_html(_page_html21b)
+    _video_assets = [a for a in _sum21b["assets"] if a["kind"] == "video"]
+    assert len(_video_assets) == 1
+    assert _video_assets[0]["id"] == "asset-vid001"
+    assert _sum21b["element_counts"].get("videos", 0) == 1
+
+    # normalize_inline_media_sources — shim delegates to image path
+    _p21b_shim = _DP21b(id="__test72b-phase21b-shim__", name="Shim")
+    _out_html, _out_changed = normalize_inline_media_sources(
+        '<img src="data:image/png;base64,iVBORw0KGgo=" />',
+        _p21b_shim,
+    )
+    assert _out_changed is True
+    assert "data:" not in _out_html or "asset://" in _out_html
+
+    # resolve_project_media_sources — inlines video bytes as data URI
+    _p21b = _DP21b(id="__test72b-phase21b__", name="Media Resolve")
+    _vbytes = b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00"  # not real mp4, just bytes
+    _stored = save_asset_bytes(_p21b.id, "asset-vid001", "promo.mp4", _vbytes)
+    _p21b.assets.append(_DA21b(
+        id="asset-vid001", kind="video", label="promo",
+        mime_type="video/mp4", stored_name=_stored, filename="promo.mp4",
+        duration_ms=6000,
+    ))
+    _page_with_video = (
+        '<html><body><video src="asset://asset-vid001" '
+        'data-asset-id="asset-vid001" data-thoth-kind="video" '
+        'controls muted></video></body></html>'
+    )
+    _resolved = resolve_project_media_sources(_page_with_video, _p21b)
+    assert "data:video/mp4;base64," in _resolved, f"video not inlined: {_resolved[:200]}"
+
+    # Cleanup
+    try:
+        delete_project(_p21b.id)
+        delete_project(_p21b_shim.id)
+    except Exception:
+        pass
+
+    record("PASS", "72b-phase21b: media-aware fragment/summary/resolution")
+except Exception as e:
+    record("FAIL", "72b-phase21b-media", f"{type(e).__name__}: {e}")
+
+# ── 72b-phase21c. Brand-enriched prompt helper + cache key ───────────────
+try:
+    from designer.ai_content import (
+        _brand_enriched_prompt, brand_theme_cache_key, _tone_motion_language,
+    )
+    from designer.state import (
+        DesignerProject as _DP21c, BrandConfig as _BC21c, ProjectBrief as _PB21c,
+    )
+
+    _p21c = _DP21c(id="__test72b-phase21c__", name="Brand Prompt")
+    _p21c.aspect_ratio = "16:9"
+    _p21c.brand = _BC21c(
+        primary_color="#0A2540", secondary_color="#2E4A7D",
+        accent_color="#00D4B4", bg_color="#F6F9FC", text_color="#0A2540",
+        heading_font="Fraunces", body_font="Inter",
+        logo_b64="QUJD", logo_filename="logo.svg",
+        logo_mode="auto", logo_scope="all", logo_position="bottom_right",
+        logo_padding=24, logo_max_height=64,
+    )
+    _p21c.brief = _PB21c(
+        output_type="landing page hero",
+        audience="enterprise DevOps leads",
+        tone="enterprise",
+        length="one screen",
+        build_description="Pitch the new autoscaling feature.",
+    )
+
+    # Image prompt: brand + brief + composition, no motion line
+    _img_prompt = _brand_enriched_prompt(
+        "Abstract background with glowing nodes",
+        project=_p21c, asset_kind="image",
+    )
+    assert "[User intent]" in _img_prompt
+    assert "Abstract background with glowing nodes" in _img_prompt
+    assert "[Brand]" in _img_prompt
+    assert "#0A2540" in _img_prompt
+    assert "Fraunces" in _img_prompt
+    assert "Logo: present" in _img_prompt
+    assert "[Brief]" in _img_prompt
+    assert "enterprise DevOps leads" in _img_prompt
+    assert "[Composition]" in _img_prompt
+    assert "16:9" in _img_prompt
+    assert "Motion:" not in _img_prompt
+
+    # Video prompt: includes tone→motion language + logo end-frame rule
+    _vid_prompt = _brand_enriched_prompt(
+        "Animate the hero into a 6 second clip",
+        project=_p21c, asset_kind="video", aspect="16:9",
+    )
+    assert "Motion:" in _vid_prompt
+    assert "cinematic calm" in _vid_prompt
+    assert "End frame / poster must include the brand logo" in _vid_prompt
+
+    # Tone override path
+    _vid_override = _brand_enriched_prompt(
+        "playful promo", project=_p21c, asset_kind="video",
+        tone_override="playful",
+    )
+    assert "bouncy" in _vid_override.lower() or "energetic" in _vid_override.lower()
+
+    # No-brand / no-brief: still returns a valid prompt
+    _blank = _DP21c(id="__test72b-phase21c-blank__", name="Blank")
+    _blank_prompt = _brand_enriched_prompt("x", project=_blank, asset_kind="image")
+    assert "[User intent]" in _blank_prompt
+    assert "[Composition]" in _blank_prompt
+    assert "[Brand]" not in _blank_prompt
+    assert "[Brief]" not in _blank_prompt
+
+    # Cache key: stable, 16-hex, changes with brand/brief/aspect
+    _k1 = brand_theme_cache_key(_p21c)
+    assert isinstance(_k1, str) and len(_k1) == 16
+    _p21c.brand.primary_color = "#FF0000"
+    _k2 = brand_theme_cache_key(_p21c)
+    assert _k2 != _k1, "changing brand color should change cache key"
+    _p21c.brand.primary_color = "#0A2540"
+    assert brand_theme_cache_key(_p21c) == _k1, "restoring brand should restore key"
+    _p21c.aspect_ratio = "9:16"
+    _k3 = brand_theme_cache_key(_p21c)
+    assert _k3 != _k1, "changing aspect should change cache key"
+
+    # Tone motion map coverage
+    assert _tone_motion_language("enterprise")
+    assert _tone_motion_language("playful")
+    assert _tone_motion_language("unknown-tone-xyz") == ""
+
+    record("PASS", "72b-phase21c: brand-enriched prompt + cache key")
+except Exception as e:
+    record("FAIL", "72b-phase21c-brand-prompt", f"{type(e).__name__}: {e}")
+
+# ── 72b-phase21d. Video generator helpers (mocked provider) ──────────────
+try:
+    import designer.ai_content as _ai21d
+    import tools.video_gen_tool as _vgt21d
+    from designer.ai_content import generate_video_bytes, animate_image_bytes
+    from designer.state import (
+        DesignerProject as _DP21d, BrandConfig as _BC21d, ProjectBrief as _PB21d,
+    )
+    from designer.storage import delete_project, load_asset_bytes
+    import tempfile as _tf21d, os as _os21d
+
+    # Create a temp mp4 on disk to simulate provider output
+    _mp4_bytes = b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00fake-mp4-bytes"
+    _tmpdir = _tf21d.mkdtemp(prefix="thoth-21d-")
+    _fake_mp4 = _os21d.path.join(_tmpdir, "gen.mp4")
+    with open(_fake_mp4, "wb") as _f:
+        _f.write(_mp4_bytes)
+
+    # Monkeypatch the internal google generator to short-circuit and
+    # populate _last_generated_video.
+    _orig_gen = _vgt21d._generate_video_google
+    _orig_sel = _vgt21d._get_configured_selection
+    _orig_parse = _vgt21d._parse_model_config
+
+    def _fake_gen(prompt, duration, aspect, res, image_bytes=None):
+        _vgt21d._last_generated_video = {
+            "path": _fake_mp4, "filename": "gen.mp4",
+            "provider": "Google", "model": "test",
+            "duration": duration, "mode": "text-to-video",
+        }
+        return (
+            f"Video generated successfully. Model: test | Duration: {duration}s | "
+            f"Aspect ratio: {aspect} | Resolution: {res} | Mode: text-to-video | "
+            f"Provider: Google\nSaved to: " + _fake_mp4
+        )
+
+    _vgt21d._generate_video_google = _fake_gen
+    _vgt21d._get_configured_selection = lambda: "google/test-model"
+    _vgt21d._parse_model_config = lambda sel: ("google", "test-model")
+
+    try:
+        _p21d = _DP21d(id="__test72b-phase21d__", name="Video Gen")
+        _p21d.aspect_ratio = "16:9"
+        _p21d.brand = _BC21d(primary_color="#111111", accent_color="#22AA55")
+        _p21d.brief = _PB21d(tone="enterprise", audience="devs")
+
+        # generate_video_bytes — happy path
+        _asset = generate_video_bytes(
+            "fly over city at dusk",
+            project=_p21d,
+            duration_seconds=6,
+            aspect_ratio="16:9",
+        )
+        assert _asset.kind == "video"
+        assert _asset.mime_type == "video/mp4"
+        assert _asset.duration_ms == 6000
+        assert _asset.stored_name
+        assert _asset.size_bytes == len(_mp4_bytes)
+        _persisted = load_asset_bytes(_p21d.id, _asset.stored_name)
+        assert _persisted == _mp4_bytes
+        assert _asset in _p21d.assets
+
+        # animate_image_bytes — also works, but skip because it would try
+        # to resolve an image. Verify the function exists & is wired.
+        assert callable(animate_image_bytes)
+
+        record("PASS", "72b-phase21d: video generator helpers persist asset")
+    finally:
+        _vgt21d._generate_video_google = _orig_gen
+        _vgt21d._get_configured_selection = _orig_sel
+        _vgt21d._parse_model_config = _orig_parse
+        try:
+            delete_project(_p21d.id)
+        except Exception:
+            pass
+        try:
+            _os21d.unlink(_fake_mp4)
+        except Exception:
+            pass
+        try:
+            _os21d.rmdir(_tmpdir)
+        except Exception:
+            pass
+except Exception as e:
+    record("FAIL", "72b-phase21d-video-helpers", f"{type(e).__name__}: {e}")
+
+# ── 72b-phase21e. Video sub-tools (mocked provider) ─────────────────────
+try:
+    import designer.tool as _dtool21e
+    import tools.video_gen_tool as _vgt21e
+    from designer.state import (
+        DesignerProject as _DP21e, DesignerPage as _DPage21e,
+    )
+    from designer.storage import delete_project
+    from designer.session import set_active_project, get_ui_active_project
+    import tempfile as _tf21e, os as _os21e
+
+    _mp4_bytes_e = b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00fake-mp4"
+    _tmpdir_e = _tf21e.mkdtemp(prefix="thoth-21e-")
+    _fake_mp4_e = _os21e.path.join(_tmpdir_e, "clip.mp4")
+    with open(_fake_mp4_e, "wb") as _f:
+        _f.write(_mp4_bytes_e)
+
+    _orig_gen_e = _vgt21e._generate_video_google
+    _orig_sel_e = _vgt21e._get_configured_selection
+    _orig_parse_e = _vgt21e._parse_model_config
+
+    def _fake_gen_e(prompt, duration, aspect, res, image_bytes=None):
+        _vgt21e._last_generated_video = {
+            "path": _fake_mp4_e, "filename": "clip.mp4",
+            "provider": "Google", "model": "test",
+            "duration": duration, "mode": "text-to-video",
+        }
+        return f"Video generated successfully. Saved to: {_fake_mp4_e}"
+
+    _vgt21e._generate_video_google = _fake_gen_e
+    _vgt21e._get_configured_selection = lambda: "google/test-model"
+    _vgt21e._parse_model_config = lambda sel: ("google", "test-model")
+
+    _prior = get_ui_active_project()
+    try:
+        _p21e = _DP21e(
+            id="__test72b-phase21e__", name="Video Sub-Tools",
+            pages=[_DPage21e(html="<div>hello</div>", title="P1")],
+        )
+        set_active_project(_p21e)
+
+        result = _dtool21e._generate_video(
+            "sunset timelapse", page_index=0, position="bottom",
+            width=640, duration=4, aspect_ratio="16:9",
+        )
+        assert "Generated AI video" in result, f"bad result: {result!r}"
+        assert "Asset id:" in result, f"missing asset id: {result!r}"
+        assert "<video " in _p21e.pages[0].html, f"no <video> tag in html: {_p21e.pages[0].html[:500]!r}"
+        assert 'data-thoth-kind="video"' in _p21e.pages[0].html, f"missing kind attr: {_p21e.pages[0].html[:500]!r}"
+        # Asset is registered on project
+        video_assets = [a for a in _p21e.assets if a.kind == "video"]
+        assert len(video_assets) == 1, f"expected 1 video asset, got {len(video_assets)}"
+        assert video_assets[0].mime_type == "video/mp4", f"bad mime: {video_assets[0].mime_type}"
+
+        # insert_video: write a local mp4 and insert
+        _ins_path = _os21e.path.join(_tmpdir_e, "local.mp4")
+        with open(_ins_path, "wb") as _f:
+            _f.write(_mp4_bytes_e)
+        result2 = _dtool21e._insert_video(
+            _ins_path, page_index=0, position="bottom", width=640,
+        )
+        assert "Inserted video" in result2, f"bad insert result: {result2!r}"
+        video_assets = [a for a in _p21e.assets if a.kind == "video"]
+        assert len(video_assets) == 2, f"expected 2 video assets, got {len(video_assets)}"
+
+        # Tool registrations exist
+        _names = {t.name for t in _dtool21e.DesignerTool().as_langchain_tools()}
+        assert "designer_generate_video" in _names, f"missing generate tool in {_names}"
+        assert "designer_insert_video" in _names, f"missing insert tool in {_names}"
+
+        record("PASS", "72b-phase21e: video sub-tools generate + insert")
+    finally:
+        _vgt21e._generate_video_google = _orig_gen_e
+        _vgt21e._get_configured_selection = _orig_sel_e
+        _vgt21e._parse_model_config = _orig_parse_e
+        set_active_project(_prior)
+        try:
+            delete_project(_p21e.id)
+        except Exception:
+            pass
+        try:
+            _os21e.unlink(_fake_mp4_e)
+        except Exception:
+            pass
+        try:
+            _os21e.unlink(_ins_path)
+        except Exception:
+            pass
+        try:
+            _os21e.rmdir(_tmpdir_e)
+        except Exception:
+            pass
+except Exception as e:
+    record("FAIL", "72b-phase21e-video-subtools", f"{type(e).__name__}: {e}")
+
+# ── 72b-phase21g. Command palette logic ─────────────────────────────────
+try:
+    from designer.command_palette import (
+        PaletteItem, build_palette_items, filter_items, tool_prefill,
+    )
+    from designer.state import (
+        DesignerProject as _DP21g, DesignerPage as _DPage21g,
+        DesignerAsset as _DA21g,
+    )
+
+    _proj21g = _DP21g(
+        id="__test72b-phase21g__", name="Palette",
+        pages=[
+            _DPage21g(html="<div></div>", title="Intro"),
+            _DPage21g(html="<div></div>", title="Pricing"),
+        ],
+        assets=[
+            _DA21g(kind="image", label="Hero shot"),
+            _DA21g(kind="video", label="Sunset loop"),
+        ],
+    )
+    _tools21g = [
+        "designer_set_pages", "designer_generate_image",
+        "designer_generate_video", "designer_insert_video",
+        "designer_add_chart", "designer_publish_link",
+    ]
+
+    _items = build_palette_items(_proj21g, tool_names=_tools21g)
+    # Tools first, then pages, then assets
+    _counts = {"tool": 0, "page": 0, "asset": 0}
+    for it in _items:
+        _counts[it.category] += 1
+    assert _counts == {"tool": 6, "page": 2, "asset": 2}, _counts
+    assert _items[0].category == "tool"
+    assert _items[6].category == "page"
+    assert _items[8].category == "asset"
+
+    # Empty query → all items, ordered as built
+    _all = filter_items(_items, "")
+    assert len(_all) == len(_items)
+    assert [i.payload for i in _all[:6]] == _tools21g
+
+    # Fuzzy: "genvid" matches generate_video over insert_video
+    _ranked = filter_items(_items, "genvid")
+    assert _ranked, "expected matches for 'genvid'"
+    assert _ranked[0].payload == "designer_generate_video", (
+        f"expected generate_video first, got {_ranked[0].payload}"
+    )
+    _payloads = [i.payload for i in _ranked]
+    assert _payloads.index("designer_generate_video") < _payloads.index("designer_insert_video")
+
+    # Fuzzy: page title match
+    _page_hits = filter_items(_items, "pricing")
+    assert any(i.category == "page" and i.payload == 1 for i in _page_hits), (
+        [i.label for i in _page_hits[:5]]
+    )
+
+    # Fuzzy: asset match
+    _asset_hits = filter_items(_items, "sunset")
+    assert any(i.category == "asset" for i in _asset_hits)
+
+    # Non-matching query → empty
+    assert filter_items(_items, "zzqqxx") == []
+
+    # tool_prefill returns non-empty, references the tool name (or template)
+    _pf = tool_prefill("designer_generate_video")
+    assert "designer_generate_video" in _pf or "clip" in _pf.lower()
+    # Unknown tool falls back to default template
+    _pf2 = tool_prefill("designer_never_heard_of_it")
+    assert "designer_never_heard_of_it" in _pf2
+
+    record("PASS", "72b-phase21g: command palette items + fuzzy filter + prefill")
+except Exception as e:
+    record("FAIL", "72b-phase21g-command-palette", f"{type(e).__name__}: {e}")
+
+# ── 72b-phase21h. Brand-lint read-only scanner ──────────────────────────
+try:
+    from designer.brand_lint import (
+        lint_page, lint_project, LintFinding,
+        _brand_hexes, _brand_fonts, _hex6, _channel_delta,
+    )
+    from designer.state import (
+        DesignerProject as _DP21h, DesignerPage as _DPage21h,
+        BrandConfig as _BC21h,
+    )
+
+    _brand21h = _BC21h(
+        primary_color="#2563EB", secondary_color="#1E40AF",
+        accent_color="#F59E0B", bg_color="#FFFFFF", text_color="#0F172A",
+        heading_font="Inter", body_font="Inter",
+        logo_b64="QUJD", logo_mime_type="image/png", logo_filename="logo.png",
+        logo_mode="manual", logo_scope="all", logo_position="top_right",
+        logo_max_height=72, logo_padding=24,
+    )
+
+    # Test 1: Contrast — low-contrast text flagged
+    _html_contrast_bad = (
+        '<body style="color:#000;background:#fff">'
+        '<p style="color:#AAAAAA;background:#FFFFFF">Hard to read text</p>'
+        '</body>'
+    )
+    _f1 = lint_page(_html_contrast_bad, brand=_brand21h, page_index=0)
+    _c1 = [f for f in _f1 if f.category == "contrast"]
+    assert _c1, "expected contrast finding for #AAA on #FFF"
+
+    # Contrast passes: black on white
+    _html_contrast_ok = (
+        '<body style="color:#000;background:#fff">'
+        '<p style="color:#000000;background:#FFFFFF">Readable text</p>'
+        '</body>'
+    )
+    _f1b = lint_page(_html_contrast_ok, brand=_brand21h, page_index=0)
+    assert not [f for f in _f1b if f.category == "contrast"], (
+        f"unexpected contrast finding: {[f.message for f in _f1b]}"
+    )
+
+    # Test 2: Off-palette hex
+    _html_off = '<div style="color:#FF00FF">Weird</div>'
+    _f2 = lint_page(_html_off, brand=_brand21h, page_index=0)
+    assert [f for f in _f2 if f.category == "off_palette"], "expected off_palette for #FF00FF"
+
+    # Near-brand color (within tolerance) not flagged
+    _html_near = '<div style="color:#2563EC">Close</div>'  # 1 off from primary
+    _f2b = lint_page(_html_near, brand=_brand21h, page_index=0)
+    assert not [f for f in _f2b if f.category == "off_palette"], (
+        "near-brand color should not be flagged"
+    )
+
+    # Neutral white/black not flagged
+    _html_neutral = '<div style="color:#FFFFFF;background:#000000">X</div>'
+    _f2c = lint_page(_html_neutral, brand=_brand21h, page_index=0)
+    assert not [f for f in _f2c if f.category == "off_palette"], (
+        "neutrals should not be flagged"
+    )
+
+    # Test 3: Font mismatch
+    _html_font_bad = '<p style="font-family: \'Comic Sans MS\', cursive">Hi</p>'
+    _f3 = lint_page(_html_font_bad, brand=_brand21h, page_index=0)
+    assert [f for f in _f3 if f.category == "font"], "expected font finding for Comic Sans"
+
+    _html_font_ok = '<p style="font-family: Inter, sans-serif">Hi</p>'
+    _f3b = lint_page(_html_font_ok, brand=_brand21h, page_index=0)
+    assert not [f for f in _f3b if f.category == "font"], (
+        f"Inter+sans-serif should not be flagged: {[f.message for f in _f3b]}"
+    )
+
+    # Test 4: Missing alt
+    _html_alt = (
+        '<body><img src="a.png" alt="Has alt"><img src="b.png"></body>'
+    )
+    _f4 = lint_page(_html_alt, brand=_brand21h, page_index=0)
+    _alt_finds = [f for f in _f4 if f.category == "missing_alt"]
+    assert len(_alt_finds) == 1, f"expected 1 missing_alt, got {len(_alt_finds)}"
+
+    # Test 5: Logo safe zone — element overlapping top_right corner
+    _html_logo = (
+        '<body><div style="position:absolute;top:10px;right:20px;width:200px;height:60px">'
+        'Overlap</div></body>'
+    )
+    _f5 = lint_page(_html_logo, brand=_brand21h, page_index=0)
+    assert [f for f in _f5 if f.category == "logo_safe_zone"], (
+        "expected logo_safe_zone finding"
+    )
+
+    # Element far from corner: not flagged
+    _html_logo_ok = (
+        '<body><div style="position:absolute;top:400px;right:400px">Ok</div></body>'
+    )
+    _f5b = lint_page(_html_logo_ok, brand=_brand21h, page_index=0)
+    assert not [f for f in _f5b if f.category == "logo_safe_zone"], (
+        "far-corner element should not be flagged"
+    )
+
+    # Test 6: Clean page + matching brand → no findings
+    _html_clean = (
+        '<body style="color:#0F172A;background:#FFFFFF;font-family:Inter,sans-serif">'
+        '<h1 style="color:#0F172A">Hello</h1>'
+        '<p style="color:#0F172A">Readable paragraph content here.</p>'
+        '</body>'
+    )
+    _proj_clean = _DP21h(
+        id="__test72b-phase21h-clean__", name="Clean",
+        pages=[_DPage21h(html=_html_clean, title="P1")],
+        brand=_brand21h,
+    )
+    _rep_clean = lint_project(_proj_clean)
+    assert _rep_clean["findings"] == [], (
+        f"clean project had findings: {_rep_clean['findings']}"
+    )
+    assert "No brand issues" in _rep_clean["summary"]
+
+    # Test 7: Full project scan returns structured report
+    _proj_dirty = _DP21h(
+        id="__test72b-phase21h-dirty__", name="Dirty",
+        pages=[
+            _DPage21h(html=_html_contrast_bad, title="P1"),
+            _DPage21h(html=_html_off, title="P2"),
+        ],
+        brand=_brand21h,
+    )
+    _rep_dirty = lint_project(_proj_dirty)
+    assert _rep_dirty["findings"], "expected findings on dirty project"
+    assert "contrast" in _rep_dirty["category_counts"]
+    assert "off_palette" in _rep_dirty["category_counts"]
+
+    # Test 8: Sub-tool registration + basic invocation
+    import designer.tool as _dtool21h
+    from designer.session import set_active_project as _sap21h, get_ui_active_project as _gap21h
+    _prior21h = _gap21h()
+    _proj_tool = _DP21h(
+        id="__test72b-phase21h-tool__", name="Tool",
+        pages=[_DPage21h(html=_html_clean, title="P1")],
+        brand=_brand21h,
+    )
+    _sap21h(_proj_tool)
+    try:
+        _names21h = {t.name for t in _dtool21h.DesignerTool().as_langchain_tools()}
+        assert "designer_brand_lint" in _names21h, f"missing tool in {_names21h}"
+        import json as _json21h
+        _out = _dtool21h._brand_lint(page_index=-1)
+        _parsed = _json21h.loads(_out)
+        assert "findings" in _parsed
+        assert "summary" in _parsed
+    finally:
+        _sap21h(_prior21h)
+        try:
+            from designer.storage import delete_project as _dp21h
+            _dp21h(_proj_tool.id)
+        except Exception:
+            pass
+
+    # Helper sanity
+    assert _hex6("#fff") == "#ffffff"
+    assert _hex6("#000") == "#000000"
+    assert _channel_delta("#2563EB", "#2563EC") == 1
+    assert "#2563eb" in _brand_hexes(_brand21h)
+    assert "inter" in _brand_fonts(_brand21h)
+
+    record("PASS", "72b-phase21h: brand lint scanner + sub-tool")
+except Exception as e:
+    record("FAIL", "72b-phase21h-brand-lint", f"{type(e).__name__}: {e}")
+
+# ── 72b-phase21i. Zero-state sidebar quick actions ──────────────────────
+try:
+    from designer.zero_state import (
+        QuickAction, get_quick_actions, is_project_empty, _ACTIONS_BY_MODE,
+    )
+    from designer.state import (
+        DesignerProject as _DP21i, DesignerPage as _DPage21i,
+        DesignerAsset as _DA21i, DESIGNER_MODES,
+    )
+
+    # Every registered mode has a non-empty action list with valid fields
+    assert set(_ACTIONS_BY_MODE.keys()) == set(DESIGNER_MODES.keys()), (
+        f"mode mismatch: actions={set(_ACTIONS_BY_MODE.keys())} "
+        f"modes={set(DESIGNER_MODES.keys())}"
+    )
+    for _mode, _actions in _ACTIONS_BY_MODE.items():
+        assert len(_actions) >= 2, f"{_mode} has {len(_actions)} actions"
+        for _a in _actions:
+            assert isinstance(_a, QuickAction)
+            assert _a.label.strip(), f"{_mode}: empty label"
+            assert _a.prompt.strip(), f"{_mode}: empty prompt"
+            assert _a.icon.strip(), f"{_mode}: empty icon"
+            assert len(_a.prompt) >= 20, (
+                f"{_mode}: prompt too short: {_a.prompt!r}"
+            )
+
+    # Mode routing
+    _p_deck = _DP21i(id="__test72b-phase21i-deck__", name="D", mode="deck")
+    _p_land = _DP21i(id="__test72b-phase21i-land__", name="L", mode="landing")
+    _p_sb = _DP21i(id="__test72b-phase21i-sb__", name="S", mode="storyboard")
+    assert get_quick_actions(_p_deck) == _ACTIONS_BY_MODE["deck"]
+    assert get_quick_actions(_p_land) == _ACTIONS_BY_MODE["landing"]
+    assert get_quick_actions(_p_sb) == _ACTIONS_BY_MODE["storyboard"]
+
+    # Unknown mode → deck fallback
+    _p_weird = _DP21i(id="__test72b-phase21i-w__", name="W")
+    _p_weird.mode = "nonsense"
+    assert get_quick_actions(_p_weird) == _ACTIONS_BY_MODE["deck"]
+
+    # None project → deck fallback
+    assert get_quick_actions(None) == _ACTIONS_BY_MODE["deck"]
+
+    # is_project_empty — fresh project
+    _p_fresh = _DP21i(id="__test72b-phase21i-fresh__", name="F")
+    assert is_project_empty(_p_fresh, []) is True
+    assert is_project_empty(_p_fresh, None) is True
+
+    # Messages present → not empty
+    assert is_project_empty(_p_fresh, [{"role": "user", "content": "hi"}]) is False
+
+    # Page with meaningful content → not empty
+    _p_content = _DP21i(
+        id="__test72b-phase21i-content__", name="C",
+        pages=[_DPage21i(
+            html="<h1>Welcome to our amazing product launch</h1>"
+                 "<p>A long paragraph of body copy that explains more.</p>",
+            title="P1",
+        )],
+    )
+    assert is_project_empty(_p_content, []) is False
+
+    # Trivial placeholder HTML → still empty
+    _p_placeholder = _DP21i(
+        id="__test72b-phase21i-ph__", name="P",
+        pages=[_DPage21i(html="<div></div>", title="P1")],
+    )
+    assert is_project_empty(_p_placeholder, []) is True
+
+    # Page with an image → not empty
+    _p_img = _DP21i(
+        id="__test72b-phase21i-img__", name="I",
+        pages=[_DPage21i(html='<img src="a.png" alt="hero">', title="P1")],
+    )
+    assert is_project_empty(_p_img, []) is False
+
+    # Project with assets → not empty
+    _p_asset = _DP21i(
+        id="__test72b-phase21i-a__", name="A",
+        pages=[_DPage21i(html="<div></div>", title="P1")],
+        assets=[_DA21i(kind="image", label="Hero")],
+    )
+    assert is_project_empty(_p_asset, []) is False
+
+    record("PASS", "72b-phase21i: zero-state quick actions per mode + emptiness")
+except Exception as e:
+    record("FAIL", "72b-phase21i-zero-state", f"{type(e).__name__}: {e}")
+
+# ── 73a. Phase 2.2 — Mode-conditioned system prompt ─────────────────────
+try:
+    from designer.prompt import (
+        build_designer_prompt as _bdp73a,
+        _rules_for_mode,
+        _interactive_tools_block,
+        _DECK_JS_RULE,
+        _INTERACTIVE_RUNTIME_RULE,
+    )
+    from designer.state import DesignerProject as _DP73a
+
+    # Deck prompt: keeps the "no JavaScript" clause and does NOT advertise
+    # interactive sub-tools.
+    _pd73a = _DP73a(id="__test73a-deck__", name="D", mode="deck")
+    _prompt_deck = _bdp73a(_pd73a)
+    assert _DECK_JS_RULE in _prompt_deck, "deck prompt missing no-JS clause"
+    assert "data-thoth-action" not in _prompt_deck, (
+        "deck prompt unexpectedly advertises interactive attrs"
+    )
+    assert "designer_add_screen" not in _prompt_deck, (
+        "deck prompt should not list designer_add_screen"
+    )
+    assert "slide deck" in _prompt_deck
+
+    # Landing prompt: swaps in the interactive runtime rule block and
+    # advertises interactive tools.
+    _pl73a = _DP73a(id="__test73a-land__", name="L", mode="landing")
+    _prompt_land = _bdp73a(_pl73a)
+    assert "data-thoth-action" in _prompt_land
+    assert "navigate:<route_id>" in _prompt_land
+    assert "designer_add_screen" in _prompt_land
+    assert "designer_link_screens" in _prompt_land
+    assert "designer_reorder_routes" in _prompt_land
+    assert _DECK_JS_RULE not in _prompt_land, (
+        "landing prompt should not carry the deck no-JS line"
+    )
+    assert "landing page" in _prompt_land
+
+    # App-mockup prompt: same interactive rules, different mode label.
+    _pa73a = _DP73a(id="__test73a-app__", name="A", mode="app_mockup")
+    _prompt_app = _bdp73a(_pa73a)
+    assert "app mockup" in _prompt_app.lower()
+    assert "data-thoth-action" in _prompt_app
+
+    # Storyboard is also interactive per the rule set.
+    _ps73a = _DP73a(id="__test73a-sb__", name="S", mode="storyboard")
+    _prompt_sb = _bdp73a(_ps73a)
+    assert "data-thoth-action" in _prompt_sb
+
+    # Rule selector helper
+    assert _rules_for_mode("deck") == _DECK_JS_RULE
+    assert _rules_for_mode("landing") == _INTERACTIVE_RUNTIME_RULE
+    assert _rules_for_mode("app_mockup") == _INTERACTIVE_RUNTIME_RULE
+    assert _rules_for_mode("document") == _DECK_JS_RULE
+    assert _rules_for_mode("unknown_mode") == _DECK_JS_RULE  # fallback
+    assert _interactive_tools_block("deck") == ""
+    assert "designer_add_screen" in _interactive_tools_block("landing")
+
+    # Mode-specific canvas rules must differ: landing = scrollable document
+    # (no html/body overflow:hidden rule), deck/storyboard = fixed slide
+    # (overflow:hidden), app_mockup = fixed device viewport.
+    assert "overflow:hidden" in _prompt_deck or "overflow: hidden" in _prompt_deck
+    assert "Canvas is EXACTLY" in _prompt_deck
+    # Landing canvas block must explicitly avoid hidden overflow and
+    # allow vertical flow.
+    assert "tall scrollable" in _prompt_land, (
+        "landing prompt must describe the canvas as a scrollable document"
+    )
+    assert "Do NOT lock body to a fixed pixel height" in _prompt_land
+    # Landing must NOT use the deck fixed-canvas phrasing.
+    assert "Canvas is EXACTLY" not in _prompt_land, (
+        "landing prompt must not treat the page as a fixed slide canvas"
+    )
+    # App-mockup canvas block = fixed per-screen viewport.
+    assert "ONE device screen" in _prompt_app
+    assert "overflow:hidden" in _prompt_app or "overflow: hidden" in _prompt_app
+    # Storyboard = slide-style canvas (fixed shot frame).
+    assert "Canvas is EXACTLY" in _prompt_sb
+
+    record("PASS", "73a: mode-conditioned designer prompt + tool gating")
+except Exception as e:
+    record("FAIL", "73a-mode-prompt", f"{type(e).__name__}: {e}")
+
+# ── 73b. Phase 2.2 — Agent-HTML sanitizer strips scripts/handlers ───────
+try:
+    from designer.html_ops import sanitize_agent_html
+
+    # <script> tags removed.
+    _h = '<div>ok</div><script>alert(1)</script><p>after</p>'
+    _out = sanitize_agent_html(_h)
+    assert "<script" not in _out.lower()
+    assert "alert" not in _out
+    assert "ok" in _out and "after" in _out
+
+    # on* inline handlers removed, other attrs preserved.
+    _h2 = '<button id="b1" onclick="steal()" class="cta" data-thoth-action="navigate:home">Go</button>'
+    _out2 = sanitize_agent_html(_h2)
+    assert "onclick" not in _out2.lower()
+    assert "steal" not in _out2
+    assert 'id="b1"' in _out2
+    assert 'class="cta"' in _out2
+    assert 'data-thoth-action="navigate:home"' in _out2
+
+    # javascript: URLs stripped.
+    _h3 = '<a href="javascript:alert(1)">x</a><a href="/pricing">y</a>'
+    _out3 = sanitize_agent_html(_h3)
+    assert "javascript:" not in _out3.lower()
+    assert 'href="/pricing"' in _out3
+
+    # Reserved runtime script survives.
+    _h4 = '<script data-thoth-runtime="1">window.__thoth=1;</script>'
+    _out4 = sanitize_agent_html(_h4)
+    assert "data-thoth-runtime" in _out4
+    assert "__thoth" in _out4
+
+    # Empty / trivial input stays stable.
+    assert sanitize_agent_html("") == ""
+    assert sanitize_agent_html("plain text") == "plain text"
+
+    # Sanitizer is wired into _set_pages / _update_page / _add_page.
+    import designer.tool as _dt73b
+    import inspect as _ins73b
+    for _fn_name in ("_set_pages", "_update_page", "_add_page"):
+        _src = _ins73b.getsource(getattr(_dt73b, _fn_name))
+        assert "sanitize_agent_html" in _src, f"{_fn_name} missing sanitize call"
+
+    record("PASS", "73b: sanitize_agent_html + wiring in page-write tools")
+except Exception as e:
+    record("FAIL", "73b-sanitizer", f"{type(e).__name__}: {e}")
+
+# ── 73c. Phase 2.2 — Runtime bridge loader ──────────────────────────────
+try:
+    from designer.runtime import (
+        RUNTIME_MARKER_ATTR,
+        build_routes_payload,
+        inject_runtime,
+        read_runtime_assets,
+    )
+
+    _js73c, _css73c = read_runtime_assets()
+    assert "__thothRuntime" in _js73c, "runtime bridge JS missing init guard"
+    assert "data-thoth-action" in _js73c
+    assert "data-thoth-route" in _js73c
+    assert "data-thoth-route-host" in _js73c, (
+        "runtime JS must scope route lookup to host sections, not inner elements"
+    )
+    assert "[data-thoth-route-host]" in _css73c, (
+        "runtime CSS must scope visibility to [data-thoth-route-host] only"
+    )
+    assert RUNTIME_MARKER_ATTR == "data-thoth-runtime"
+
+    _payload73c = build_routes_payload(
+        initial="home",
+        order=["home", "pricing", "about"],
+        labels={"home": "Home", "pricing": "Pricing"},
+    )
+    import json as _json73c
+    _parsed73c = _json73c.loads(_payload73c)
+    assert _parsed73c["initial"] == "home"
+    assert _parsed73c["order"] == ["home", "pricing", "about"]
+    assert _parsed73c["labels"]["home"] == "Home"
+
+    # Inject into a minimal 2-route document.
+    _doc73c = (
+        '<!DOCTYPE html><html><head><title>T</title></head>'
+        '<body>'
+        '<section data-thoth-route="home"><h1>Home</h1></section>'
+        '<section data-thoth-route="pricing"><h1>Pricing</h1></section>'
+        '</body></html>'
+    )
+    _out73c = inject_runtime(_doc73c, routes_payload=_payload73c)
+    assert '<style data-thoth-runtime="1">' in _out73c
+    assert '<script data-thoth-runtime="1">' in _out73c
+    assert '__thoth_routes__' in _out73c
+    assert '"initial": "home"' in _out73c
+    # Runtime script is appended before </body>, after original sections.
+    _body_idx = _out73c.index("</body>")
+    _home_idx = _out73c.index('data-thoth-route="home"')
+    _script_idx = _out73c.index('<script data-thoth-runtime="1">')
+    assert _home_idx < _script_idx < _body_idx
+    # Style lands inside <head>.
+    _style_idx = _out73c.index('<style data-thoth-runtime="1">')
+    assert _style_idx < _out73c.index("</head>")
+
+    # Sanitizer preserves runtime script (guard from 73b still valid after
+    # inject_runtime).
+    from designer.html_ops import sanitize_agent_html as _san73c
+    _after = _san73c(_out73c)
+    assert '<script data-thoth-runtime="1">' in _after
+    assert '__thoth_routes__' in _after
+
+    record("PASS", "73c: runtime bridge loader + inject + sanitizer passthrough")
+except Exception as e:
+    record("FAIL", "73c-runtime-bridge", f"{type(e).__name__}: {e}")
+
+# ── 73d. Phase 2.2 — Multi-route preview rendering ──────────────────────
+try:
+    from designer.preview import (
+        render_multi_route_html,
+        _ensure_page_route_ids,
+        _extract_body_inner,
+        INTERACTIVE_MODES,
+    )
+    from designer.state import DesignerProject as _DP73d, DesignerPage as _DPage73d
+
+    assert INTERACTIVE_MODES == {"landing", "app_mockup", "storyboard"}
+
+    # Build a 3-route landing project.
+    _p73d = _DP73d(
+        id="__test73d__", name="Site", mode="landing",
+        pages=[
+            _DPage73d(
+                html=(
+                    "<!DOCTYPE html><html><head><title>Home</title></head>"
+                    "<body><h1>Welcome home</h1>"
+                    '<a data-thoth-action="navigate:pricing">See pricing</a>'
+                    "</body></html>"
+                ),
+                title="Home",
+                route_id="home",
+            ),
+            _DPage73d(
+                html=(
+                    "<!DOCTYPE html><html><head><title>Pricing</title></head>"
+                    "<body><h1>Pricing</h1></body></html>"
+                ),
+                title="Pricing",
+                route_id="pricing",
+            ),
+            _DPage73d(
+                html=(
+                    "<!DOCTYPE html><html><head><title>About</title></head>"
+                    "<body><h1>About us</h1></body></html>"
+                ),
+                title="About",
+                # route_id intentionally left blank — helper should synthesize
+            ),
+        ],
+    )
+
+    _route_ids = _ensure_page_route_ids(_p73d)
+    assert _route_ids[0] == "home"
+    assert _route_ids[1] == "pricing"
+    assert _route_ids[2] and _route_ids[2] != "home", (
+        f"route_ids[2] should be synthesized, got {_route_ids[2]!r}"
+    )
+    # All unique
+    assert len(set(_route_ids)) == 3
+
+    _head, _inner = _extract_body_inner(_p73d.pages[0].html)
+    assert "<body>" in _head.lower()
+    assert "Welcome home" in _inner
+    assert "</body>" not in _inner.lower()
+
+    _out = render_multi_route_html(_p73d)
+    assert 'data-thoth-route-host="1" data-thoth-route="home"' in _out
+    assert 'data-thoth-route-host="1" data-thoth-route="pricing"' in _out
+    # Synthesized route id
+    _third_id = _route_ids[2]
+    assert f'data-thoth-route-host="1" data-thoth-route="{_third_id}"' in _out
+    # Runtime bridge injected.
+    assert '<script data-thoth-runtime="1">' in _out
+    assert '__thoth_routes__' in _out
+    assert '"initial": "home"' in _out
+    # Page content preserved inside the first section but NOT duplicated in
+    # its own <body>/<html> wrapper.
+    assert _out.count('<body') == 1, f"expected 1 <body>, got {_out.count('<body')}"
+    assert 'data-thoth-action="navigate:pricing"' in _out
+
+    # Rendering with explicit active_route_id updates the payload.
+    _out_active = render_multi_route_html(_p73d, active_route_id="pricing")
+    assert '"initial": "pricing"' in _out_active
+
+    record("PASS", "73d: multi-route preview rendering")
+except Exception as e:
+    record("FAIL", "73d-multi-route-preview", f"{type(e).__name__}: {e}")
+
+# ── 73e. Phase 2.2 — Interactive-mode sub-tools ───────────────────────
+try:
+    from designer.tool import (
+        DesignerTool as _DT73e,
+        _set_mode as _set_mode_73e,
+        _add_screen as _add_screen_73e,
+        _link_screens as _link_73e,
+        _set_interaction as _set_ix_73e,
+        _preview_screen as _preview_73e,
+        _reorder_routes as _reorder_73e,
+    )
+    from designer.state import (
+        DesignerProject as _DP73e,
+        DesignerPage as _DPage73e,
+    )
+    from designer.session import set_active_project as _set_active_73e
+
+    # Set up a landing project with two routes.
+    _p73e = _DP73e(
+        id="__test73e__", name="Interactive", mode="landing",
+        pages=[
+            _DPage73e(
+                html=(
+                    "<!DOCTYPE html><html><head></head><body>"
+                    '<button id="cta">Buy now</button>'
+                    "</body></html>"
+                ),
+                title="Home", route_id="home", kind="screen",
+            ),
+            _DPage73e(
+                html="<!DOCTYPE html><html><head></head><body><h1>Pricing</h1></body></html>",
+                title="Pricing", route_id="pricing", kind="screen",
+            ),
+        ],
+    )
+    _set_active_73e(_p73e)
+
+    # Tool surface: interactive mode must expose 5 new tools + designer_set_mode,
+    # minus designer_move_page. 29 base − 1 (move_page) + 5 interactive + 1 set_mode = 34.
+    _tools73e = _DT73e().as_langchain_tools()
+    _names73e = {t.name for t in _tools73e}
+    assert len(_tools73e) == 34, (
+        f"Expected 34 tools in landing mode, got {len(_tools73e)}: {sorted(_names73e)}"
+    )
+    assert "designer_add_screen" in _names73e
+    assert "designer_link_screens" in _names73e
+    assert "designer_set_interaction" in _names73e
+    assert "designer_preview_screen" in _names73e
+    assert "designer_reorder_routes" in _names73e
+    assert "designer_set_mode" in _names73e
+    assert "designer_move_page" not in _names73e, (
+        "designer_move_page must be hidden in interactive modes"
+    )
+
+    # _add_screen — slug synthesis + dedup + kind assignment.
+    _msg = _add_screen_73e(title="About Us")
+    assert "route_id='about-us'" in _msg, _msg
+    assert _p73e.pages[-1].route_id == "about-us"
+    assert _p73e.pages[-1].kind == "screen"
+    assert len(_p73e.pages) == 3
+    # Dedup
+    _msg2 = _add_screen_73e(title="About Us")
+    assert "about-us-2" in _msg2, _msg2
+    assert _p73e.pages[-1].route_id == "about-us-2"
+
+    # _link_screens — patches HTML + records interaction.
+    _prev_interactions = len(_p73e.interactions)
+    _msg3 = _link_73e(
+        source_route="home", selector="#cta", target_route="pricing",
+        transition="slide_left",
+    )
+    assert "→ navigate to 'pricing'" in _msg3, _msg3
+    assert 'data-thoth-action="navigate:pricing"' in _p73e.pages[0].html
+    assert len(_p73e.interactions) == _prev_interactions + 1
+    _last_ix = _p73e.interactions[-1]
+    assert _last_ix.action == "navigate"
+    assert _last_ix.target == "pricing"
+    assert _last_ix.transition == "slide_left"
+
+    # _link_screens — bad selector returns error, no side effects.
+    _bad = _link_73e(
+        source_route="home", selector="#nonexistent", target_route="pricing",
+    )
+    assert _bad.lower().startswith("error"), _bad
+
+    # _set_interaction — toggle_state action.
+    _msg4 = _set_ix_73e(
+        source_route="pricing", selector="h1", action="toggle_state",
+        target="menu_open",
+    )
+    assert "toggle_state:menu_open" in _msg4
+    assert 'data-thoth-action="toggle_state:menu_open"' in _p73e.pages[1].html
+
+    # _set_interaction — invalid action rejected.
+    _err_ix = _set_ix_73e(
+        source_route="home", selector="#cta", action="hack_me", target="",
+    )
+    assert _err_ix.lower().startswith("error"), _err_ix
+
+    # _preview_screen updates active_page.
+    _msg5 = _preview_73e("pricing")
+    assert "page 2" in _msg5, _msg5
+    assert _p73e.active_page == 1
+
+    # _reorder_routes rearranges pages.
+    _all_routes = [p.route_id for p in _p73e.pages]
+    _reversed = list(reversed(_all_routes))
+    _msg6 = _reorder_73e(_reversed)
+    assert _msg6.startswith("Reordered"), _msg6
+    assert [p.route_id for p in _p73e.pages] == _reversed
+
+    # Mismatched count is rejected.
+    _err_reorder = _reorder_73e(["home"])
+    assert _err_reorder.lower().startswith("error"), _err_reorder
+
+    # _set_mode flips the tool surface: deck mode should drop interactive tools.
+    _msg7 = _set_mode_73e("deck")
+    assert "deck" in _msg7.lower()
+    assert _p73e.mode == "deck"
+    _tools_deck = _DT73e().as_langchain_tools()
+    _names_deck = {t.name for t in _tools_deck}
+    assert "designer_add_screen" not in _names_deck
+    assert "designer_move_page" in _names_deck
+    assert len(_tools_deck) == 30, (
+        f"Expected 30 tools in deck mode, got {len(_tools_deck)}"
+    )
+
+    # Interactive tools refuse to run in deck mode.
+    _refuse = _add_screen_73e(title="Blocked")
+    assert _refuse.lower().startswith("error"), _refuse
+
+    _set_active_73e(None)
+    record("PASS", "73e: interactive sub-tools + mode-gated surface")
+except Exception as e:
+    try:
+        from designer.session import set_active_project as _reset73e
+        _reset73e(None)
+    except Exception:
+        pass
+    record("FAIL", "73e-interactive-tools", f"{type(e).__name__}: {e}")
+
+# ── 73f. Phase 2.2 — Dual publish path ────────────────────────────────
+try:
+    from designer.publish import (
+        build_publish_bytes as _build_bytes_73f,
+        publish_project as _publish_73f,
+    )
+    from designer.state import (
+        DesignerProject as _DP73f,
+        DesignerPage as _DPage73f,
+    )
+
+    # (1) Landing project → interactive publish path.
+    _p73f_land = _DP73f(
+        id="__test73f_land__", name="Landing", mode="landing",
+        pages=[
+            _DPage73f(
+                html=(
+                    "<!DOCTYPE html><html><head></head><body>"
+                    "<h1>Hero</h1></body></html>"
+                ),
+                title="Home", route_id="home", kind="screen",
+            ),
+            _DPage73f(
+                html=(
+                    "<!DOCTYPE html><html><head></head><body>"
+                    "<h1>Price</h1></body></html>"
+                ),
+                title="Price", route_id="price", kind="screen",
+            ),
+        ],
+    )
+    _bytes_land = _build_bytes_73f(_p73f_land)
+    assert isinstance(_bytes_land, (bytes, bytearray))
+    _html_land = _bytes_land.decode("utf-8")
+    assert 'data-thoth-route-host="1" data-thoth-route="home"' in _html_land
+    assert 'data-thoth-route-host="1" data-thoth-route="price"' in _html_land
+    assert '<script data-thoth-runtime="1">' in _html_land
+    assert '__thoth_routes__' in _html_land
+    assert '"initial": "home"' in _html_land
+
+    # (2) Deck project → classic export path (no route sections, no
+    # runtime bridge).
+    _p73f_deck = _DP73f(
+        id="__test73f_deck__", name="Deck", mode="deck",
+        pages=[
+            _DPage73f(
+                html="<!DOCTYPE html><html><head></head><body><h1>Slide 1</h1></body></html>",
+                title="Slide 1",
+            ),
+        ],
+    )
+    _bytes_deck = _build_bytes_73f(_p73f_deck)
+    assert isinstance(_bytes_deck, (bytes, bytearray))
+    _html_deck = _bytes_deck.decode("utf-8")
+    assert 'data-thoth-route=' not in _html_deck
+    assert 'data-thoth-runtime="1"' not in _html_deck
+
+    # (3) publish_project round-trip: writes a file and returns a mode tag.
+    _info_land = _publish_73f(_p73f_land, ensure_public=False)
+    assert _info_land["mode"] == "landing"
+    assert _info_land["url"]
+    assert _info_land["path"].endswith(f"{_p73f_land.id}.html")
+    import pathlib as _pl73f
+    _disk = _pl73f.Path(_info_land["path"])
+    assert _disk.exists(), f"published file missing: {_disk}"
+    _disk_html = _disk.read_text("utf-8")
+    assert 'data-thoth-route-host="1" data-thoth-route="home"' in _disk_html
+    assert '<script data-thoth-runtime="1">' in _disk_html
+    _disk.unlink(missing_ok=True)
+
+    _info_deck = _publish_73f(_p73f_deck, ensure_public=False)
+    assert _info_deck["mode"] == "deck"
+    _pl73f.Path(_info_deck["path"]).unlink(missing_ok=True)
+
+    record("PASS", "73f: dual publish path (interactive vs deck)")
+except Exception as e:
+    record("FAIL", "73f-dual-publish", f"{type(e).__name__}: {e}")
+
+# ── 73g. Phase 2.2 — Mode picker in setup flow ────────────────────────
+try:
+    from designer.setup_flow import (
+        DESIGNER_MODE_CHOICES,
+        MODE_CHOICE_AUTO,
+        infer_mode_from_output_type as _infer_mode_73g,
+        resolve_project_mode as _resolve_mode_73g,
+        create_project_from_setup as _create_73g,
+    )
+    from designer.briefing import build_initial_design_request as _build_req_73g
+    from designer.state import ProjectBrief as _PB73g
+
+    # Mode choices exposed for the UI
+    _choice_keys = [key for key, _ in DESIGNER_MODE_CHOICES]
+    assert _choice_keys[0] == MODE_CHOICE_AUTO == "auto"
+    assert set(_choice_keys[1:]) == {"deck", "document", "landing", "app_mockup", "storyboard"}
+    for key, label in DESIGNER_MODE_CHOICES:
+        assert isinstance(label, str) and label.strip(), f"Empty label for {key!r}"
+
+    # Keyword inference
+    assert _infer_mode_73g("Landing page") == "landing"
+    assert _infer_mode_73g("Pitch deck") == "deck"
+    assert _infer_mode_73g("app mockup") == "app_mockup"
+    assert _infer_mode_73g("Wireframe kit") == "app_mockup"
+    assert _infer_mode_73g("Storyboard") == "storyboard"
+    assert _infer_mode_73g("Status report") == "document"
+    assert _infer_mode_73g("") == "deck"
+    # Template id can also drive inference when output_type is empty.
+    assert _infer_mode_73g("", template_id="landing_hero") == "landing"
+
+    # resolve_project_mode honors explicit overrides, falls back to
+    # template.mode (Phase 2.3.C) and then to output_type inference.
+    # Use an empty template_id to exercise the inference fallback.
+    _brief_land = _PB73g(output_type="Landing page")
+    assert _resolve_mode_73g("auto", brief=_brief_land, template_id="") == "landing"
+    assert _resolve_mode_73g("deck", brief=_brief_land, template_id="") == "deck"
+    assert _resolve_mode_73g("bogus", brief=_brief_land, template_id="") == "landing"
+    assert _resolve_mode_73g("", brief=None, template_id="") == "deck"
+    # With a known template, template.mode wins over output_type.
+    assert _resolve_mode_73g("auto", brief=_brief_land, template_id="blank_canvas") == "deck", (
+        "template.mode must win over output_type inference (Phase 2.3.C)"
+    )
+
+    # create_project_from_setup wires mode onto project + page.kind.
+    # Use explicit mode="landing" since blank_canvas now carries mode=deck.
+    _proj_land = _create_73g(
+        "blank_canvas",
+        project_name="Test Landing",
+        brief=_PB73g(output_type="Landing page", build_description="x"),
+        mode="landing",
+    )
+    assert _proj_land.mode == "landing"
+    assert all(p.kind == "screen" for p in _proj_land.pages)
+
+    _proj_deck = _create_73g(
+        "blank_canvas",
+        project_name="Test Deck",
+        brief=_PB73g(output_type="Pitch deck", build_description="x"),
+        mode="deck",
+    )
+    assert _proj_deck.mode == "deck"
+    assert all(p.kind == "slide" for p in _proj_deck.pages)
+
+    # Explicit override beats inference.
+    _proj_forced = _create_73g(
+        "blank_canvas",
+        project_name="Test Forced",
+        brief=_PB73g(output_type="Landing page", build_description="x"),
+        mode="storyboard",
+    )
+    assert _proj_forced.mode == "storyboard"
+    assert all(p.kind == "shot" for p in _proj_forced.pages)
+
+    # Initial design request surfaces interactive mode when non-deck.
+    _req_land = _build_req_73g(_proj_land)
+    assert "Project type:" in _req_land
+    assert "data-thoth-action" in _req_land
+    assert "landing" in _req_land.lower()
+    _req_deck = _build_req_73g(_proj_deck)
+    assert "Project type:" not in _req_deck, _req_deck
+
+    record("PASS", "73g: mode picker in setup flow")
+except Exception as e:
+    record("FAIL", "73g-mode-picker", f"{type(e).__name__}: {e}")
+
+# ── 73h. Phase 2.2 — Routes-aware navigator helpers ──────────────────
+try:
+    from designer.page_navigator import (
+        navigator_item_caption,
+        navigator_action_labels,
+    )
+    from designer.state import (
+        DesignerProject as _DP73h,
+        DesignerPage as _DPage73h,
+    )
+
+    # Deck project → no route label, "Page N of M" counter.
+    _p_deck = _DP73h(
+        id="__test73h_deck__", name="Deck", mode="deck",
+        pages=[_DPage73h(html="<p>a</p>", title="One")],
+    )
+    idx_lbl, route_lbl = navigator_item_caption(_p_deck, 0)
+    assert idx_lbl == "1"
+    assert route_lbl is None, f"deck should not expose route label, got {route_lbl!r}"
+    deck_labels = navigator_action_labels(_p_deck)
+    assert deck_labels["add"] == "Add page"
+    assert "Page" in deck_labels["counter"]
+    assert "{current}" in deck_labels["counter"] and "{total}" in deck_labels["counter"]
+
+    # Landing project → route label surfaces and uses stored route_id.
+    _p_land = _DP73h(
+        id="__test73h_land__", name="Land", mode="landing",
+        pages=[
+            _DPage73h(html="", title="Home", route_id="home", kind="screen"),
+            _DPage73h(html="", title="Pricing", route_id="pricing", kind="screen"),
+        ],
+    )
+    assert navigator_item_caption(_p_land, 0) == ("1", "home")
+    assert navigator_item_caption(_p_land, 1) == ("2", "pricing")
+    land_labels = navigator_action_labels(_p_land)
+    assert land_labels["add"] == "Add screen"
+    assert land_labels["delete"] == "Delete active screen"
+    assert land_labels["counter"].startswith("Screen ")
+
+    # Fallback to "page-N" when route_id is empty even in interactive mode.
+    _p_land.pages.append(_DPage73h(html="", title="Broken", route_id="", kind="screen"))
+    # __post_init__ synthesizes "page-3" for the bare page; re-check.
+    cap = navigator_item_caption(_p_land, 2)
+    assert cap[0] == "3"
+    assert cap[1] and cap[1].startswith("page-"), cap
+
+    # Out-of-range index returns safe defaults.
+    assert navigator_item_caption(_p_land, 99) == ("100", None)
+
+    # Storyboard + app_mockup also surface route labels.
+    _p_story = _DP73h(
+        id="__test73h_story__", name="Story", mode="storyboard",
+        pages=[_DPage73h(html="", title="Shot 1", route_id="shot-1", kind="shot")],
+    )
+    assert navigator_item_caption(_p_story, 0) == ("1", "shot-1")
+    _p_app = _DP73h(
+        id="__test73h_app__", name="App", mode="app_mockup",
+        pages=[_DPage73h(html="", title="Login", route_id="login", kind="screen")],
+    )
+    assert navigator_item_caption(_p_app, 0) == ("1", "login")
+
+    record("PASS", "73h: routes-aware navigator captions")
+except Exception as e:
+    record("FAIL", "73h-routes-navigator", f"{type(e).__name__}: {e}")
+
+# ── 73i. Phase 2.2 — Phone-frame chrome for app_mockup ───────────────
+try:
+    from designer.preview import (
+        get_preview_chrome as _chrome_73i,
+        PHONE_BEZEL_PADDING_PX,
+        PHONE_NOTCH_WIDTH_PX,
+    )
+    from designer.state import (
+        DesignerProject as _DP73i,
+    )
+
+    # Deck / landing / storyboard should NOT get phone chrome.
+    for _mode in ("deck", "document", "landing", "storyboard"):
+        _p = _DP73i(id=f"__test73i_{_mode}__", name="X", mode=_mode)
+        _info = _chrome_73i(_p)
+        assert _info["kind"] == "none", f"{_mode} should have no chrome, got {_info}"
+
+    # app_mockup gets a phone bezel + notch.
+    _p_app = _DP73i(id="__test73i_app__", name="App", mode="app_mockup")
+    _info = _chrome_73i(_p_app)
+    assert _info["kind"] == "phone"
+    for _key in ("bezel_style", "screen_style", "notch_style",
+                 "bezel_padding_px", "bezel_radius_px",
+                 "notch_width_px", "notch_height_px"):
+        assert _key in _info, f"missing chrome field: {_key}"
+    # Numeric invariants
+    assert _info["bezel_padding_px"] == PHONE_BEZEL_PADDING_PX
+    assert _info["notch_width_px"] == PHONE_NOTCH_WIDTH_PX
+    assert _info["bezel_radius_px"] >= _info["bezel_padding_px"]
+    # Bezel style contains padding + rounded corners.
+    assert "padding:" in _info["bezel_style"]
+    assert "border-radius:" in _info["bezel_style"]
+    # Notch is centered via transform: translateX(-50%).
+    assert "translateX(-50%)" in _info["notch_style"]
+    # Screen clips content with a radius slightly smaller than the bezel.
+    assert "overflow: hidden" in _info["screen_style"]
+
+    record("PASS", "73i: phone-frame chrome for app_mockup")
+except Exception as e:
+    record("FAIL", "73i-phone-chrome", f"{type(e).__name__}: {e}")
+
+# ── 73j. Phase 2.2 — Hotspot recorder helpers ────────────────────────
+try:
+    from designer.hotspot_recorder import (
+        build_hotspot_recorder_spec as _spec_73j,
+        record_hotspot as _record_73j,
+        is_interactive_project as _is_interactive_73j,
+        HOTSPOT_ACTION_CHOICES as _actions_73j,
+    )
+    from designer.state import (
+        DesignerProject as _DP73j,
+        DesignerPage as _DPG73j,
+    )
+
+    # Non-interactive modes refuse hotspot recording.
+    _deck = _DP73j(id="__73j_deck__", name="Deck", mode="deck",
+                   pages=[_DPG73j(html="<html><body><p>x</p></body></html>",
+                                   title="P1", route_id="home")])
+    _s = _spec_73j(_deck, {"elementId": "abc", "tag": "p"})
+    assert _s["available"] is False, "deck mode should not offer hotspot recorder"
+    assert _is_interactive_73j(_deck) is False
+
+    # Interactive project with two screens.
+    _html_src = (
+        '<!DOCTYPE html><html><body>'
+        '<button data-thoth-element-id="btn-abc">Go</button>'
+        '<p>hello</p>'
+        '</body></html>'
+    )
+    _p73j = _DP73j(
+        id="__73j_app__", name="App", mode="app_mockup",
+        pages=[
+            _DPG73j(html=_html_src, title="Home", route_id="home"),
+            _DPG73j(html="<html><body>x</body></html>",
+                    title="Details", route_id="details"),
+        ],
+    )
+    _p73j.active_page = 0
+
+    assert _is_interactive_73j(_p73j) is True
+
+    # Spec for a click on the button.
+    spec = _spec_73j(_p73j, {
+        "elementId": "btn-abc",
+        "tag": "button",
+        "text": "Go",
+    })
+    assert spec["available"] is True, spec
+    assert spec["source_route"] == "home"
+    assert spec["selector"] == '[data-thoth-element-id="btn-abc"]'
+    assert spec["element_id"] == "btn-abc"
+    # Route choices exclude current route.
+    _route_ids = [rid for rid, _ in spec["route_choices"]]
+    assert "details" in _route_ids and "home" not in _route_ids, spec
+    # Action choices match the canonical list.
+    assert spec["action_choices"] == list(_actions_73j)
+
+    # Missing identifier → unavailable.
+    bad_spec = _spec_73j(_p73j, {"tag": "button"})
+    assert bad_spec["available"] is False
+
+    # Record a navigate hotspot.
+    ok, msg = _record_73j(
+        _p73j,
+        source_route="home",
+        selector='[data-thoth-element-id="btn-abc"]',
+        action="navigate",
+        target="details",
+    )
+    assert ok, msg
+    assert 'data-thoth-action="navigate:details"' in _p73j.pages[0].html
+    assert len(_p73j.interactions) == 1
+    assert _p73j.interactions[0].action == "navigate"
+    assert _p73j.interactions[0].target == "details"
+
+    # Navigate to unknown route is rejected.
+    ok2, msg2 = _record_73j(
+        _p73j, source_route="home",
+        selector='[data-thoth-element-id="btn-abc"]',
+        action="navigate", target="nowhere",
+    )
+    assert ok2 is False and "not a known route" in msg2
+
+    # Toggle state accepts free-form target.
+    ok3, _ = _record_73j(
+        _p73j, source_route="home",
+        selector='[data-thoth-element-id="btn-abc"]',
+        action="toggle_state", target="menu-open",
+    )
+    assert ok3
+    assert 'data-thoth-action="toggle_state:menu-open"' in _p73j.pages[0].html
+
+    # Clear removes the attribute.
+    ok4, _ = _record_73j(
+        _p73j, source_route="home",
+        selector='[data-thoth-element-id="btn-abc"]',
+        action="clear",
+    )
+    assert ok4
+    assert "data-thoth-action" not in _p73j.pages[0].html
+
+    # Unknown selector → error.
+    ok5, msg5 = _record_73j(
+        _p73j, source_route="home",
+        selector='[data-thoth-element-id="does-not-exist"]',
+        action="navigate", target="details",
+    )
+    assert ok5 is False and "matched no element" in msg5
+
+    record("PASS", "73j: hotspot recorder helpers")
+except Exception as e:
+    record("FAIL", "73j-hotspot-recorder", f"{type(e).__name__}: {e}")
+
+# ── 73k. Phase 2.2 — Route graph helpers ─────────────────────────────
+try:
+    from designer.route_graph import (
+        build_route_graph as _rg_73k,
+        route_graph_summary as _rgs_73k,
+    )
+    from designer.state import (
+        DesignerProject as _DP73k,
+        DesignerPage as _DPG73k,
+        DesignerInteraction as _DI73k,
+    )
+
+    # Non-interactive project — empty graph.
+    _deck = _DP73k(id="__73k_deck__", name="Deck", mode="deck",
+                   pages=[_DPG73k(title="P1", route_id="home")])
+    _g = _rg_73k(_deck)
+    assert _g["mode"] == "deck"
+    assert _g["nodes"] == [] and _g["edges"] == []
+
+    # Interactive project with three screens + edges.
+    _pages = [
+        _DPG73k(title="Home", route_id="home"),
+        _DPG73k(title="Details", route_id="details"),
+        _DPG73k(title="Cart", route_id="cart"),
+        _DPG73k(title="Orphan", route_id="orphan"),
+    ]
+    _interactions = [
+        _DI73k(source_route="home", selector="#a", action="navigate",
+               target="details", event="click", transition="fade"),
+        _DI73k(source_route="details", selector="#b", action="navigate",
+               target="cart", event="click", transition="slide"),
+        # Non-navigate interaction should be ignored.
+        _DI73k(source_route="home", selector="#c", action="toggle_state",
+               target="menu", event="click"),
+        # Edge referencing a missing route should be dropped.
+        _DI73k(source_route="home", selector="#d", action="navigate",
+               target="ghost"),
+    ]
+    _p73k = _DP73k(id="__73k_app__", name="App", mode="app_mockup",
+                   pages=_pages)
+    _p73k.interactions.extend(_interactions)
+
+    _g = _rg_73k(_p73k)
+    assert _g["mode"] == "app_mockup"
+    assert _g["entry"] == "home"
+    _node_ids = [n["route_id"] for n in _g["nodes"]]
+    assert _node_ids == ["home", "details", "cart", "orphan"], _node_ids
+    _edges = [(e["source"], e["target"]) for e in _g["edges"]]
+    assert _edges == [("home", "details"), ("details", "cart")], _edges
+    # Home reachable + entry flag; orphan unreachable.
+    _by_id = {n["route_id"]: n for n in _g["nodes"]}
+    assert _by_id["home"]["is_entry"] is True
+    assert _by_id["home"]["reachable"] is True
+    assert _by_id["details"]["reachable"] is True
+    assert _by_id["cart"]["reachable"] is True
+    assert _by_id["orphan"]["reachable"] is False
+    # Degrees.
+    assert _by_id["home"]["out_degree"] == 1
+    assert _by_id["home"]["in_degree"] == 0
+    assert _by_id["details"]["out_degree"] == 1
+    assert _by_id["details"]["in_degree"] == 1
+    assert _by_id["cart"]["in_degree"] == 1
+    # Orphan list.
+    assert _g["orphans"] == ["orphan"], _g["orphans"]
+
+    # Summary string mentions orphan count.
+    _summary = _rgs_73k(_p73k)
+    assert "4 screens" in _summary and "2 links" in _summary
+    assert "entry: home" in _summary and "1 orphan" in _summary
+
+    # Empty interactive project — no screens.
+    _empty = _DP73k(id="__73k_empty__", name="Empty", mode="landing",
+                    pages=[])
+    _g_empty = _rg_73k(_empty)
+    assert _g_empty["mode"] == "landing"
+    assert _g_empty["nodes"] == []
+    assert _rgs_73k(_empty) == "No interactive screens."
+
+    record("PASS", "73k: route graph helpers")
+except Exception as e:
+    record("FAIL", "73k-route-graph", f"{type(e).__name__}: {e}")
+
+# ── 73l. Phase 2.2 — Agent-mutation diff helpers ─────────────────────
+try:
+    from designer.mutation_diff import (
+        compute_html_diff as _diff_73l,
+        find_last_agent_snapshot as _last_agent_73l,
+        diff_last_agent_change as _diff_last_73l,
+    )
+    from designer.history import (
+        snapshot as _snap_73l,
+        list_snapshots as _list_snaps_73l,
+        delete_history as _del_hist_73l,
+    )
+    from designer.state import (
+        DesignerProject as _DP73l,
+        DesignerPage as _DPG73l,
+    )
+
+    # Pure diff helper — identical strings return empty string.
+    assert _diff_73l("same", "same") == ""
+    _d = _diff_73l("line1\nline2\n", "line1\nLINE2\n")
+    assert "-line2" in _d and "+LINE2" in _d, _d
+
+    # Build a project + snapshot flow.
+    _pid = "__test73l__"
+    _del_hist_73l(_pid)  # clean slate
+    _pages_before = [
+        _DPG73l(html="<p>alpha</p>\n", title="Alpha", route_id="alpha"),
+        _DPG73l(html="<p>beta</p>\n", title="Beta", route_id="beta"),
+    ]
+    _proj = _DP73l(id=_pid, name="Diff Test", mode="app_mockup",
+                   pages=_pages_before)
+
+    # No agent snapshot yet → unavailable.
+    assert _last_agent_73l(_proj) is None
+    _res = _diff_last_73l(_proj)
+    assert _res["available"] is False
+    assert "No recorded agent changes" in _res["reason"]
+
+    # User snapshot should NOT count as an agent change.
+    _snap_73l(_proj, label="user_edit", author="user")
+    assert _last_agent_73l(_proj) is None
+
+    # Take an agent snapshot, then mutate pages (modify + add).
+    import time as _time_73l
+    _time_73l.sleep(0.01)
+    _snap_73l(_proj, label="update_page_0", author="agent")
+
+    _proj.pages[0].html = "<p>ALPHA-MODIFIED</p>\n"
+    _proj.pages.append(
+        _DPG73l(html="<p>gamma</p>\n", title="Gamma", route_id="gamma")
+    )
+
+    _res = _diff_last_73l(_proj)
+    assert _res["available"] is True, _res
+    assert _res["label"] == "update_page_0"
+    assert len(_res["pages"]) == 3, _res
+    # Page 0 modified.
+    assert _res["pages"][0]["change"] == "modified"
+    assert _res["pages"][0]["lines_added"] >= 1
+    assert _res["pages"][0]["lines_removed"] >= 1
+    assert "ALPHA-MODIFIED" in _res["pages"][0]["unified_diff"]
+    # Page 1 unchanged.
+    assert _res["pages"][1]["change"] == "unchanged"
+    assert _res["pages"][1]["unified_diff"] == ""
+    # Page 2 added.
+    assert _res["pages"][2]["change"] == "added"
+    assert _res["pages"][2]["lines_added"] >= 1
+    assert _res["total_added"] >= 2
+
+    # Snapshot listing should include the author field.
+    _snaps = _list_snaps_73l(_pid)
+    assert any(s.get("author") == "agent" for s in _snaps)
+    assert any(s.get("author") == "user" for s in _snaps)
+
+    _del_hist_73l(_pid)
+
+    record("PASS", "73l: agent-mutation diff helpers")
+except Exception as e:
+    record("FAIL", "73l-mutation-diff", f"{type(e).__name__}: {e}")
+
+# ── 73m. Phase 2.2 — Publish QR lightbox helpers ─────────────────────
+try:
+    from designer.qr_utils import (
+        generate_qr_png_b64 as _qr_73m,
+        decode_qr_data_uri as _qr_decode_73m,
+    )
+
+    # Empty URL → empty string (caller shows a fallback).
+    assert _qr_73m("") == ""
+    assert _qr_73m("   ") == ""
+
+    # Well-formed URL → data URI with a decodable PNG payload.
+    uri = _qr_73m("https://example.com/deck/abc")
+    # If qrcode library is missing the helper returns "" — that's still
+    # valid behaviour, but the library IS listed in requirements.txt so
+    # we expect a real QR in tests.
+    assert uri.startswith("data:image/png;base64,"), uri[:40]
+    raw = _qr_decode_73m(uri)
+    assert len(raw) > 64, f"QR PNG suspiciously small: {len(raw)} bytes"
+    # PNG magic header.
+    assert raw[:8] == b"\x89PNG\r\n\x1a\n", raw[:8]
+
+    # Non-data-uri input to the decoder returns empty bytes.
+    assert _qr_decode_73m("https://example.com") == b""
+
+    # Importing share_dialog must not raise and must expose the QR helper.
+    import designer.share_dialog as _sd_73m
+    assert hasattr(_sd_73m, "show_share_dialog")
+    assert _sd_73m.generate_qr_png_b64 is _qr_73m
+
+    record("PASS", "73m: publish QR lightbox helpers")
+except Exception as e:
+    record("FAIL", "73m-qr-lightbox", f"{type(e).__name__}: {e}")
+
+# ── 73p. Phase 2.2 — Inner data-thoth-route attrs must not hide content ──
+# Regression: the agent often emits <div class="page" data-thoth-route="home">
+# inside the body of each page.  Our runtime CSS used to select
+# [data-thoth-route] broadly, which hid that inner div (only the outer
+# <section> got data-thoth-route-active).  The fix is to scope visibility to
+# a dedicated [data-thoth-route-host] marker attached only to our outer
+# section, so stray inner data-thoth-route attributes no longer collapse the
+# page to a blank background.
+try:
+    from designer.preview import render_multi_route_html as _rmr73p
+    from designer.state import DesignerProject as _DP73p, DesignerPage as _DPage73p
+
+    _inner_html73p = (
+        '<!DOCTYPE html><html data-thoth-route="home"><head>'
+        '<style>body{background:#222}.page{padding:40px}</style>'
+        '</head><body>'
+        '<div class="page" data-thoth-route="home">'
+        '<h1 data-visible-marker="home-hero">Home Hero</h1>'
+        '<p>Marketing copy.</p>'
+        '</div>'
+        '</body></html>'
+    )
+    _p73p = _DP73p(
+        id="__test73p__", name="Landing", mode="landing",
+        pages=[
+            _DPage73p(html=_inner_html73p, title="Home", route_id="home"),
+            _DPage73p(
+                html=(
+                    '<!DOCTYPE html><html><head></head><body>'
+                    '<div class="page" data-thoth-route="features">'
+                    '<h1>Features</h1></div></body></html>'
+                ),
+                title="Features",
+                route_id="features",
+            ),
+        ],
+    )
+    _out73p = _rmr73p(_p73p)
+
+    # Outer host sections present and unique.
+    assert _out73p.count('data-thoth-route-host="1"') == 2, (
+        f"expected 2 host sections, got {_out73p.count('data-thoth-route-host=')}"
+    )
+    assert '<section data-thoth-route-host="1" data-thoth-route="home"' in _out73p
+    assert '<section data-thoth-route-host="1" data-thoth-route="features"' in _out73p
+
+    # Inner agent-authored data-thoth-route attribute still present on the
+    # div (we do NOT strip it) but is NOT targeted by the runtime CSS.
+    assert 'class="page" data-thoth-route="home"' in _out73p
+    assert 'data-visible-marker="home-hero"' in _out73p
+
+    # Runtime CSS must scope visibility exclusively to data-thoth-route-host.
+    assert '[data-thoth-route-host]' in _out73p
+    # Critical: the old broad selector "[data-thoth-route]" (no suffix) must
+    # not appear as a CSS rule — only the -host variant and per-section
+    # attribute selectors.
+    import re as _re73p
+    _bare_route_css = _re73p.findall(
+        r'\[data-thoth-route\](?![\w-])', _out73p
+    )
+    assert not _bare_route_css, (
+        f"bare [data-thoth-route] CSS selector leaked into runtime: {_bare_route_css[:3]}"
+    )
+
+    # Runtime JS must query host sections, not bare data-thoth-route.
+    assert 'querySelectorAll("[data-thoth-route-host]")' in _out73p
+
+    record("PASS", "73p: inner data-thoth-route attrs do not hide page content")
+except Exception as e:
+    record("FAIL", "73p-inner-route-regression", f"{type(e).__name__}: {e}")
+
+# ── 73q. Phase 2.2 — Mode-aware aspect defaults + new viewports ────────
+# Real-world use case: a Landing page is a tall scrollable document; an App
+# Mockup is a device screen (phone or desktop). The old defaults forced
+# every interactive mode into a 1920×1080 slide, which caused landing pages
+# to cram all their sections into one overflow:hidden block.
+try:
+    from designer.state import (
+        ASPECT_RATIOS as _AR73q,
+        DESIGNER_MODES as _DM73q,
+        default_aspect_for_mode,
+    )
+
+    # New aspect ratios exposed for interactive modes.
+    assert "landing" in _AR73q and _AR73q["landing"][0] >= 1200
+    assert "phone" in _AR73q and _AR73q["phone"] == (390, 844)
+    assert "desktop" in _AR73q and _AR73q["desktop"] == (1440, 900)
+
+    # Every declared mode carries a default_aspect that resolves to a
+    # registered ratio.
+    for _mk, _mi in _DM73q.items():
+        _da = _mi.get("default_aspect")
+        assert _da in _AR73q, f"mode {_mk!r} default_aspect {_da!r} not in ASPECT_RATIOS"
+
+    # Mode-specific defaults match real-world use:
+    assert default_aspect_for_mode("deck") == "16:9"
+    assert default_aspect_for_mode("document") == "A4"
+    assert default_aspect_for_mode("landing") == "landing"
+    assert default_aspect_for_mode("app_mockup") == "phone"
+    assert default_aspect_for_mode("storyboard") == "16:9"
+    # Unknown modes fall through to the deck default.
+    assert default_aspect_for_mode("nonsense") == "16:9"
+
+    record("PASS", "73q: mode-aware aspect defaults + new viewports")
+except Exception as e:
+    record("FAIL", "73q-aspect-defaults", f"{type(e).__name__}: {e}")
+
+# ── 73r. Phase 2.2 — setup_flow picks mode-default aspect on Blank Canvas ─
+# Regression for user-reported bug: picking Landing mode on Blank Canvas
+# kept the template's 16:9 / 1920×1080 aspect, producing a squished
+# landing page.  Expected: landing → landing viewport, app_mockup → phone,
+# deck stays 16:9, and caller-provided aspect_ratio overrides the default.
+try:
+    from designer.setup_flow import create_project_from_setup as _cpfs73r
+
+    _pl73r = _cpfs73r("blank_canvas", mode="landing")
+    assert _pl73r.mode == "landing"
+    assert _pl73r.aspect_ratio == "landing", (
+        f"landing mode on blank_canvas should land on landing aspect, got {_pl73r.aspect_ratio!r}"
+    )
+    assert _pl73r.canvas_width == 1440 and _pl73r.canvas_height >= 2400
+
+    _pa73r = _cpfs73r("blank_canvas", mode="app_mockup")
+    assert _pa73r.mode == "app_mockup"
+    assert _pa73r.aspect_ratio == "phone", (
+        f"app_mockup on blank_canvas should land on phone aspect, got {_pa73r.aspect_ratio!r}"
+    )
+    assert (_pa73r.canvas_width, _pa73r.canvas_height) == (390, 844)
+
+    _pd73r = _cpfs73r("blank_canvas", mode="deck")
+    assert _pd73r.mode == "deck"
+    assert _pd73r.aspect_ratio == "16:9"
+    assert (_pd73r.canvas_width, _pd73r.canvas_height) == (1920, 1080)
+
+    # Explicit aspect_ratio still wins over the mode default.
+    _po73r = _cpfs73r("blank_canvas", mode="landing", aspect_ratio="9:16")
+    assert _po73r.aspect_ratio == "9:16", (
+        "explicit aspect_ratio must override mode default"
+    )
+
+    record("PASS", "73r: setup_flow picks mode-default aspect on Blank Canvas")
+except Exception as e:
+    record("FAIL", "73r-setup-mode-aspect", f"{type(e).__name__}: {e}")
+
+
+# ── 74a. Phase 2.3.A — Template.mode + get_templates_for_mode ─────────────
+try:
+    from designer.templates import (
+        Template as _Tmpl74a,
+        get_templates as _get_templates_74a,
+        get_templates_for_mode as _tmpls_for_mode_74a,
+        get_template as _get_template_74a,
+    )
+    from designer.state import DESIGNER_MODES as _MODES74a
+
+    # Template dataclass exposes a mode field that defaults to "deck".
+    _default_tmpl_74a = _Tmpl74a(
+        id="__x74a__", name="x", category="General",
+        description="", aspect_ratio="16:9", pages=[],
+    )
+    assert _default_tmpl_74a.mode == "deck", (
+        f"Template.mode default should be 'deck', got {_default_tmpl_74a.mode!r}"
+    )
+
+    # Every built-in template carries a valid mode.
+    for _t74a in _get_templates_74a():
+        assert _t74a.mode in _MODES74a, (
+            f"Template {_t74a.id!r} has invalid mode {_t74a.mode!r}"
+        )
+
+    # Seeded modes match plan: status_report / marketing_one_pager are
+    # documents; the rest are decks (for now — 2.3.G adds interactive
+    # templates).
+    assert (_get_template_74a("status_report") or _Tmpl74a(id="", name="", category="", description="", aspect_ratio="", pages=[])).mode == "document"
+    assert (_get_template_74a("marketing_one_pager") or _Tmpl74a(id="", name="", category="", description="", aspect_ratio="", pages=[])).mode == "document"
+    assert (_get_template_74a("pitch_deck") or _Tmpl74a(id="", name="", category="", description="", aspect_ratio="", pages=[])).mode == "deck"
+    assert (_get_template_74a("blank_canvas") or _Tmpl74a(id="", name="", category="", description="", aspect_ratio="", pages=[])).mode == "deck"
+
+    # get_templates_for_mode filters correctly.
+    _deck_only_74a = _tmpls_for_mode_74a("deck")
+    assert all(t.mode == "deck" for t in _deck_only_74a), "deck filter returned non-deck templates"
+    assert any(t.id == "pitch_deck" for t in _deck_only_74a), "pitch_deck missing from deck slice"
+
+    _doc_only_74a = _tmpls_for_mode_74a("document")
+    assert all(t.mode == "document" for t in _doc_only_74a), "document filter returned non-document templates"
+    assert any(t.id == "status_report" for t in _doc_only_74a), "status_report missing from document slice"
+
+    # Unknown / empty mode falls back to the full list.
+    assert len(_tmpls_for_mode_74a("")) == len(_get_templates_74a()), (
+        "empty mode should return all templates"
+    )
+    # Unknown mode returns an empty slice (pre-2.3.G; interactive modes
+    # have no seeded templates yet).
+    assert _tmpls_for_mode_74a("not_a_real_mode") == [], (
+        "unknown mode should return an empty slice"
+    )
+
+    record("PASS", "74a: Template.mode + get_templates_for_mode")
+except Exception as e:
+    record("FAIL", "74a-template-mode", f"{type(e).__name__}: {e}")
+
+
+# ── 74b. Phase 2.3.B — Blank starter per mode + legacy alias ──────────────
+try:
+    from designer.templates import (
+        get_template as _get_template_74b,
+        get_templates as _get_templates_74b,
+        get_templates_for_mode as _tmpls_for_mode_74b,
+    )
+    from designer.setup_flow import (
+        create_project_from_setup as _cpfs_74b,
+        default_project_name_for_template as _default_name_74b,
+    )
+
+    _expected_74b = {
+        "blank_deck":       ("deck",       "16:9"),
+        "blank_document":   ("document",   "A4"),
+        "blank_landing":    ("landing",    "landing"),
+        "blank_app_mockup": ("app_mockup", "phone"),
+        "blank_storyboard": ("storyboard", "16:9"),
+    }
+    for _tid74b, (_expected_mode, _expected_aspect) in _expected_74b.items():
+        _t74b = _get_template_74b(_tid74b)
+        assert _t74b is not None, f"starter {_tid74b!r} missing"
+        assert _t74b.mode == _expected_mode, (
+            f"{_tid74b} mode: expected {_expected_mode!r}, got {_t74b.mode!r}"
+        )
+        assert _t74b.aspect_ratio == _expected_aspect, (
+            f"{_tid74b} aspect: expected {_expected_aspect!r}, got {_t74b.aspect_ratio!r}"
+        )
+        assert _t74b.category == "Starters", (
+            f"{_tid74b} category should be 'Starters', got {_t74b.category!r}"
+        )
+
+    # Multi-route starters carry the right page count.
+    assert len(_get_template_74b("blank_app_mockup").pages) == 3, (
+        "blank_app_mockup should have 3 routes"
+    )
+    assert len(_get_template_74b("blank_storyboard").pages) == 4, (
+        "blank_storyboard should have 4 shots"
+    )
+
+    # Legacy blank_canvas alias still resolves, is in deck slice, does
+    # NOT duplicate a starter slot in the deck filter output.
+    _alias_74b = _get_template_74b("blank_canvas")
+    assert _alias_74b is not None, "blank_canvas alias must still resolve"
+    assert _alias_74b.mode == "deck", "blank_canvas alias should be deck mode"
+    _deck_slice_74b = _tmpls_for_mode_74b("deck")
+    _deck_ids_74b = [t.id for t in _deck_slice_74b]
+    assert "blank_deck" in _deck_ids_74b, "blank_deck missing from deck slice"
+    assert "blank_canvas" in _deck_ids_74b, "blank_canvas alias missing from deck slice"
+
+    # Each mode's slice contains exactly one blank starter for that mode.
+    for _mode74b, (_expect_mode, _) in _expected_74b.items():
+        _slice = _tmpls_for_mode_74b(_expect_mode)
+        _blanks_in_slice = [t.id for t in _slice if t.id.startswith("blank_")]
+        assert _mode74b in _blanks_in_slice, (
+            f"{_mode74b} missing from {_expect_mode} slice (got {_blanks_in_slice!r})"
+        )
+
+    # Blank starters default project name back to "Untitled Design".
+    assert _default_name_74b("blank_landing") == "Untitled Design", (
+        "blank_landing should default to 'Untitled Design'"
+    )
+    assert _default_name_74b("blank_app_mockup") == "Untitled Design"
+
+    # Creating a project from each blank starter yields the right mode
+    # + canvas without the caller specifying a mode.
+    _pl_74b = _cpfs_74b("blank_landing")
+    assert _pl_74b.mode == "landing"
+    assert _pl_74b.aspect_ratio == "landing"
+    assert _pl_74b.canvas_width == 1440 and _pl_74b.canvas_height >= 2400
+
+    _pa_74b = _cpfs_74b("blank_app_mockup")
+    assert _pa_74b.mode == "app_mockup"
+    assert (_pa_74b.canvas_width, _pa_74b.canvas_height) == (390, 844)
+    assert len(_pa_74b.pages) == 3
+
+    _ps_74b = _cpfs_74b("blank_storyboard")
+    assert _ps_74b.mode == "storyboard"
+    assert len(_ps_74b.pages) == 4
+
+    # Landing blank starter HTML is scrollable-ready: has .page wrapper,
+    # uses min-height viewport, does NOT lock body to fixed px height.
+    _landing_html_74b = _get_template_74b("blank_landing").pages[0]["html"]
+    assert 'class="page"' in _landing_html_74b, "landing starter missing .page wrapper"
+    assert "min-height:100vh" in _landing_html_74b.replace(" ", ""), (
+        "landing starter should use min-height:100vh on body"
+    )
+    # overflow-x:hidden is fine; full overflow:hidden on body is NOT.
+    _body_css_74b = _landing_html_74b[_landing_html_74b.find("<style>"):_landing_html_74b.find("</style>")]
+    assert "height:100vh" not in _body_css_74b.replace(" ", "") or "min-height:100vh" in _body_css_74b.replace(" ", ""), (
+        "landing starter must not fix body to 100vh without min-"
+    )
+
+    record("PASS", "74b: Blank starters per mode + legacy alias")
+except Exception as e:
+    record("FAIL", "74b-blank-starters", f"{type(e).__name__}: {e}")
+
+
+# ── 74c. Phase 2.3.C — Mode picker primary control + resolve via template ─
+try:
+    from designer.setup_flow import (
+        DESIGNER_MODE_PICKER_CHOICES as _PICKER_74c,
+        DESIGNER_MODE_CHOICES as _ALL_CHOICES_74c,
+        MODE_CHOICE_AUTO as _AUTO_74c,
+        resolve_project_mode as _resolve_mode_74c,
+        create_project_from_setup as _cpfs_74c,
+    )
+    from designer.state import ProjectBrief as _PB_74c
+
+    # Picker list excludes "auto" (UI never offers it).
+    _picker_keys_74c = [k for k, _ in _PICKER_74c]
+    assert _AUTO_74c not in _picker_keys_74c, (
+        "DESIGNER_MODE_PICKER_CHOICES must not include the 'auto' choice"
+    )
+    # All 5 real modes present.
+    for _m in ("deck", "document", "landing", "app_mockup", "storyboard"):
+        assert _m in _picker_keys_74c, f"picker missing mode {_m!r}"
+    # Legacy DESIGNER_MODE_CHOICES still has auto for back-compat.
+    assert _AUTO_74c in [k for k, _ in _ALL_CHOICES_74c], (
+        "DESIGNER_MODE_CHOICES (legacy) must still expose 'auto'"
+    )
+
+    # resolve_project_mode now prefers template.mode over output_type
+    # inference. Pitch deck is deck mode; status_report is document.
+    _r1 = _resolve_mode_74c(_AUTO_74c, brief=_PB_74c(), template_id="status_report")
+    assert _r1 == "document", (
+        f"auto + status_report should resolve to 'document', got {_r1!r}"
+    )
+    _r2 = _resolve_mode_74c(_AUTO_74c, brief=_PB_74c(), template_id="blank_landing")
+    assert _r2 == "landing", (
+        f"auto + blank_landing should resolve to 'landing', got {_r2!r}"
+    )
+    # Explicit mode still wins over template.mode.
+    _r3 = _resolve_mode_74c("deck", brief=_PB_74c(), template_id="blank_landing")
+    assert _r3 == "deck", "explicit mode must override template.mode"
+
+    # Picking a blank starter + switching mode rewrites canvas
+    # (tmpl.id.startswith('blank_') branch).
+    _p74c = _cpfs_74c("blank_deck", mode="landing")
+    assert _p74c.mode == "landing"
+    assert _p74c.aspect_ratio == "landing", (
+        f"blank_deck + landing mode should rewrite to landing aspect, got {_p74c.aspect_ratio!r}"
+    )
+
+    # template_gallery module imports + initializes without error.
+    import importlib as _imp_74c
+    _tg_74c = _imp_74c.import_module("designer.template_gallery")
+    # Reload to catch syntax issues under a fresh parse.
+    _imp_74c.reload(_tg_74c)
+    assert hasattr(_tg_74c, "show_new_project_dialog"), "gallery entrypoint missing"
+    # Module source no longer references _OUTPUT_TYPE_OPTIONS in the
+    # dialog body (field removed from form).
+    import inspect as _inspect_74c
+    _src_74c = _inspect_74c.getsource(_tg_74c.show_new_project_dialog)
+    assert "Output type" not in _src_74c, (
+        "Output type label should be removed from setup dialog (2.3.C)"
+    )
+    assert "What are you making?" in _src_74c, (
+        "Setup dialog must show 'What are you making?' mode picker (2.3.C)"
+    )
+
+    record("PASS", "74c: Mode picker primary control + template.mode resolve")
+except Exception as e:
+    record("FAIL", "74c-mode-primary", f"{type(e).__name__}: {e}")
+
+
+# ── 74d. Phase 2.3.D — Gallery mode-filtered + starter fallback ───────────
+try:
+    from designer.templates import (
+        get_templates_for_mode as _tmpls_mode_74d,
+        get_template as _get_t_74d,
+    )
+    import inspect as _inspect_74d
+    import designer.template_gallery as _tg_74d
+
+    # Gallery source filters by mode before category.
+    _grid_src_74d = _inspect_74d.getsource(_tg_74d.show_new_project_dialog)
+    assert "get_templates_for_mode(selected_mode[\"value\"])" in _grid_src_74d, (
+        "gallery must filter by mode first (Phase 2.3.D)"
+    )
+    assert "_starter_for_mode" in _grid_src_74d, (
+        "gallery must expose _starter_for_mode helper"
+    )
+
+    # Each known mode has a matching blank starter the helper can land on.
+    for _mode_74d in ("deck", "document", "landing", "app_mockup", "storyboard"):
+        _slice_74d = _tmpls_mode_74d(_mode_74d)
+        _starter_ids_74d = [t.id for t in _slice_74d if t.id.startswith("blank_")]
+        assert f"blank_{_mode_74d}" in _starter_ids_74d, (
+            f"mode {_mode_74d!r} is missing its blank starter"
+        )
+
+    # When mode changes, if current template isn't in the new mode's
+    # slice, a starter exists to swap to. Confirm by iterating: every
+    # non-matching template must be replaceable with the mode's starter.
+    for _mode_74d in ("deck", "document", "landing", "app_mockup", "storyboard"):
+        _starter_74d = f"blank_{_mode_74d}"
+        _t_74d = _get_t_74d(_starter_74d)
+        assert _t_74d is not None, f"starter {_starter_74d!r} missing"
+        assert _t_74d.mode == _mode_74d, (
+            f"starter {_starter_74d!r} mode mismatch: {_t_74d.mode!r}"
+        )
+
+    # Empty mode still returns the full list (back-compat for callers
+    # not yet mode-aware).
+    from designer.templates import get_templates as _all_74d
+    assert len(_tmpls_mode_74d("")) == len(_all_74d()), "empty mode != full list"
+
+    record("PASS", "74d: Gallery mode-filtered + starter fallback")
+except Exception as e:
+    record("FAIL", "74d-gallery-filter", f"{type(e).__name__}: {e}")
+
+
+# ── 74e. Phase 2.3.E — canvas_choices_for_mode + mode-aware canvas UI ─────
+try:
+    from designer.setup_flow import canvas_choices_for_mode as _canvas_74e
+    from designer.state import ASPECT_RATIOS as _AR_74e, default_aspect_for_mode as _def_74e
+    import inspect as _inspect_74e
+    import designer.template_gallery as _tg_74e
+
+    # Each mode returns a non-empty list of (key, label) tuples, every
+    # key present in ASPECT_RATIOS.
+    _expected_modes_74e = {"deck", "document", "landing", "app_mockup", "storyboard"}
+    for _m in _expected_modes_74e:
+        _choices = _canvas_74e(_m)
+        assert _choices, f"mode {_m!r} returned no canvas choices"
+        for _key, _label in _choices:
+            assert _key in _AR_74e, f"mode {_m!r} offers unknown aspect {_key!r}"
+            assert isinstance(_label, str) and _label.strip(), (
+                f"mode {_m!r} has empty label for {_key!r}"
+            )
+        # Mode's default aspect appears in its choice list.
+        _default = _def_74e(_m)
+        assert _default in [k for k, _ in _choices], (
+            f"mode {_m!r} default aspect {_default!r} missing from choices"
+        )
+
+    # Per-mode content sanity:
+    _deck_keys_74e = [k for k, _ in _canvas_74e("deck")]
+    assert "16:9" in _deck_keys_74e and "4:3" in _deck_keys_74e
+    _doc_keys_74e = [k for k, _ in _canvas_74e("document")]
+    assert "A4" in _doc_keys_74e and "letter" in _doc_keys_74e
+    assert "landing" in [k for k, _ in _canvas_74e("landing")]
+    _app_keys_74e = [k for k, _ in _canvas_74e("app_mockup")]
+    assert "phone" in _app_keys_74e and "desktop" in _app_keys_74e
+    _story_keys_74e = [k for k, _ in _canvas_74e("storyboard")]
+    assert "16:9" in _story_keys_74e and "9:16" in _story_keys_74e
+
+    # Unknown mode falls back to deck choices.
+    assert _canvas_74e("not_a_mode") == _canvas_74e("deck")
+
+    # Gallery source now renders the canvas control via the new helper.
+    _src_74e = _inspect_74e.getsource(_tg_74e.show_new_project_dialog)
+    assert "_render_canvas_control" in _src_74e, (
+        "gallery must render canvas via _render_canvas_control (Phase 2.3.E)"
+    )
+    assert "canvas_choices_for_mode" in _src_74e, (
+        "gallery must import/use canvas_choices_for_mode"
+    )
+    # The flat all-ratios select must be gone.
+    assert 'label="Canvas ratio"' not in _src_74e, (
+        "legacy single 'Canvas ratio' select should be replaced by mode-aware control"
+    )
+
+    record("PASS", "74e: canvas_choices_for_mode + mode-aware canvas UI")
+except Exception as e:
+    record("FAIL", "74e-canvas-mode", f"{type(e).__name__}: {e}")
+
+
+# ── 74f. Phase 2.3.F — briefing derives label from mode, not output_type ──
+try:
+    from designer.briefing import build_initial_design_request as _build_req_74f
+    from designer.setup_flow import create_project_from_setup as _cpfs_74f
+    from designer.state import ProjectBrief as _PB_74f, DESIGNER_MODES as _MODES_74f
+
+    # Empty brief + landing mode → request mentions "landing page"
+    # (derived from DESIGNER_MODES label), NOT the generic "design".
+    _pl_74f = _cpfs_74f(
+        "blank_landing",
+        project_name="T",
+        brief=_PB_74f(build_description="x"),
+    )
+    _req_l_74f = _build_req_74f(_pl_74f)
+    assert "landing page" in _req_l_74f.lower(), (
+        f"landing request should mention 'landing page' (got: {_req_l_74f[:200]!r})"
+    )
+    assert "create the first draft of this design" not in _req_l_74f.lower(), (
+        "briefing should NOT fall back to generic 'design' when mode is known"
+    )
+    # "Project type:" still surfaces for non-deck modes.
+    assert "Project type:" in _req_l_74f
+
+    # Deck mode: first line uses "slide deck" (from DESIGNER_MODES label).
+    _pd_74f = _cpfs_74f(
+        "blank_deck",
+        project_name="T",
+        brief=_PB_74f(build_description="x"),
+    )
+    _req_d_74f = _build_req_74f(_pd_74f)
+    assert "slide deck" in _req_d_74f.lower(), (
+        f"deck request should mention 'slide deck' (got: {_req_d_74f[:200]!r})"
+    )
+    # Deck mode suppresses "Project type:" line (unchanged from 73g).
+    assert "Project type:" not in _req_d_74f
+
+    # Legacy brief.output_type still wins when set (back-compat).
+    _pd_legacy_74f = _cpfs_74f(
+        "blank_deck",
+        project_name="T",
+        brief=_PB_74f(output_type="Pitch deck", build_description="x"),
+    )
+    _req_legacy_74f = _build_req_74f(_pd_legacy_74f)
+    assert "pitch deck" in _req_legacy_74f.lower(), (
+        "brief.output_type should still override the mode-derived label when set"
+    )
+
+    # All 5 modes produce a usable label + no crash.
+    for _mode_74f, _mode_info_74f in _MODES_74f.items():
+        _starter_74f = f"blank_{_mode_74f}"
+        _p_74f = _cpfs_74f(_starter_74f, project_name="T", brief=_PB_74f(build_description="x"))
+        _r_74f = _build_req_74f(_p_74f)
+        assert _mode_info_74f["label"].lower() in _r_74f.lower(), (
+            f"mode {_mode_74f!r} request missing label {_mode_info_74f['label']!r}"
+        )
+
+    # briefing module source no longer falls back to "design" as the
+    # default label (the sentinel string is gone from the first line).
+    import inspect as _inspect_74f
+    import designer.briefing as _br_74f
+    _src_74f = _inspect_74f.getsource(_br_74f.build_initial_design_request)
+    assert 'or "design"' not in _src_74f, (
+        "briefing should derive default label from mode, not hardcoded 'design'"
+    )
+
+    record("PASS", "74f: briefing derives label from mode (output_type deprecated)")
+except Exception as e:
+    record("FAIL", "74f-brief-mode-label", f"{type(e).__name__}: {e}")
+
+
+# ── 74g. Phase 2.3.G — Interactive seed templates ────────────────────────
+try:
+    from designer.templates import (
+        get_template as _gt_74g,
+        get_templates as _gts_74g,
+        get_templates_for_mode as _gtfm_74g,
+    )
+    from designer.setup_flow import create_project_from_setup as _cpfs_74g
+    from designer.state import ProjectBrief as _PB_74g
+
+    _expected_74g = {
+        "landing_hero": ("landing", "landing", 1),
+        "app_mockup_starter": ("app_mockup", "phone", 3),
+        "storyboard_4shot": ("storyboard", "16:9", 4),
+    }
+    for _tid, (_mode, _aspect, _pages) in _expected_74g.items():
+        _t = _gt_74g(_tid)
+        assert _t is not None, f"template {_tid!r} missing"
+        assert _t.mode == _mode, f"{_tid}: mode {_t.mode!r} != {_mode!r}"
+        assert _t.aspect_ratio == _aspect, f"{_tid}: aspect {_t.aspect_ratio!r} != {_aspect!r}"
+        assert len(_t.pages) == _pages, f"{_tid}: {len(_t.pages)} pages, expected {_pages}"
+        # Each page has non-empty HTML.
+        for _p in _t.pages:
+            assert _p.get("html", "").strip(), f"{_tid}: page {_p.get('title')!r} has empty html"
+        # Category is NOT "Starters" (those are reserved for blanks).
+        assert _t.category != "Starters", f"{_tid}: should not be in Starters category"
+
+    # Interactive templates surface under their mode slice (alongside blanks).
+    _landing_ids = [t.id for t in _gtfm_74g("landing")]
+    assert "landing_hero" in _landing_ids
+    assert "blank_landing" in _landing_ids  # sanity — blanks still there
+
+    _app_ids = [t.id for t in _gtfm_74g("app_mockup")]
+    assert "app_mockup_starter" in _app_ids
+    assert "blank_app_mockup" in _app_ids
+
+    _story_ids = [t.id for t in _gtfm_74g("storyboard")]
+    assert "storyboard_4shot" in _story_ids
+    assert "blank_storyboard" in _story_ids
+
+    # Project creation succeeds for each and carries the right mode/aspect.
+    for _tid, (_mode, _aspect, _pages) in _expected_74g.items():
+        _proj = _cpfs_74g(_tid, project_name="T", brief=_PB_74g(build_description="x"))
+        assert _proj.mode == _mode, f"{_tid}: project.mode {_proj.mode!r} != {_mode!r}"
+        assert _proj.aspect_ratio == _aspect, f"{_tid}: project.aspect {_proj.aspect_ratio!r}"
+        assert len(_proj.pages) == _pages
+
+    # App mockup starter wires data-thoth-action navigation (interactive
+    # runtime contract).
+    _app_tpl = _gt_74g("app_mockup_starter")
+    assert _app_tpl is not None
+    _combined_html = " ".join(p["html"] for p in _app_tpl.pages)
+    assert "data-thoth-action=\"navigate:detail\"" in _combined_html
+    assert "data-thoth-action=\"navigate:home\"" in _combined_html
+    assert "data-thoth-action=\"navigate:settings\"" in _combined_html
+
+    # Landing hero has the responsive page scaffold.
+    _land_tpl = _gt_74g("landing_hero")
+    assert _land_tpl is not None
+    _land_html = _land_tpl.pages[0]["html"]
+    assert ".page" in _land_html and "min-height:100vh" in _land_html
+    # Pricing section present.
+    assert "pricing" in _land_html.lower()
+
+    record("PASS", "74g: interactive seed templates (landing/app_mockup/storyboard)")
+except Exception as e:
+    record("FAIL", "74g-interactive-seeds", f"{type(e).__name__}: {e}")
+
+
 try:
     _brand72b1 = BrandConfig(
         logo_b64="QUJD",
@@ -14645,24 +17304,28 @@ try:
     _dt72 = DesignerTool()
     _tools72 = _dt72.as_langchain_tools()
     _names72 = [t.name for t in _tools72]
-    assert len(_tools72) == 25, f"Expected 25 tools, got {len(_tools72)}: {_names72}"
+    assert len(_tools72) == 30, f"Expected 30 tools, got {len(_tools72)}: {_names72}"
     _expected72 = {
         "designer_set_pages", "designer_update_page", "designer_add_page",
         "designer_delete_page", "designer_move_page", "designer_get_project",
         "designer_get_page_html", "designer_get_reference", "designer_generate_notes",
         "designer_insert_component",
-        "designer_critique_page", "designer_apply_repairs",
+        "designer_critique_page", "designer_apply_repairs", "designer_brand_lint",
         "designer_set_brand", "designer_resize_project", "designer_export", "designer_publish_link",
-        "designer_generate_image", "designer_insert_image", "designer_move_image",
-        "designer_replace_image", "designer_move_element", "designer_duplicate_element",
+        "designer_generate_image", "designer_insert_image",
+        "designer_generate_video", "designer_insert_video",
+        "designer_move_image",
+        "designer_replace_image", "designer_remove_image",
+        "designer_move_element", "designer_duplicate_element",
         "designer_restyle_element", "designer_refine_text", "designer_add_chart",
+        "designer_set_mode",
     }
     _missing72 = _expected72 - set(_names72)
     assert not _missing72, f"Missing tools: {_missing72}"
     # Verify conditional binding: no tools when no project
     set_active_project(None)
     assert _dt72.as_langchain_tools() == [], "Expected [] when no active project"
-    record("PASS", f"72h: DesignerTool has all 25 sub-tools (conditional)")
+    record("PASS", f"72h: DesignerTool has all 30 sub-tools (conditional)")
 except Exception as e:
     set_active_project(None)
     record("FAIL", "72h-tool-registry", f"{type(e).__name__}: {e}")
@@ -14868,7 +17531,7 @@ try:
     assert 'width:600px' in _html72l
     record("PASS", "72l: asset image helper builds targetable escaped markup")
 except Exception as e:
-    record("FAIL", "72l-unsplash-html", f"{type(e).__name__}: {e}")
+    record("FAIL", "72l-asset-image-html", f"{type(e).__name__}: {e}")
 
 # ── 72m. Asset attribute escaping helper ─────────────────────────────────
 try:
@@ -14878,7 +17541,7 @@ try:
     assert _escape_attr72m("5 < 7 & yes") == "5 &lt; 7 &amp; yes"
     record("PASS", "72m: asset attribute escape helper")
 except Exception as e:
-    record("FAIL", "72m-unsplash-escape", f"{type(e).__name__}: {e}")
+    record("FAIL", "72m-asset-attr-escape", f"{type(e).__name__}: {e}")
 
 # ── 72n. Designer prompt includes all tool references ────────────────────
 try:
@@ -15817,6 +18480,264 @@ try:
     record("PASS", "72u: editor rename syncs thread name")
 except Exception as e:
     record("FAIL", "72u-editor-rename", f"{type(e).__name__}: {e}")
+
+# ═══════════════════════════════════════════════════════════════════
+# SECTION 73 · AUTO-UPDATE (v3.17.0)
+# ═══════════════════════════════════════════════════════════════════
+
+print()
+print("─" * 60)
+print("SECTION 73: Auto-Update")
+print("─" * 60)
+
+# 73a. updater module imports + exposes documented API
+try:
+    import importlib
+    _u73 = importlib.import_module("updater")
+    for _attr in ("UpdateInfo", "UpdateState", "check_for_updates",
+                  "download_update", "install_and_restart", "verify_os_signature",
+                  "get_update_state", "set_channel", "skip_version",
+                  "parse_manifest", "compare_versions", "summary_for_status",
+                  "start_update_scheduler", "stop_update_scheduler",
+                  "is_dev_install", "UpdateError"):
+        assert hasattr(_u73, _attr), f"updater.{_attr} missing"
+    record("PASS", "73a: updater module exposes full public API")
+except Exception as e:
+    record("FAIL", "73a-updater-api", f"{type(e).__name__}: {e}")
+
+# 73b. version comparison
+try:
+    import updater as _u73b
+    assert _u73b.compare_versions("3.17.0", "3.18.0") > 0
+    assert _u73b.compare_versions("3.17.0", "3.17.0") == 0
+    assert _u73b.compare_versions("3.17.0", "3.16.5") < 0
+    assert _u73b.compare_versions("not-a-version", "3.18.0") == 0  # invalid → no update
+    record("PASS", "73b: compare_versions handles valid + invalid")
+except Exception as e:
+    record("FAIL", "73b-compare", f"{type(e).__name__}: {e}")
+
+# 73c. manifest parser — happy path + missing block
+try:
+    import updater as _u73c
+    body = (
+        "# Notes\n\n<!-- thoth-update-manifest -->\n"
+        "```manifest\nschema: 1\nfiles:\n"
+        "  ThothSetup_3.18.0.exe: sha256=" + "a" * 64 + "\n"
+        "  Thoth-3.18.0-macOS-arm64.dmg: sha256=" + "b" * 64 + "\n"
+        "```\n"
+    )
+    parsed = _u73c.parse_manifest(body)
+    assert parsed["ThothSetup_3.18.0.exe"] == "a" * 64
+    assert parsed["Thoth-3.18.0-macOS-arm64.dmg"] == "b" * 64
+    assert _u73c.parse_manifest("") == {}
+    assert _u73c.parse_manifest("plain release notes, no manifest") == {}
+    # malformed line → ignored
+    bad = "<!-- thoth-update-manifest -->\n```manifest\nfiles:\n  bad-line\n```\n"
+    assert _u73c.parse_manifest(bad) == {}
+    record("PASS", "73c: parse_manifest handles happy + missing + malformed")
+except Exception as e:
+    record("FAIL", "73c-parse-manifest", f"{type(e).__name__}: {e}")
+
+# 73d. _parse_release picks platform-correct asset & extracts SHA from manifest
+try:
+    import updater as _u73d, platform as _plat73d
+    body = (
+        "Notes\n\n<!-- thoth-update-manifest -->\n"
+        "```manifest\nschema: 1\nfiles:\n"
+        "  ThothSetup_3.18.0.exe: sha256=" + "1" * 64 + "\n"
+        "  Thoth-3.18.0-macOS-arm64.dmg: sha256=" + "2" * 64 + "\n"
+        "```\n"
+    )
+    fake = {
+        "tag_name": "v3.18.0", "prerelease": False, "draft": False,
+        "published_at": "2026-05-01T12:00:00Z",
+        "html_url": "https://github.com/x/y/releases/tag/v3.18.0",
+        "body": body,
+        "assets": [
+            {"name": "ThothSetup_3.18.0.exe", "size": 1,
+             "browser_download_url": "https://github.com/x/y/d/ThothSetup_3.18.0.exe"},
+            {"name": "Thoth-3.18.0-macOS-arm64.dmg", "size": 1,
+             "browser_download_url": "https://github.com/x/y/d/Thoth-3.18.0-macOS-arm64.dmg"},
+        ],
+    }
+    info = _u73d._parse_release(fake, "stable")
+    if _plat73d.system() in ("Windows", "Darwin"):
+        assert info is not None, "expected a parsed release on Win/Mac"
+        assert info.version == "3.18.0"
+        assert info.sha256 and len(info.sha256) == 64
+    record("PASS", "73d: _parse_release extracts asset + sha256")
+except Exception as e:
+    record("FAIL", "73d-parse-release", f"{type(e).__name__}: {e}")
+
+# 73e. UpdateState round-trip + skipped_versions persistence
+try:
+    import json as _json73e, pathlib as _p73e, os as _os73e, importlib as _imp73e
+    # Use isolated data dir
+    _tmp_dir = _p73e.Path(_os73e.environ.get("TEMP", "/tmp")) / "thoth_test_updater"
+    _tmp_dir.mkdir(parents=True, exist_ok=True)
+    _saved_env = _os73e.environ.get("THOTH_DATA_DIR")
+    _os73e.environ["THOTH_DATA_DIR"] = str(_tmp_dir)
+    if "updater" in sys.modules:
+        del sys.modules["updater"]
+    import updater as _u73e
+    cfg = _tmp_dir / "update_config.json"
+    if cfg.exists():
+        cfg.unlink()
+    _u73e._state = None  # force reload
+    st = _u73e.get_update_state()
+    assert st.channel == "stable"
+    _u73e.skip_version("9.9.9")
+    _u73e.set_channel("beta")
+    # New process: reload state
+    _u73e._state = None
+    st2 = _u73e.get_update_state()
+    assert "9.9.9" in st2.skipped_versions
+    assert st2.channel == "beta"
+    # Restore
+    if _saved_env is None:
+        _os73e.environ.pop("THOTH_DATA_DIR", None)
+    else:
+        _os73e.environ["THOTH_DATA_DIR"] = _saved_env
+    if "updater" in sys.modules:
+        del sys.modules["updater"]
+    record("PASS", "73e: UpdateState persists channel + skipped_versions")
+except Exception as e:
+    record("FAIL", "73e-state-persist", f"{type(e).__name__}: {e}")
+
+# 73f. summary_for_status returns expected keys
+try:
+    import updater as _u73f
+    s = _u73f.summary_for_status()
+    for k in ("current_version", "channel", "auto_check", "last_check",
+              "last_success", "update_available", "available_version",
+              "skipped_versions", "dev_install"):
+        assert k in s, f"missing key {k}"
+    assert isinstance(s["update_available"], bool)
+    assert isinstance(s["skipped_versions"], list)
+    record("PASS", "73f: summary_for_status surface complete")
+except Exception as e:
+    record("FAIL", "73f-summary", f"{type(e).__name__}: {e}")
+
+# 73g. dev install detection — checkout has .git, so should be True
+try:
+    import updater as _u73g
+    is_dev = _u73g.is_dev_install()
+    # We're running in the repo, so this should be True
+    assert is_dev is True, f"expected dev_install True (running from checkout), got {is_dev}"
+    record("PASS", "73g: is_dev_install detects checkout")
+except Exception as e:
+    record("FAIL", "73g-dev-install", f"{type(e).__name__}: {e}")
+
+# 73h. updater_tool registered + exposes 2 langchain tools
+try:
+    import importlib as _imp73h
+    if "tools" in sys.modules:
+        _imp73h.reload(sys.modules["tools"])
+    else:
+        import tools  # noqa: F401
+    from tools import registry as _reg73h
+    t = _reg73h.get_tool("thoth_updater")
+    assert t is not None, "thoth_updater not registered"
+    names = [x.name for x in t.as_langchain_tools()]
+    assert "thoth_check_for_updates" in names
+    assert "thoth_install_update" in names
+    record("PASS", "73h: thoth_updater tool registered with both sub-tools")
+except Exception as e:
+    record("FAIL", "73h-tool-registration", f"{type(e).__name__}: {e}")
+
+# 73i. thoth_status 'updates' category exists
+try:
+    from tools.thoth_status_tool import _QUERY_HANDLERS as _qh73i
+    assert "updates" in _qh73i, "_QUERY_HANDLERS missing 'updates'"
+    out = _qh73i["updates"]()
+    assert "**Updates**" in out
+    assert "Current version" in out
+    record("PASS", "73i: thoth_status category 'updates' wired")
+except Exception as e:
+    record("FAIL", "73i-status-updates", f"{type(e).__name__}: {e}")
+
+# 73j. self_knowledge surfaces update_available line when set
+try:
+    import updater as _u73j
+    from updater import UpdateInfo as _UI73j
+    from self_knowledge import get_dynamic_state as _gds73j
+    _u73j._state = None  # force reload
+    st = _u73j.get_update_state()
+    st.available = _UI73j(
+        version="3.99.0", channel="stable", published_at="2026-05-01",
+        notes_md="x", notes_summary="x", asset_name="X.exe", asset_url="https://x",
+        asset_size=1, sha256="0" * 64, html_url="https://x", is_prerelease=False,
+    )
+    block = _gds73j()
+    assert "Update available: v3.99.0" in block, f"missing update line in: {block!r}"
+    # Cleanup
+    st.available = None
+    record("PASS", "73j: self_knowledge surfaces pending update")
+except Exception as e:
+    record("FAIL", "73j-self-knowledge", f"{type(e).__name__}: {e}")
+
+# 73k. CI manifest script — round-trip merge
+try:
+    from scripts.append_sha_manifest import build_manifest_block, merge_into_body
+    block = build_manifest_block({"a.exe": "x" * 64, "b.dmg": "y" * 64})
+    assert "schema: 1" in block
+    assert "a.exe: sha256=" + "x" * 64 in block
+    merged = merge_into_body("# Notes", block)
+    assert "<!-- thoth-update-manifest -->" in merged
+    # Replace not append on second call
+    block2 = build_manifest_block({"new.exe": "z" * 64})
+    merged2 = merge_into_body(merged, block2)
+    assert merged2.count("<!-- thoth-update-manifest -->") == 1
+    assert "new.exe" in merged2
+    assert "x" * 64 not in merged2  # old hash gone
+    record("PASS", "73k: append_sha_manifest builds + merges idempotently")
+except Exception as e:
+    record("FAIL", "73k-ci-manifest", f"{type(e).__name__}: {e}")
+
+# 73l. installer.iss declares CloseApplications=yes + bundles updater.py
+try:
+    iss = Path("installer/thoth_setup.iss").read_text(encoding="utf-8")
+    assert "CloseApplications=yes" in iss, "missing CloseApplications=yes"
+    assert "updater.py" in iss, "updater.py not bundled"
+    assert "updater_tool.py" in iss, "updater_tool.py not bundled"
+    assert "update_dialog.py" in iss, "update_dialog.py not bundled"
+    record("PASS", "73l: installer.iss bundles updater + close-apps flag")
+except Exception as e:
+    record("FAIL", "73l-iss-bundle", f"{type(e).__name__}: {e}")
+
+# 73m. status_bar wires the update pill
+try:
+    sb = Path("ui/status_bar.py").read_text(encoding="utf-8")
+    assert "_refresh_update_pill" in sb
+    assert "ui/update_dialog" in sb or "from ui.update_dialog" in sb
+    record("PASS", "73m: status_bar exposes update pill")
+except Exception as e:
+    record("FAIL", "73m-status-pill", f"{type(e).__name__}: {e}")
+
+# 73n. settings.py invokes build_update_section
+try:
+    s = Path("ui/settings.py").read_text(encoding="utf-8")
+    assert "build_update_section" in s, "settings.py must call build_update_section()"
+    record("PASS", "73n: settings preferences exposes update section")
+except Exception as e:
+    record("FAIL", "73n-settings", f"{type(e).__name__}: {e}")
+
+# 73o. app.py starts the update scheduler
+try:
+    a = Path("app.py").read_text(encoding="utf-8")
+    assert "start_update_scheduler" in a, "app.py must call start_update_scheduler"
+    record("PASS", "73o: app.py wires updater scheduler")
+except Exception as e:
+    record("FAIL", "73o-scheduler-wire", f"{type(e).__name__}: {e}")
+
+# 73p. tool_guides/updater_guide/SKILL.md exists with expected metadata
+try:
+    g = Path("tool_guides/updater_guide/SKILL.md").read_text(encoding="utf-8")
+    assert "name: updater_guide" in g
+    assert "thoth_updater" in g
+    record("PASS", "73p: updater_guide tool guide present")
+except Exception as e:
+    record("FAIL", "73p-tool-guide", f"{type(e).__name__}: {e}")
 
 
 print(f"  ✅ PASS: {PASS}")

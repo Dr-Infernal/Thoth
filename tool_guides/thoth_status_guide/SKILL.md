@@ -23,6 +23,7 @@ QUERYING STATUS (thoth_status):
 - Use category='tasks' to summarise active scheduled tasks.
 - Use category='vision' to check vision model, enabled state, and camera config.
 - Use category='image_gen' to check the current image generation model.
+- Use category='video_gen' to check the current video generation model.
 - Use category='voice' for TTS voice, speed, enabled state, and Whisper STT model.
 - Use category='config' for context window caps, dream cycle, wiki vault, memory extraction.
 - Use category='designer' to check designer project count and recent projects.
@@ -38,6 +39,8 @@ READING LOGS:
 CHANGING SETTINGS (thoth_update_setting):
 - All changes require user confirmation via an approval prompt.
 - Always explain what you're about to change and why before calling the tool.
+- After explaining the change, call thoth_update_setting directly so the approval prompt collects the confirmation.
+- Do NOT ask for a separate plain-text confirmation instead of calling the tool.
 - Supported settings:
   - model: switch the active LLM (value = model name)
   - name: change the assistant name (value = new name)
@@ -49,6 +52,7 @@ CHANGING SETTINGS (thoth_update_setting):
   - skill_toggle: enable or disable a skill (value = 'skill_name:on' or 'skill_name:off')
   - tool_toggle: enable or disable a tool (value = 'tool_name:on' or 'tool_name:off')
   - image_gen_model: set the image generation model (value = provider/model-id)
+  - video_gen_model: set the video generation model (value = provider/model-id)
   - run_dream_cycle: manually trigger the dream cycle now (value = 'now')
   - self_improvement: enable or disable self-improvement (value = 'on' or 'off')
 - When the user asks to turn on/off a tool or skill, use tool_toggle or skill_toggle.

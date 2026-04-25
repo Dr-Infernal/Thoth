@@ -276,6 +276,31 @@ def _scan_injection_patterns(text: str) -> str:
 import hashlib as _hashlib
 
 
+# Matches ``data:<mime>;base64,<payload>`` URIs with a long payload. Used
+# to redact inline binary images before they burn LLM context / skew the
+# token counter. See ``_redact_data_uris``.
+import re as _re_b64
+_DATA_URI_RE = _re_b64.compile(
+    r'data:([a-zA-Z0-9][a-zA-Z0-9+.\-/]*);base64,[A-Za-z0-9+/=\s]{200,}',
+    _re_b64.IGNORECASE,
+)
+
+
+def _redact_data_uris(text: str) -> str:
+    """Replace ``data:<mime>;base64,<...>`` URIs with a short placeholder.
+
+    The full content remains in the checkpoint / UI — this is only for
+    what the LLM sees and what the token counter measures.
+    """
+    if not text or "base64," not in text:
+        return text
+    def _sub(match):
+        mime = match.group(1)
+        approx_bytes = int(len(match.group(0)) * 0.75)
+        return f"[inline {mime} stripped, ~{approx_bytes} bytes]"
+    return _DATA_URI_RE.sub(_sub, text)
+
+
 def _summarize_tool_result(name: str, content: str) -> str:
     """Create a compact 1-line summary of a tool result (zero-latency heuristic).
 
@@ -301,7 +326,7 @@ def _summarize_tool_result(name: str, content: str) -> str:
 
 
 def _pre_model_trim(state: dict) -> dict:
-    """Trim conversation history to ~70% of the context window before each
+    """Trim conversation history to ~85% of the context window before each
     LLM call, and inject the current date/time so it is always accurate.
 
     Uses ``llm_input_messages`` so the full history stays intact in the
@@ -309,6 +334,28 @@ def _pre_model_trim(state: dict) -> dict:
     max_tokens = int(get_context_size() * 0.85)
 
     messages = list(state["messages"])
+
+    # ── Strip inline base64 data URIs from ALL tool outputs ──────────
+    # Designer HTML, plugin results, and some marker payloads carry
+    # ``data:<mime>;base64,<...>`` URIs that can be hundreds of KB
+    # each. They are meaningless to the LLM (it cannot "see" binary
+    # images this way) and burn context rapidly. We redact them here
+    # so the model receives a short placeholder instead. The UI +
+    # checkpoint still contain the full content; only the trimmed
+    # view sent to the LLM is affected.
+    for i, m in enumerate(messages):
+        if m.type != "tool":
+            continue
+        raw = _content_to_str(getattr(m, "content", ""))
+        if not raw or "base64," not in raw:
+            continue
+        stripped = _redact_data_uris(raw)
+        if stripped != raw:
+            messages[i] = ToolMessage(
+                content=stripped,
+                name=getattr(m, "name", None),
+                tool_call_id=m.tool_call_id,
+            )
 
     # ── Compress stale browser snapshots ─────────────────────────────
     # Each browser tool result can be ~25 K chars.  A multi-step browsing
@@ -872,6 +919,11 @@ import threading as _threading
 import contextvars as _contextvars
 _tlocal = _threading.local()
 
+# Serialises concurrent cache-miss builds in ``get_agent_graph`` so two
+# threads racing during warm-up share one compilation instead of
+# duplicating the work.
+_agent_cache_lock = _threading.Lock()
+
 # ContextVar for background workflow flag — MUST be ContextVar (not
 # threading.local) because LangGraph runs tools in executor threads
 # that inherit ContextVars but NOT threading.local storage.
@@ -945,6 +997,27 @@ def _should_summarize(agent, config: dict, user_input: str) -> bool:
         msgs = state.values.get("messages", [])
         if not msgs:
             return False
+
+        # Mirror the base64 redaction that ``_pre_model_trim`` does so
+        # the token estimate reflects what the LLM will actually see.
+        # Without this a single designer page with inline JPEGs can
+        # trip the 75% threshold every turn even though the redacted
+        # view sits at 10-15%.
+        _redacted = []
+        for _m in msgs:
+            if _m.type == "tool":
+                _raw = _content_to_str(getattr(_m, "content", ""))
+                if _raw and "base64," in _raw:
+                    _stripped = _redact_data_uris(_raw)
+                    if _stripped != _raw:
+                        _redacted.append(ToolMessage(
+                            content=_stripped,
+                            name=getattr(_m, "name", None),
+                            tool_call_id=_m.tool_call_id,
+                        ))
+                        continue
+            _redacted.append(_m)
+        msgs = _redacted
 
         # Need at least PROTECTED_TURNS + 1 human messages to have
         # something to summarize
@@ -1064,6 +1137,10 @@ def _do_summarize(agent, config: dict, model_override: str | None = None) -> Non
             content = _content_to_str(getattr(m, "content", ""))
             if not content:
                 continue
+            # Redact inline base64 so the summarizer doesn't waste
+            # context on binary image payloads.
+            if "base64," in content:
+                content = _redact_data_uris(content)
             # Cap individual messages so the summarizer prompt stays manageable
             if len(content) > 3000:
                 content = content[:3000] + " …[truncated]"
@@ -1091,9 +1168,20 @@ def _do_summarize(agent, config: dict, model_override: str | None = None) -> Non
         summary_text = _re.sub(r"</?think>", "", summary_text).strip()
 
         if summary_text:
-            # Record compression stats for anti-thrashing detection
+            # Record compression stats for anti-thrashing detection.
+            # Count ``_before_tokens`` against the *redacted* view of
+            # old_msgs so savings reflect what the LLM actually
+            # experiences — otherwise a single inline base64 image
+            # would make every compression look wildly successful and
+            # disable anti-thrash protection.
             import time as _time_mod
-            _before_tokens = sum(_message_tokens(m) for m in old_msgs)
+            def _m_tokens_redacted(_msg) -> int:
+                _c = _content_to_str(getattr(_msg, "content", ""))
+                if _c and "base64," in _c:
+                    _c2 = _redact_data_uris(_c)
+                    return _count_tokens(_c2) + 4
+                return _message_tokens(_msg)
+            _before_tokens = sum(_m_tokens_redacted(m) for m in old_msgs)
             _after_tokens = _count_tokens(summary_text)
             _prev_compressions = _summary_cache.get(thread_id, {}).get("compressions", [])
             _prev_compressions.append({
@@ -1254,6 +1342,27 @@ def get_token_usage(config: dict | None = None, model_override: str | None = Non
         if not msgs:
             return 0, max_tokens
 
+        # Apply the same base64 strip ``_pre_model_trim`` does so the
+        # badge reflects what the LLM actually sees. Without this the
+        # counter can show e.g. 2.0M / 262K because a single designer
+        # page carrying 4 inline JPEGs measures ~800K tokens raw but
+        # only ~4K after redaction.
+        _redacted = []
+        for _m in msgs:
+            if _m.type == "tool":
+                _raw = _content_to_str(getattr(_m, "content", ""))
+                if _raw and "base64," in _raw:
+                    _stripped = _redact_data_uris(_raw)
+                    if _stripped != _raw:
+                        _redacted.append(ToolMessage(
+                            content=_stripped,
+                            name=getattr(_m, "name", None),
+                            tool_call_id=_m.tool_call_id,
+                        ))
+                        continue
+            _redacted.append(_m)
+        msgs = _redacted
+
         # Account for cached summary — mirrors _pre_model_trim logic
         thread_id = (config.get("configurable") or {}).get("thread_id", "")
         if thread_id and thread_id in _summary_cache:
@@ -1314,110 +1423,109 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     cache_key = frozenset(enabled_tool_names) | frozenset({f"ctx:{get_context_size()}", f"model:{model_label}", f"bg:{is_background}", f"safety:{_mode}"})
 
     if cache_key not in _agent_cache:
-        # Collect LangChain tool wrappers for enabled tools
-        lc_tools = []
-        destructive_names: set[str] = set()
-        for name in enabled_tool_names:
-            tool_obj = tool_registry.get_tool(name)
-            if tool_obj is not None:
-                lc_tools.extend(tool_obj.as_langchain_tools())
-                destructive_names.update(tool_obj.destructive_tool_names)
+        with _agent_cache_lock:
+            if cache_key in _agent_cache:
+                return _agent_cache[cache_key]
+            # Collect LangChain tool wrappers for enabled tools
+            lc_tools = []
+            destructive_names: set[str] = set()
+            for name in enabled_tool_names:
+                tool_obj = tool_registry.get_tool(name)
+                if tool_obj is not None:
+                    lc_tools.extend(tool_obj.as_langchain_tools())
+                    destructive_names.update(tool_obj.destructive_tool_names)
 
-        # Append tools from enabled plugins (totally separate registry)
-        try:
-            from plugins import registry as plugin_registry_mod
-            lc_tools.extend(plugin_registry_mod.get_langchain_tools())
-            destructive_names.update(plugin_registry_mod.get_destructive_names())
-        except Exception as exc:
-            logger.debug("Plugin tool injection skipped: %s", exc)
+            # Append tools from enabled plugins (totally separate registry)
+            try:
+                from plugins import registry as plugin_registry_mod
+                lc_tools.extend(plugin_registry_mod.get_langchain_tools())
+                destructive_names.update(plugin_registry_mod.get_destructive_names())
+            except Exception as exc:
+                logger.debug("Plugin tool injection skipped: %s", exc)
 
-        # Append auto-generated tools for running channels (tool_factory)
-        try:
-            from channels.registry import running_channels as _running_channels
-            from channels.tool_factory import create_channel_tools as _create_ch_tools
-            for _ch in _running_channels():
-                try:
-                    _ch_tools = _create_ch_tools(_ch)
-                    lc_tools.extend(_ch_tools)
-                    logger.debug("Injected %d tools for channel %s",
-                                 len(_ch_tools), _ch.name)
-                except Exception as exc:
-                    logger.debug("Channel tool injection for %s skipped: %s",
-                                 _ch.name, exc)
-        except Exception as exc:
-            logger.debug("Channel tool injection skipped: %s", exc)
+            # Append auto-generated tools for running channels (tool_factory)
+            try:
+                from channels.registry import running_channels as _running_channels
+                from channels.tool_factory import create_channel_tools as _create_ch_tools
+                for _ch in _running_channels():
+                    try:
+                        _ch_tools = _create_ch_tools(_ch)
+                        lc_tools.extend(_ch_tools)
+                        logger.debug("Injected %d tools for channel %s",
+                                     len(_ch_tools), _ch.name)
+                    except Exception as exc:
+                        logger.debug("Channel tool injection for %s skipped: %s",
+                                     _ch.name, exc)
+            except Exception as exc:
+                logger.debug("Channel tool injection skipped: %s", exc)
 
-        if is_background:
-            # Background tool gating — three modes:
-            #  block:     strip all destructive tools (LLM can't call them)
-            #  approve:   keep destructive tools but wrap with interrupt()
-            #             so the pipeline pauses for user approval
-            #  allow_all: keep everything ungated
-            # run_command is NOT in destructive_names (shell self-gates
-            # at runtime via classify_command), so it is always kept.
-            if _mode == "block":
-                lc_tools = [t for t in lc_tools
-                            if t.name not in destructive_names]
-            elif _mode == "approve":
+            if is_background:
+                # BG gating: block=strip destructive tools; approve=wrap
+                # via interrupt() for pause-and-approve; allow_all=keep all.
+                # run_command self-gates at runtime via classify_command.
+                if _mode == "block":
+                    lc_tools = [t for t in lc_tools
+                                if t.name not in destructive_names]
+                elif _mode == "approve":
+                    for t in lc_tools:
+                        if t.name in destructive_names:
+                            _wrap_with_interrupt_gate(t)
+                # else: allow_all — keep everything, no gates
+            else:
+                # Interactive sessions: gate destructive tools with interrupt() —
+                # the graph will pause, yield an "interrupt" event, and wait for
+                # user approval before actually executing the tool.
                 for t in lc_tools:
                     if t.name in destructive_names:
                         _wrap_with_interrupt_gate(t)
-            # else: allow_all — keep everything, no gates
-        else:
-            # Interactive sessions: gate destructive tools with interrupt() —
-            # the graph will pause, yield an "interrupt" event, and wait for
-            # user approval before actually executing the tool.
+
+            # Wrap every tool so exceptions are returned to the LLM as error
+            # messages instead of crashing the stream.  LangChain's built-in
+            # handle_tool_error only catches ToolException; external toolkit
+            # tools (e.g. Calendar) may raise plain Exception.
+            # NOTE: GraphInterrupt must NOT be caught — it's used by LangGraph
+            # to implement the interrupt/resume flow.
+            from langgraph.errors import GraphInterrupt
+
             for t in lc_tools:
-                if t.name in destructive_names:
-                    _wrap_with_interrupt_gate(t)
+                if hasattr(t, "func") and t.func is not None:
+                    # StructuredTool / Tool created via from_function
+                    _orig_func = t.func
+                    def _safe_func(*args, _fn=_orig_func, **kwargs):
+                        try:
+                            return _fn(*args, **kwargs)
+                        except GraphInterrupt:
+                            raise  # Must propagate for interrupt/resume flow
+                        except Exception as exc:
+                            logger.error("Tool %s raised an error: %s", _fn.__name__ if hasattr(_fn, '__name__') else '?', exc, exc_info=True)
+                            return f"Tool error: {exc}"
+                    t.func = _safe_func
+                else:
+                    # Toolkit tools that override _run directly
+                    _orig_run = t._run
+                    def _safe_run(*args, _fn=_orig_run, **kwargs):
+                        try:
+                            return _fn(*args, **kwargs)
+                        except GraphInterrupt:
+                            raise
+                        except Exception as exc:
+                            logger.error("Tool _run raised an error: %s", exc, exc_info=True)
+                            return f"Tool error: {exc}"
+                    t._run = _safe_run
 
-        # Wrap every tool so exceptions are returned to the LLM as error
-        # messages instead of crashing the stream.  LangChain's built-in
-        # handle_tool_error only catches ToolException; external toolkit
-        # tools (e.g. Calendar) may raise plain Exception.
-        # NOTE: GraphInterrupt must NOT be caught — it's used by LangGraph
-        # to implement the interrupt/resume flow.
-        from langgraph.errors import GraphInterrupt
+            if not lc_tools:
+                # Agent without tools is pointless — fall back to plain LLM
+                lc_tools = []
 
-        for t in lc_tools:
-            if hasattr(t, "func") and t.func is not None:
-                # StructuredTool / Tool created via from_function
-                _orig_func = t.func
-                def _safe_func(*args, _fn=_orig_func, **kwargs):
-                    try:
-                        return _fn(*args, **kwargs)
-                    except GraphInterrupt:
-                        raise  # Must propagate for interrupt/resume flow
-                    except Exception as exc:
-                        logger.error("Tool %s raised an error: %s", _fn.__name__ if hasattr(_fn, '__name__') else '?', exc, exc_info=True)
-                        return f"Tool error: {exc}"
-                t.func = _safe_func
-            else:
-                # Toolkit tools that override _run directly
-                _orig_run = t._run
-                def _safe_run(*args, _fn=_orig_run, **kwargs):
-                    try:
-                        return _fn(*args, **kwargs)
-                    except GraphInterrupt:
-                        raise
-                    except Exception as exc:
-                        logger.error("Tool _run raised an error: %s", exc, exc_info=True)
-                        return f"Tool error: {exc}"
-                t._run = _safe_run
-
-        if not lc_tools:
-            # Agent without tools is pointless — fall back to plain LLM
-            lc_tools = []
-
-        agent = create_react_agent(
-            model=llm,
-            tools=lc_tools,
-            prompt=get_agent_system_prompt(),
-            pre_model_hook=_pre_model_trim,
-            checkpointer=checkpointer,
-            name="thoth_agent",
-        )
-        _agent_cache[cache_key] = agent
+            agent = create_react_agent(
+                model=llm,
+                tools=lc_tools,
+                prompt=get_agent_system_prompt(),
+                pre_model_hook=_pre_model_trim,
+                checkpointer=checkpointer,
+                name="thoth_agent",
+            )
+            _agent_cache[cache_key] = agent
 
     return _agent_cache[cache_key]
 

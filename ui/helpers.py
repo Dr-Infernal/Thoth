@@ -149,6 +149,7 @@ def persist_thread_media_state(thread_id: str | None, messages: list[dict]) -> N
         return
     try:
         from threads import save_thread_media, save_media_file, _next_media_filename
+        from utils.media import is_image_filename, image_ext_from_b64
 
         entries: list[dict] = []
         for idx, msg in enumerate(messages):
@@ -164,13 +165,12 @@ def persist_thread_media_state(thread_id: str | None, messages: list[dict]) -> N
                         persist = (persist_flags[img_idx]
                                    if img_idx < len(persist_flags)
                                    else msg.get("_media_persist", False))
-                        # If it's already a filename (file-on-disk), keep it
-                        if not img.startswith("/") and not img.startswith("\\") and "." in img and len(img) < 200:
-                            # Looks like a filename already stored on disk
+                        if is_image_filename(img):
+                            # Already a filename stored on disk
                             media_items.append({"type": "image", "path": img, "persist": persist})
                         else:
                             # It's a base64 string — save to disk
-                            ext = _img_ext_from_b64(img)
+                            ext = image_ext_from_b64(img)
                             prefix = "gen" if persist else "cap"
                             fname = _next_media_filename(thread_id, prefix, ext)
                             raw = _b64.b64decode(img)
@@ -178,6 +178,23 @@ def persist_thread_media_state(thread_id: str | None, messages: list[dict]) -> N
                             media_items.append({"type": "image", "path": fname, "persist": persist})
                             # Replace base64 in message with filename for future calls
                             images[img_idx] = fname
+
+            # Videos (already saved as files — just record in sidecar)
+            videos = msg.get("videos")
+            if isinstance(videos, list) and videos:
+                for vid in videos:
+                    if isinstance(vid, dict) and vid.get("filename"):
+                        media_items.append({
+                            "type": "video",
+                            "path": vid["filename"],
+                            "persist": True,
+                        })
+                    elif isinstance(vid, str) and vid:
+                        media_items.append({
+                            "type": "video",
+                            "path": vid,
+                            "persist": True,
+                        })
 
             if not media_items:
                 continue
@@ -193,14 +210,10 @@ def persist_thread_media_state(thread_id: str | None, messages: list[dict]) -> N
 
 
 def _img_ext_from_b64(b64: str) -> str:
-    """Determine image extension from base64 header bytes."""
-    if b64.startswith("iVBOR"):
-        return "png"
-    if b64.startswith("UklGR"):
-        return "webp"
-    if b64.startswith("R0lGO"):
-        return "gif"
-    return "jpg"
+    """Deprecated — prefer ``utils.media.image_ext_from_b64``.  Kept as a
+    thin alias for in-repo compatibility."""
+    from utils.media import image_ext_from_b64
+    return image_ext_from_b64(b64)
 
 
 def _hydrate_thread_media(thread_id: str, messages: list[dict]) -> list[dict]:
@@ -253,6 +266,7 @@ def _hydrate_thread_media(thread_id: str, messages: list[dict]) -> list[dict]:
 
             # Load image files from disk and attach as filenames
             img_filenames: list[str] = []
+            vid_entries: list[dict] = []
             has_persist = False
             for item in media:
                 if item.get("type") == "image":
@@ -261,11 +275,18 @@ def _hydrate_thread_media(thread_id: str, messages: list[dict]) -> list[dict]:
                         img_filenames.append(fname)
                     if item.get("persist"):
                         has_persist = True
+                elif item.get("type") == "video":
+                    fname = item.get("path", "")
+                    if fname and load_media_file(thread_id, fname) is not None:
+                        vid_entries.append({"filename": fname})
+                    has_persist = True
 
             if img_filenames:
                 messages[target_idx]["images"] = img_filenames
                 if has_persist:
                     messages[target_idx]["_media_persist"] = True
+            if vid_entries:
+                messages[target_idx]["videos"] = vid_entries
             used_indices.add(target_idx)
 
     except Exception:
@@ -496,6 +517,73 @@ def load_thread_messages(thread_id: str) -> list[dict]:
     return []
 
 
+def persist_detached_thread_media(
+    thread_id: str,
+    assistant_content: str,
+    *,
+    images: list[str] | None = None,
+    image_persist_flags: list[bool] | None = None,
+    videos: list[dict | str] | None = None,
+) -> bool:
+    """Persist detached-run media onto the matching checkpoint-backed assistant message."""
+    pending_images = list(images or [])
+    pending_videos = list(videos or [])
+    if not thread_id or (not pending_images and not pending_videos):
+        return False
+
+    messages = load_thread_messages(thread_id)
+    if not messages:
+        return False
+
+    assistant_text = assistant_content or ""
+    assistant_sig = _message_signature({"role": "assistant", "content": assistant_text})
+    target_idx: int | None = None
+
+    for idx in range(len(messages) - 1, -1, -1):
+        msg = messages[idx]
+        if str(msg.get("role", "")) != "assistant":
+            continue
+        if _message_signature(msg) == assistant_sig:
+            target_idx = idx
+            break
+
+    if target_idx is None and not assistant_text.strip():
+        for idx in range(len(messages) - 1, -1, -1):
+            if str(messages[idx].get("role", "")) == "assistant":
+                target_idx = idx
+                break
+
+    if target_idx is None:
+        return False
+
+    target = messages[target_idx]
+
+    if pending_images:
+        existing_images = list(target.get("images", []))
+        target["images"] = existing_images + pending_images
+
+        existing_flags = list(target.get("_media_persist_flags", []))
+        if len(existing_flags) < len(existing_images):
+            existing_flags.extend(
+                [bool(target.get("_media_persist", False))]
+                * (len(existing_images) - len(existing_flags))
+            )
+
+        new_flags = list(image_persist_flags or [])
+        if len(new_flags) < len(pending_images):
+            new_flags.extend([False] * (len(pending_images) - len(new_flags)))
+
+        target["_media_persist_flags"] = existing_flags + new_flags[: len(pending_images)]
+        if any(target["_media_persist_flags"]):
+            target["_media_persist"] = True
+
+    if pending_videos:
+        target["videos"] = list(target.get("videos", [])) + pending_videos
+
+    persist_thread_media_state(thread_id, messages)
+    return True
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # EXPORT HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -524,21 +612,27 @@ def export_as_text(thread_name: str, messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def export_as_pdf(thread_name: str, messages: list[dict]) -> bytes:
+def export_as_pdf(thread_name: str, messages: list[dict],
+                  thread_id: str | None = None) -> bytes:
     """Convert messages to a professional PDF document. Returns PDF bytes.
 
     Uses Playwright (headless Chromium) for full Unicode/emoji support,
     embedded images, charts, and styled markdown rendering.
     Falls back to basic fpdf2 text export if Playwright is unavailable.
+
+    ``thread_id`` is required to resolve filename-based image entries
+    (the post-D1 storage format).  When omitted, only base64 image
+    entries can be embedded; filename entries are skipped.
     """
     try:
-        return _render_pdf_playwright(thread_name, messages)
+        return _render_pdf_playwright(thread_name, messages, thread_id)
     except Exception as exc:
         logger.warning("Playwright PDF failed (%s) — falling back to fpdf2", exc)
         return _render_pdf_fpdf2(thread_name, messages)
 
 
-def _build_conversation_html(thread_name: str, messages: list[dict]) -> str:
+def _build_conversation_html(thread_name: str, messages: list[dict],
+                             thread_id: str | None = None) -> str:
     """Build a complete styled HTML document from conversation messages."""
     import markdown2
 
@@ -635,12 +729,37 @@ def _build_conversation_html(thread_name: str, messages: list[dict]) -> str:
                     f"<pre>{safe_content}</pre></details>"
                 )
 
-        # Images (base64)
+        # Images — may be raw base64 or a filename persisted to the
+        # per-thread media directory.  (See D1 refactor: once a thread
+        # reloads from checkpoint, entries are filenames.)
         images = msg.get("images")
         if images:
-            for b64 in images:
+            from utils.media import (
+                is_image_filename,
+                image_mime_from_bytes,
+                image_ext_from_b64,
+            )
+            from threads import load_media_file
+            for entry in images:
+                if not isinstance(entry, str) or not entry:
+                    continue
+                img_bytes: bytes | None = None
+                mime = "image/jpeg"
+                if is_image_filename(entry):
+                    if not thread_id:
+                        # Cannot resolve filename without thread context
+                        continue
+                    img_bytes = load_media_file(thread_id, entry)
+                    if img_bytes is None:
+                        continue
+                    mime = image_mime_from_bytes(img_bytes)
+                    b64 = _b64.b64encode(img_bytes).decode("ascii")
+                else:
+                    # Treat as raw base64
+                    b64 = entry
+                    mime = f"image/{image_ext_from_b64(b64).replace('jpg', 'jpeg')}"
                 parts.append(
-                    f'<img src="data:image/jpeg;base64,{b64}" '
+                    f'<img src="data:{mime};base64,{b64}" '
                     f'style="max-width:400px;" />'
                 )
 
@@ -681,7 +800,8 @@ def _build_conversation_html(thread_name: str, messages: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _render_pdf_playwright(thread_name: str, messages: list[dict]) -> bytes:
+def _render_pdf_playwright(thread_name: str, messages: list[dict],
+                           thread_id: str | None = None) -> bytes:
     """Render conversation to PDF via headless Chromium (Playwright).
 
     Uses a completely separate headless browser instance — does NOT
@@ -690,7 +810,7 @@ def _render_pdf_playwright(thread_name: str, messages: list[dict]) -> bytes:
     import concurrent.futures
     from playwright.sync_api import sync_playwright
 
-    html = _build_conversation_html(thread_name, messages)
+    html = _build_conversation_html(thread_name, messages, thread_id)
 
     def _render_in_worker() -> bytes:
         pw = sync_playwright().start()

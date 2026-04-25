@@ -106,13 +106,21 @@ def _project_history_dir(project_id: str) -> Path:
     return d
 
 
-def snapshot(project: DesignerProject, label: str = "") -> str:
-    """Save a snapshot of the current project state. Returns the snapshot ID."""
+def snapshot(project: DesignerProject, label: str = "", *,
+              author: str = "user") -> str:
+    """Save a snapshot of the current project state. Returns the snapshot ID.
+
+    ``author`` is ``"user"`` for UI-initiated edits and ``"agent"`` for
+    snapshots taken immediately before an agent tool call mutates the
+    project. Phase 2.2.L uses this to surface a diff of the last agent
+    change in the editor.
+    """
     ts = f"{time.time():.6f}"
     state = capture_project_state(project)
     snap = {
         "id": ts,
         "label": label,
+        "author": (author or "user").strip().lower() or "user",
         "timestamp": ts,
         **asdict(state),
     }
@@ -156,6 +164,7 @@ def list_snapshots(project_id: str) -> list[dict]:
             results.append({
                 "id": data.get("id", path.stem),
                 "label": data.get("label", ""),
+                "author": (data.get("author") or "user").strip().lower() or "user",
                 "timestamp": float(data.get("timestamp", path.stem)),
                 "name": data.get("name", ""),
                 "page_count": len(data.get("pages", [])),
@@ -163,6 +172,20 @@ def list_snapshots(project_id: str) -> list[dict]:
         except Exception:
             logger.warning("Skipping corrupt snapshot: %s", path.name)
     return results
+
+
+def read_snapshot(project_id: str, snapshot_id: str) -> Optional[dict]:
+    """Load the raw JSON of a single snapshot, or ``None`` if missing."""
+    d = _project_history_dir(project_id)
+    path = d / f"{snapshot_id}.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        logger.exception("Failed to read snapshot %s", snapshot_id)
+        return None
 
 
 def restore_snapshot(project: DesignerProject, snapshot_id: str) -> bool:

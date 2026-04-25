@@ -16,6 +16,52 @@ from designer.ui_theme import dialog_card_style, style_ghost_button, style_prima
 
 logger = logging.getLogger(__name__)
 
+# Modes that treat pages as interactive routes — shared with preview.py.
+_INTERACTIVE_NAV_MODES = {"landing", "app_mockup", "storyboard"}
+
+
+def navigator_item_caption(
+    project: DesignerProject, page_index: int
+) -> tuple[str, str | None]:
+    """Return ``(index_label, route_label)`` for navigator rendering.
+
+    ``route_label`` is ``None`` in deck/document modes so the existing
+    look is preserved; in interactive modes it surfaces the page's
+    ``route_id`` (falling back to "page-N" when missing).
+    """
+
+    index_label = f"{page_index + 1}"
+    mode = getattr(project, "mode", "deck") or "deck"
+    if mode not in _INTERACTIVE_NAV_MODES:
+        return index_label, None
+    if not (0 <= page_index < len(project.pages)):
+        return index_label, None
+    rid = (getattr(project.pages[page_index], "route_id", "") or "").strip()
+    if not rid:
+        rid = f"page-{page_index + 1}"
+    return index_label, rid
+
+
+def navigator_action_labels(project: DesignerProject) -> dict:
+    """Return mode-aware button tooltips used by the navigator."""
+
+    mode = getattr(project, "mode", "deck") or "deck"
+    if mode in _INTERACTIVE_NAV_MODES:
+        return {
+            "add": "Add screen",
+            "delete": "Delete active screen",
+            "prev": "Previous screen",
+            "next": "Next screen",
+            "counter": "Screen {current} of {total}",
+        }
+    return {
+        "add": "Add page",
+        "delete": "Delete active page",
+        "prev": "Previous page",
+        "next": "Next page",
+        "counter": "Page {current} of {total}",
+    }
+
 
 def _deferred(fn):
     """Schedule a callback via a one-shot timer from the client root.
@@ -127,6 +173,7 @@ def build_page_navigator(
         if _nav_container is None:
             return
         _nav_container.clear()
+        labels = navigator_action_labels(project)
         with _nav_container:
             # Previous arrow
             def _prev():
@@ -165,10 +212,21 @@ def build_page_navigator(
                     "position:relative;flex-shrink:0;background:#0F172A;"
                 ).on("click", _select):
                     # Page number badge
-                    ui.label(f"{i + 1}").classes("text-xs text-grey-5").style(
+                    _index_label, _route_label = navigator_item_caption(project, i)
+                    ui.label(_index_label).classes("text-xs text-grey-5").style(
                         "position:absolute;top:2px;left:6px;z-index:2;"
                         "text-shadow:0 0 3px rgba(0,0,0,0.8);"
                     )
+                    if _route_label:
+                        ui.label(_route_label).classes(
+                            "text-xs text-weight-medium"
+                        ).style(
+                            "position:absolute;bottom:2px;left:6px;right:6px;"
+                            "z-index:2;color:#F59E0B;"
+                            "text-shadow:0 0 3px rgba(0,0,0,0.85);"
+                            "white-space:nowrap;overflow:hidden;"
+                            "text-overflow:ellipsis;"
+                        )
                     if page.notes.strip():
                         ui.icon("speaker_notes", size="xs").classes("text-grey-3").style(
                             "position:absolute;top:2px;right:6px;z-index:2;"
@@ -210,7 +268,7 @@ def build_page_navigator(
             with ui.column().style("gap:0;align-items:center;"):
                 ui.button(icon="add", on_click=_add).props(
                     "flat dense round size=sm"
-                ).tooltip("Add page")
+                ).tooltip(labels["add"])
                 if len(project.pages) > 1:
                     def _del_active():
                         idx = project.active_page
@@ -231,7 +289,7 @@ def build_page_navigator(
                         _deferred(on_page_change)
                     ui.button(icon="close", on_click=_del_active, color="red").props(
                         "flat dense round size=sm"
-                    ).tooltip("Delete active page")
+                    ).tooltip(labels["delete"])
 
             # Next arrow
             def _next():
@@ -252,7 +310,10 @@ def build_page_navigator(
 
             # Page counter
             ui.label(
-                f"Page {project.active_page + 1} of {len(project.pages)}"
+                labels["counter"].format(
+                    current=project.active_page + 1,
+                    total=len(project.pages),
+                )
             ).classes("text-xs text-grey-5").style("white-space: nowrap;")
 
             # Canvas resize menu

@@ -212,9 +212,9 @@ FEATURE_MANIFEST: list[dict[str, str]] = [
     },
     {
         "feature": "Designer Studio",
-        "keywords": "designer, design, slides, presentation, deck, one-pager, marketing, wireframe, mockup, layout, brand, export, pptx, pdf, chart, ai image, refine text",
-        "description": "Create multi-page visual designs — presentations, one-pagers, marketing material, wireframes, reports — with live preview, brand theming, export to PDF/HTML/PNG/PPTX, AI image generation, copy refinement, and chart embedding.",
-        "configure": "Open the Designer tab on the home screen, or ask the assistant to create a design.",
+        "keywords": "designer, design, slides, presentation, deck, document, one-pager, report, marketing, landing page, hero page, wireframe, mockup, app mockup, prototype, click-through, storyboard, shot list, layout, brand, export, pptx, pdf, html, png, publish link, share link, chart, ai image, ai video, refine text",
+        "description": "Create multi-page visual designs across five modes — slide decks, documents, scrollable landing pages, interactive app/UI mockups (phone or desktop), and video storyboards. Live HTML preview, brand theming, AI image and video generation, copy refinement, charts, brand-lint, and export to PDF/HTML/PNG/PPTX. Landing pages and app mockups can be published as interactive click-through bundles via shareable links.",
+        "configure": "Open the Designer tab on the home screen, or ask the assistant to create a design / landing page / app mockup / storyboard.",
     },
     {
         "feature": "Wiki Vault",
@@ -371,6 +371,19 @@ def get_dynamic_state() -> str:
         if enabled:
             names = [s.display_name for s in enabled]
             parts.append(f"- Enabled skills: {', '.join(names)}")
+    except Exception:
+        pass
+
+    # Pending Thoth update (auto-update)
+    try:
+        import updater
+        info = updater.get_update_state().available
+        if info is not None:
+            parts.append(
+                f"- Update available: v{info.version} ({info.channel} channel) — "
+                f"the user can install via Settings → Preferences → Updates "
+                f"or by asking you to run thoth_install_update."
+            )
     except Exception:
         pass
 

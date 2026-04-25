@@ -32,9 +32,57 @@ HEAD_HTML = """\
 <style>
     html, body { overflow: hidden !important; height: 100vh; }
     .nicegui-content { overflow: hidden !important; }
-    .thoth-msg pre { overflow-x: auto; max-width: 100%; }
-    .thoth-msg a { color: #64b5f6; }
+    /* Chat messages must never produce a horizontal scroll bar — on
+       narrow windows / small panes the content wraps instead. Long
+       unbreakable tokens (URLs, CJK, code) break anywhere. */
+    .thoth-msg pre,
+    .thoth-msg-body pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        overflow-x: hidden;
+        max-width: 100%;
+    }
+    .thoth-msg code,
+    .thoth-msg-body code {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+    .thoth-msg a { color: #64b5f6; overflow-wrap: anywhere; word-break: break-word; }
     .thoth-msg a:hover { text-decoration: underline; }
+    /* Tables inside messages: scroll within a container rather than
+       stretch the outer chat column. */
+    .thoth-msg-body table {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+    }
+    .thoth-msg-body img,
+    .thoth-msg-body video,
+    .thoth-msg-body iframe {
+        max-width: 100%;
+        height: auto;
+    }
+    /* Designer-pane chat bubbles use a different class but need the
+       same horizontal-scroll protection on narrow panes. */
+    .thoth-designer-bubble,
+    .thoth-designer-bubble * {
+        min-width: 0;
+        max-width: 100%;
+    }
+    .thoth-designer-bubble pre,
+    .thoth-designer-bubble code {
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        overflow-x: hidden;
+    }
+    .thoth-designer-bubble table {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+    }
     .thoth-msg-row {
         display: flex;
         gap: 0.75rem;
@@ -86,6 +134,9 @@ HEAD_HTML = """\
         flex: 1;
         min-width: 0;
         overflow: hidden;
+        /* Never allow a horizontal scroll bar inside a message bubble. */
+        overflow-wrap: anywhere;
+        word-break: break-word;
         /* Override Quasar QScrollArea's user-select: none */
         -webkit-user-select: text;
         user-select: text;

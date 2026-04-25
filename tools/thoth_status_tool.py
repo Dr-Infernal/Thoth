@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 from datetime import datetime
 
 from langchain_core.tools import StructuredTool
@@ -50,7 +51,8 @@ class _StatusQueryInput(BaseModel):
             "'voice' (TTS and STT settings), "
             "'config' (context window, dream cycle, wiki vault, memory extraction), "
             "'logs' (recent warnings and errors from the log file), "
-            "'errors' (recent errors with tracebacks — use to diagnose failures)."
+            "'errors' (recent errors with tracebacks — use to diagnose failures), "
+            "'updates' (auto-update channel + last check + available version)."
         )
     )
 
@@ -69,11 +71,96 @@ class _SettingUpdateInput(BaseModel):
             "'skill_toggle' (enable/disable a skill — value is 'skill_name:on' or 'skill_name:off'), "
             "'tool_toggle' (enable/disable a tool — value is 'tool_name:on' or 'tool_name:off'), "
             "'image_gen_model' (set image generation model — value is provider/model-id), "
+            "'video_gen_model' (set video generation model — value is provider/model-id), "
             "'run_dream_cycle' (manually trigger the dream cycle — value is 'now'), "
             "'self_improvement' (enable/disable self-improvement — value is 'on' or 'off')."
         )
     )
     value: str = Field(description="The new value for the setting.")
+
+
+def _normalize_provider_model_value(setting: str, value: str) -> str:
+    """Return a canonical provider/model value when the model id is unique.
+
+    Users naturally ask for models like ``grok-imagine-video`` without the
+    provider prefix. Normalize those shorthands before persisting so the
+    downstream tool resolves the correct provider.
+    """
+    normalized = (value or "").strip()
+    if not normalized or "/" in normalized:
+        return normalized
+
+    provider_models: dict[str, list[dict]] = {}
+    if setting == "image_gen_model":
+        from tools.image_gen_tool import _PROVIDER_MODELS as _IMG_PROVIDER_MODELS
+        provider_models = _IMG_PROVIDER_MODELS
+    elif setting == "video_gen_model":
+        from tools.video_gen_tool import _PROVIDER_MODELS as _VID_PROVIDER_MODELS
+        provider_models = _VID_PROVIDER_MODELS
+    else:
+        return normalized
+
+    matches = [
+        f"{provider}/{model['id']}"
+        for provider, models in provider_models.items()
+        for model in models
+        if model.get("id") == normalized
+    ]
+    return matches[0] if len(matches) == 1 else normalized
+
+
+def _normalize_lookup_token(value: str) -> str:
+    """Normalize a human/tool label into a stable lookup token."""
+    token = re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower())
+    token = re.sub(r"_+", "_", token).strip("_")
+    if token.endswith("_tool"):
+        token = token[:-5]
+    return token
+
+
+def _tool_display_label(tool) -> str:
+    """Return a friendly display label without leading emoji."""
+    label = getattr(tool, "display_name", "") or getattr(tool, "name", "")
+    label = re.sub(r"^[^A-Za-z0-9]+", "", str(label)).strip()
+    return label or getattr(tool, "name", "")
+
+
+def _resolve_tool_name(value: str) -> tuple[str | None, str | None, list[str]]:
+    """Resolve a tool alias like ``video_generation`` to a registered tool."""
+    from tools import registry as tool_registry
+
+    raw = (value or "").strip()
+    if not raw:
+        return None, None, []
+
+    direct = tool_registry.get_tool(raw)
+    if direct is not None:
+        return direct.name, _tool_display_label(direct), []
+
+    normalized = _normalize_lookup_token(raw)
+    alias_to_name: dict[str, str] = {}
+    for tool in tool_registry.get_all_tools():
+        aliases = {
+            tool.name,
+            _normalize_lookup_token(tool.name),
+            _normalize_lookup_token(_tool_display_label(tool)),
+        }
+        for alias in aliases:
+            if alias:
+                alias_to_name.setdefault(alias, tool.name)
+
+    resolved_name = alias_to_name.get(normalized)
+    if resolved_name:
+        resolved_tool = tool_registry.get_tool(resolved_name)
+        return resolved_name, _tool_display_label(resolved_tool), []
+
+    suggestions: list[str] = []
+    for tool in tool_registry.get_all_tools():
+        label = _tool_display_label(tool)
+        if normalized and (normalized in _normalize_lookup_token(label)
+                           or normalized in _normalize_lookup_token(tool.name)):
+            suggestions.append(label)
+    return None, None, suggestions[:3]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -315,9 +402,11 @@ def _query_image_gen() -> str:
     """Image generation model."""
     try:
         from tools.image_gen_tool import _get_configured_selection, DEFAULT_MODEL
+        from tools.registry import is_enabled
         selection = _get_configured_selection()
         lines = [
             "**Image Generation**",
+            f"- Tool: {'enabled' if is_enabled('image_gen') else 'disabled'}",
             f"- Model: {selection}",
         ]
         if selection == DEFAULT_MODEL:
@@ -325,6 +414,24 @@ def _query_image_gen() -> str:
         return "\n".join(lines)
     except Exception as exc:
         return f"**Image Generation**\nError: {exc}"
+
+
+def _query_video_gen() -> str:
+    """Video generation model."""
+    try:
+        from tools.video_gen_tool import _get_configured_selection, DEFAULT_MODEL
+        from tools.registry import is_enabled
+        selection = _get_configured_selection()
+        lines = [
+            "**Video Generation**",
+            f"- Tool: {'enabled' if is_enabled('video_gen') else 'disabled'}",
+            f"- Model: {selection}",
+        ]
+        if selection == DEFAULT_MODEL:
+            lines.append("- (default — change in Settings → Models)")
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"**Video Generation**\nError: {exc}"
 
 
 def _query_voice() -> str:
@@ -442,12 +549,41 @@ _QUERY_HANDLERS = {
     "tasks": _query_tasks,
     "vision": _query_vision,
     "image_gen": _query_image_gen,
+    "video_gen": _query_video_gen,
     "voice": _query_voice,
     "config": _query_config,
     "logs": _query_logs,
     "errors": _query_errors,
     "designer": _query_designer,
+    "updates": lambda: _query_updates(),
 }
+
+
+def _query_updates() -> str:
+    """Summary of auto-update state for the agent."""
+    try:
+        import updater
+        s = updater.summary_for_status()
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"**Updates**\nError: {exc}"
+    lines = [
+        "**Updates**",
+        f"- Current version: v{s['current_version']}",
+        f"- Channel: {s['channel']}",
+        f"- Auto-check: {'on' if s['auto_check'] else 'off'}",
+        f"- Last check: {s.get('last_check') or 'never'}",
+    ]
+    if s.get("dev_install"):
+        lines.append("- Dev install — updater disabled")
+    if s["update_available"]:
+        lines.append(f"- ⬆ Update available: v{s['available_version']}")
+        if s.get("available_notes_summary"):
+            lines.append(f"  Summary: {s['available_notes_summary']}")
+    else:
+        lines.append("- No update available")
+    if s.get("skipped_versions"):
+        lines.append(f"- Skipped: {', '.join(s['skipped_versions'])}")
+    return "\n".join(lines)
 
 
 def _thoth_status(category: str) -> str:
@@ -657,36 +793,68 @@ def _update_setting(setting: str, value: str) -> str:
                 raise ValueError
         except Exception:
             return f"Invalid value '{value}'. Use 'tool_name:on' or 'tool_name:off'."
+        from tools import registry as tool_registry
+        resolved_name, resolved_label, suggestions = _resolve_tool_name(name_part)
+        if not resolved_name:
+            suggestion_text = f" Try one of: {', '.join(suggestions)}." if suggestions else ""
+            return f"Unknown tool '{name_part}'.{suggestion_text}"
+        current_state = tool_registry.is_enabled(resolved_name)
+        if current_state == on:
+            return f"Tool '{resolved_label}' is already {'enabled' if on else 'disabled'}."
+        canonical_value = f"{resolved_name}:{'on' if on else 'off'}"
         approval = interrupt({
             "tool": "thoth_update_setting",
-            "label": f"{'Enable' if on else 'Disable'} tool '{name_part}'",
-            "description": f"Set tool '{name_part}' to {'enabled' if on else 'disabled'}",
-            "args": {"setting": "tool_toggle", "value": value},
+            "label": f"{'Enable' if on else 'Disable'} tool '{resolved_label}'",
+            "description": f"Set tool '{resolved_label}' to {'enabled' if on else 'disabled'}",
+            "args": {"setting": "tool_toggle", "value": canonical_value},
         })
         if not approval:
             return "Tool toggle cancelled."
         try:
-            from tools import registry as tool_registry
-            tool_registry.set_enabled(name_part, on)
-            return f"Tool '{name_part}' {'enabled' if on else 'disabled'}."
+            tool_registry.set_enabled(resolved_name, on)
+            actual_state = tool_registry.is_enabled(resolved_name)
+            if actual_state != on:
+                return (
+                    f"Failed to {'enable' if on else 'disable'} tool '{resolved_label}'. "
+                    f"The setting did not take effect."
+                )
+            return f"Tool '{resolved_label}' {'enabled' if on else 'disabled'}."
         except Exception as exc:
             return f"Failed to toggle tool: {exc}"
 
     elif setting == "image_gen_model":
+        model_value = _normalize_provider_model_value(setting, value)
         approval = interrupt({
             "tool": "thoth_update_setting",
             "label": "Change image generation model",
-            "description": f"Set image gen model to: {value}",
-            "args": {"setting": "image_gen_model", "value": value},
+            "description": f"Set image gen model to: {model_value}",
+            "args": {"setting": "image_gen_model", "value": model_value},
         })
         if not approval:
             return "Image gen model change cancelled."
         try:
             from tools import registry as tool_registry
-            tool_registry.set_tool_config("image_gen", "model", value)
-            return f"Image generation model set to: {value}"
+            tool_registry.set_tool_config("image_gen", "model", model_value)
+            return f"Image generation model set to: {model_value}"
         except Exception as exc:
             return f"Failed to change image gen model: {exc}"
+
+    elif setting == "video_gen_model":
+        model_value = _normalize_provider_model_value(setting, value)
+        approval = interrupt({
+            "tool": "thoth_update_setting",
+            "label": "Change video generation model",
+            "description": f"Set video gen model to: {model_value}",
+            "args": {"setting": "video_gen_model", "value": model_value},
+        })
+        if not approval:
+            return "Video gen model change cancelled."
+        try:
+            from tools import registry as tool_registry
+            tool_registry.set_tool_config("video_gen", "model", model_value)
+            return f"Video generation model set to: {model_value}"
+        except Exception as exc:
+            return f"Failed to change video gen model: {exc}"
 
     elif setting == "run_dream_cycle":
         approval = interrupt({
@@ -736,8 +904,8 @@ def _update_setting(setting: str, value: str) -> str:
         return (
             f"Unknown setting '{setting}'. Supported: model, name, personality, "
             "context_size, cloud_context_size, dream_cycle, dream_window, "
-            "skill_toggle, tool_toggle, image_gen_model, run_dream_cycle, "
-            "self_improvement."
+            "skill_toggle, tool_toggle, image_gen_model, video_gen_model, "
+            "run_dream_cycle, self_improvement."
         )
 
 
@@ -971,7 +1139,10 @@ class ThothStatusTool(BaseTool):
 
     @property
     def destructive_tool_names(self) -> set[str]:
-        return {"thoth_update_setting", "thoth_create_skill", "thoth_patch_skill"}
+        # These sub-tools perform their own interrupt() calls with specific
+        # labels and arguments. Listing them here would wrap them in a second,
+        # generic approval gate before the real tool logic runs.
+        return set()
 
     def as_langchain_tools(self) -> list:
         tools = [
@@ -981,8 +1152,8 @@ class ThothStatusTool(BaseTool):
                 description=(
                     "Query Thoth's current status and configuration. "
                     "Categories: overview, version, model, channels, memory, skills, "
-                    "tools, api_keys, identity, tasks, vision, image_gen, voice, "
-                    "config, logs, errors."
+                    "tools, api_keys, identity, tasks, vision, image_gen, video_gen, "
+                    "voice, config, logs, errors."
                 ),
                 args_schema=_StatusQueryInput,
             ),
@@ -996,7 +1167,7 @@ class ThothStatusTool(BaseTool):
                     "dream_window (e.g. '1-5'), "
                     "skill_toggle (e.g. 'deep_research:off'), "
                     "tool_toggle (e.g. 'arxiv:off'), "
-                    "image_gen_model, "
+                    "image_gen_model, video_gen_model, "
                     "run_dream_cycle (trigger immediately), "
                     "self_improvement (on/off)."
                 ),

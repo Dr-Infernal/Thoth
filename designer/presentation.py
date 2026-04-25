@@ -56,7 +56,7 @@ def _build_reveal_html(project: DesignerProject, start_page: int = 0, presenter:
                 <div class="slide-frame-shell" style="width: {project.canvas_width}px; height: {project.canvas_height}px;">
                     <iframe
                         class="slide-frame"
-                        sandbox="allow-same-origin"
+                        sandbox="allow-same-origin allow-scripts"
                         scrolling="no"
                         tabindex="-1"
                         srcdoc="{safe_srcdoc}"
@@ -147,7 +147,9 @@ def _build_reveal_html(project: DesignerProject, start_page: int = 0, presenter:
             border: none;
             display: block;
             background: transparent;
-            pointer-events: none;
+            /* pointer-events must stay enabled so <video controls> and other
+               interactive slide content respond to clicks in the deck. */
+            pointer-events: auto;
         }}
         body.presenter-mode {{
             display: flex;
@@ -340,8 +342,61 @@ def _build_reveal_html(project: DesignerProject, start_page: int = 0, presenter:
             }}, 1000);
         }}
 
+        // ── Slide media autoplay ──────────────────────────────────
+        // The slide iframes are sandboxed with allow-same-origin so the
+        // parent can reach into their DOM and drive <video>/<audio>
+        // playback on slide change. Videos authored in the editor ship
+        // with autoplay=false + muted=true + controls=true, so we play
+        // muted here (Chrome/Safari permit muted autoplay) and let the
+        // presenter unmute via the controls if desired.
+        function _eachMediaIn(iframe, fn) {{
+            if (!iframe) return;
+            var doc = null;
+            try {{ doc = iframe.contentDocument; }} catch (_) {{ return; }}
+            if (!doc) return;
+            var nodes = doc.querySelectorAll('video, audio');
+            for (var i = 0; i < nodes.length; i++) {{
+                try {{ fn(nodes[i]); }} catch (_) {{ /* ignore */ }}
+            }}
+        }}
+        function pauseAllSlideMedia() {{
+            var frames = document.querySelectorAll('.slide-frame');
+            for (var i = 0; i < frames.length; i++) {{
+                _eachMediaIn(frames[i], function(m) {{
+                    try {{ m.pause(); m.currentTime = 0; }} catch (_) {{}}
+                }});
+            }}
+        }}
+        function playActiveSlideMedia() {{
+            var current = null;
+            try {{ current = Reveal.getCurrentSlide(); }} catch (_) {{ return; }}
+            if (!current) return;
+            var frame = current.querySelector('.slide-frame');
+            if (!frame) return;
+            // The iframe's document may not be ready yet on 'ready' event;
+            // retry a couple of times before giving up.
+            var attempts = 0;
+            (function tryPlay() {{
+                attempts += 1;
+                var playedAny = false;
+                _eachMediaIn(frame, function(m) {{
+                    // Muted is required for cross-browser autoplay; slides
+                    // with autoplay already set are respected, others are
+                    // played muted by default on slide show.
+                    if (!m.hasAttribute('muted')) m.muted = true;
+                    var p = m.play();
+                    if (p && typeof p.catch === 'function') p.catch(function() {{}});
+                    playedAny = true;
+                }});
+                if (!playedAny && attempts < 5) {{
+                    window.setTimeout(tryPlay, 150);
+                }}
+            }})();
+        }}
+
         Reveal.on('ready', function() {{
             updatePresenterSidebar();
+            playActiveSlideMedia();
             if (presenterMode) {{
                 publishSessionMessage({{ type: 'slide-state', index: currentSlideIndex() }});
             }} else {{
@@ -351,6 +406,8 @@ def _build_reveal_html(project: DesignerProject, start_page: int = 0, presenter:
 
         Reveal.on('slidechanged', function() {{
             updatePresenterSidebar();
+            pauseAllSlideMedia();
+            playActiveSlideMedia();
             if (suppressSyncBroadcast > 0) {{
                 suppressSyncBroadcast -= 1;
                 return;

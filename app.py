@@ -15,6 +15,7 @@ import sys
 
 _DISCORD_BENIGN_VOICE_LOGGERS = (
     "discord.client",
+    "discord.gateway",
 )
 
 # ── Configure root logger (same as production app) ──────────────────────────
@@ -55,20 +56,33 @@ from nicegui import ui, app, run
 # "surrogates not allowed".  This patch catches the error and strips
 # surrogates on retry — zero cost for clean data.
 def _patch_json_serializer() -> None:
-    import re as _re
     import nicegui.json as _nj
     import nicegui.json.orjson_wrapper as _ow
+    from utils.text import _SURROGATE_RE as _SURR
 
     _orig = _ow.dumps
-    _SURR = _re.compile('[\ud800-\udfff]')
 
     def _strip(obj):
-        if isinstance(obj, str):
-            return _SURR.sub('', obj)
-        if isinstance(obj, dict):
+        # Only recurse into EXACT built-in container types.  Subclasses
+        # (e.g. ``nicegui.classes.Classes``/``ObservableList``) require
+        # extra constructor kwargs and must not be reinstantiated here —
+        # doing so raises ``TypeError`` and crashes the outbox emit loop.
+        t = type(obj)
+        if t is str:
+            return _SURR.sub('', obj) if _SURR.search(obj) else obj
+        if t is dict:
+            # Build a new dict (orjson already failed on this one, safe).
             return {_strip(k): _strip(v) for k, v in obj.items()}
-        if isinstance(obj, (list, tuple)):
-            return type(obj)(_strip(x) for x in obj)
+        if t is list:
+            # Mutate in place — cheaper and keeps identity stable.
+            for i, v in enumerate(obj):
+                obj[i] = _strip(v)
+            return obj
+        if t is tuple:
+            return tuple(_strip(v) for v in obj)
+        # Unknown type (Classes, Props, custom Element, datetime, etc.):
+        # leave untouched.  If it still breaks orjson the original
+        # TypeError propagates — matches pre-patch behaviour.
         return obj
 
     def _safe_dumps(obj, *args, **kwargs):
@@ -200,6 +214,15 @@ async def on_startup():
     from tunnel import kill_stale_ngrok
     kill_stale_ngrok()
 
+    # One-shot: clear project_id on thread_meta rows whose designer
+    # project JSON is missing. Prevents the "All Conversations" view
+    # from showing threads that claim to belong to a deleted project.
+    try:
+        from threads import sweep_orphan_project_ids
+        sweep_orphan_project_ids()
+    except Exception:
+        logger.exception("Orphan project_id sweep failed")
+
     import ui.state as _st
 
     logger.info("Thoth startup initiated")
@@ -234,6 +257,13 @@ async def on_startup():
 
     _set("🌙 Starting dream cycle daemon…")
     await asyncio.to_thread(start_dream_loop)
+
+    _set("⬆ Starting auto-update scheduler…")
+    try:
+        from updater import start_update_scheduler
+        await asyncio.to_thread(start_update_scheduler)
+    except Exception as exc:
+        logger.warning("Updater scheduler failed to start (non-fatal): %s", exc)
 
     _set("⚡ Loading workflows…")
     await asyncio.to_thread(lambda: (seed_default_tasks(), start_task_scheduler()))
@@ -319,6 +349,33 @@ async def on_startup():
     # initial shell prompt flows through the registered xterm.js
     # callback instead of being consumed before the UI connects.
     print("[startup] 💻 Terminal bridge deferred to first panel open")
+
+    # ── Idle browser-tab eviction ────────────────────────────────────
+    try:
+        from tasks import _get_scheduler
+        from tools.browser_tool import get_session_manager as _get_bs_mgr
+
+        def _evict_idle_browser_tabs() -> None:
+            try:
+                closed = _get_bs_mgr().evict_idle(ttl_seconds=600.0)
+                if closed:
+                    logger.info("browser: evicted %d idle tab(s)", closed)
+            except Exception:
+                logger.debug("browser idle eviction failed", exc_info=True)
+
+        _sched = _get_scheduler()
+        _sched.add_job(
+            _evict_idle_browser_tabs,
+            trigger="interval",
+            minutes=5,
+            id="browser_idle_eviction",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+        print("[startup] ⏱️ Browser idle-tab eviction scheduled (every 5 min, 10 min TTL)")
+    except Exception as exc:
+        logger.warning("Could not schedule browser idle eviction: %s", exc)
 
     _set("✅ Ready")
     _st.startup_ready = True
@@ -505,7 +562,7 @@ async def index():
     # ── Sidebar (left drawer) ────────────────────────────────────────────
     rebuild_thread_list = build_sidebar(
         state, p,
-        rebuild_main=lambda: _rebuild_main(),
+        rebuild_main=lambda **kw: _rebuild_main(**kw),
         open_settings=_open_settings,
         load_thread_messages=load_thread_messages,
     )
@@ -528,12 +585,28 @@ async def index():
     # ── Command Center (right drawer) ───────────────────────────────
     build_command_center(
         state, p,
-        rebuild_main=lambda: _rebuild_main(),
+        rebuild_main=lambda **kw: _rebuild_main(**kw),
         rebuild_thread_list=rebuild_thread_list,
         show_task_dialog=_show_task_dialog,
         load_thread_messages=load_thread_messages,
     )
-    def _rebuild_main() -> None:
+    # Generation counter — every ``_rebuild_main`` bumps this. A
+    # deferred hydration compares its captured id; if another rebuild
+    # started in the meantime, the stale hydration aborts.
+    _rebuild_gen = [0]
+
+    def _rebuild_main(immediate: bool = False) -> None:
+        """Rebuild the main content column.
+
+        By default paints a lightweight skeleton first and defers the
+        real view build to the next tick so the browser can paint the
+        skeleton frame — makes thread switches / home / gallery feel
+        instant on slow views.
+
+        Pass ``immediate=True`` when the caller needs ``p.chat_container``
+        (or similar) to exist synchronously after the call returns (e.g.
+        when creating a thread on first message send).
+        """
         if p.main_col is None:
             return
         # Designer needs full width; other views use centered max-w-7xl
@@ -541,53 +614,109 @@ async def index():
             _outer.classes(remove="max-w-7xl mx-auto px-4", add="px-2")
         else:
             _outer.classes(remove="px-2", add="max-w-7xl mx-auto px-4")
+
+        def _build_real() -> None:
+            if p.main_col is None:
+                return
+            with p.main_col:
+                if state.active_designer_project is not None:
+                    from designer.editor import build_designer_editor
+
+                    def _exit_designer():
+                        state.active_designer_project = None
+                        state.thread_id = None
+                        state.thread_name = None
+                        state.messages = []
+                        state.preferred_home_tab = "Designer"
+                        _rebuild_main()
+
+                    build_designer_editor(
+                        state.active_designer_project,
+                        on_back=_exit_designer,
+                        send_message=_send_message,
+                        p=p,
+                        state=state,
+                        add_chat_message=lambda msg: add_chat_message(msg, p, state.thread_id),
+                        browse_file=browse_file,
+                        open_settings=_open_settings,
+                    )
+                elif state.thread_id is None:
+                    build_home(
+                        state, p,
+                        rebuild_main=_rebuild_main,
+                        rebuild_thread_list=rebuild_thread_list,
+                        send_message=_send_message,
+                        show_task_dialog=_show_task_dialog,
+                        build_graph_panel=build_graph_panel,
+                        is_first_run=is_first_run,
+                        mark_onboarding_seen=mark_onboarding_seen,
+                        open_settings=_open_settings,
+                    )
+                else:
+                    build_chat(
+                        state, p,
+                        rebuild_main=_rebuild_main,
+                        rebuild_thread_list=rebuild_thread_list,
+                        send_message=_send_message,
+                        open_settings=_open_settings,
+                        open_export=_open_export,
+                        show_interrupt=cb.show_interrupt,
+                        add_chat_message=lambda msg: add_chat_message(msg, p, state.thread_id),
+                        browse_file=browse_file,
+                    )
+
+        # Immediate path — build real view synchronously, no skeleton.
+        if immediate:
+            _rebuild_gen[0] += 1
+            p.main_col.clear()
+            _build_real()
+            return
+
+        # ── Phase 1: paint a skeleton IMMEDIATELY (same tick) ────────
+        # Gives instant visual feedback. The real view is built in a
+        # deferred timer so the browser can render this paint first.
+        _rebuild_gen[0] += 1
+        _my_gen = _rebuild_gen[0]
+        from ui.skeleton import (
+            show_gallery_skeleton,
+            show_chat_skeleton,
+            show_home_skeleton,
+            show_generic_skeleton,
+        )
         p.main_col.clear()
         with p.main_col:
             if state.active_designer_project is not None:
-                from designer.editor import build_designer_editor
-
-                def _exit_designer():
-                    state.active_designer_project = None
-                    state.thread_id = None
-                    state.thread_name = None
-                    state.messages = []
-                    state.preferred_home_tab = "Designer"
-                    _rebuild_main()
-
-                build_designer_editor(
-                    state.active_designer_project,
-                    on_back=_exit_designer,
-                    send_message=_send_message,
-                    p=p,
-                    state=state,
-                    add_chat_message=lambda msg: add_chat_message(msg, p, state.thread_id),
-                    browse_file=browse_file,
-                    open_settings=_open_settings,
-                )
+                show_generic_skeleton()
             elif state.thread_id is None:
-                build_home(
-                    state, p,
-                    rebuild_main=_rebuild_main,
-                    rebuild_thread_list=rebuild_thread_list,
-                    send_message=_send_message,
-                    show_task_dialog=_show_task_dialog,
-                    build_graph_panel=build_graph_panel,
-                    is_first_run=is_first_run,
-                    mark_onboarding_seen=mark_onboarding_seen,
-                    open_settings=_open_settings,
-                )
+                # Home view — pick based on preferred tab
+                if getattr(state, "preferred_home_tab", None) == "Designer":
+                    show_gallery_skeleton()
+                else:
+                    show_home_skeleton()
             else:
-                build_chat(
-                    state, p,
-                    rebuild_main=_rebuild_main,
-                    rebuild_thread_list=rebuild_thread_list,
-                    send_message=_send_message,
-                    open_settings=_open_settings,
-                    open_export=_open_export,
-                    show_interrupt=cb.show_interrupt,
-                    add_chat_message=lambda msg: add_chat_message(msg, p, state.thread_id),
-                    browse_file=browse_file,
-                )
+                show_chat_skeleton()
+
+        # ── Phase 2: hydrate real view on next tick ──────────────────
+        def _hydrate() -> None:
+            # Stale — another _rebuild_main happened after us.
+            if _my_gen != _rebuild_gen[0]:
+                return
+            if p.main_col is None:
+                return
+            try:
+                p.main_col.clear()
+                _build_real()
+            except Exception:
+                logger.exception("_rebuild_main hydration failed")
+
+        # 0.01 s is short enough to feel instant but long enough to let
+        # the browser paint the skeleton frame.  The timer must be
+        # created inside a live slot — when this is called from a click
+        # handler whose own element is being torn down (e.g. a gallery
+        # card invoking ``_rebuild_main``), the ambient slot is already
+        # gone.  Anchor the timer to ``p.main_col`` which is stable.
+        with p.main_col:
+            ui.timer(0.01, _hydrate, once=True)
 
     # ── Interrupt dialog ─────────────────────────────────────────────────
     show_interrupt = build_interrupt_dialog(state, p, cb)
@@ -686,6 +815,10 @@ if __name__ in {"__main__", "__mp_main__"}:
 
     _published_dir = str(ensure_published_dir())
     app.add_static_files("/published", _published_dir)
+
+    # Serve per-thread media files (generated videos, etc.)
+    from threads import _MEDIA_DIR
+    app.add_static_files("/_media", str(_MEDIA_DIR))
 
     # Serve user-downloaded font cache
     _font_cache = os.path.join(os.path.expanduser("~"), ".thoth", "font_cache")

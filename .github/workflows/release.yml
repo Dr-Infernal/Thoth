@@ -37,6 +37,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
+# Tracks the version this workflow is currently shipping. Kept in sync with
+# `installer/thoth_setup.iss` (#define MyAppVersion) and `version.py`.
+env:
+  THOTH_VERSION: "3.17.0"
+
 jobs:
   # ════════════════════════════════════════════════════════════════════════════
   #  Run test suite before building installers
@@ -95,17 +100,23 @@ jobs:
       #   env:
       #     CERTUM_PASSWORD: ${{ secrets.CERTUM_PASSWORD }}
       #   run: |
+      #     # Resolve whatever ThothSetup_*.exe was just built (version-agnostic)
+      #     $installer = (Get-ChildItem dist\ThothSetup_*.exe | Select-Object -First 1).FullName
+      #
       #     # Option A: jsign (cloud-based, works with SimplySign)
       #     choco install jsign --yes --no-progress
       #     jsign --storetype DIGICERTONE `
       #           --storepass "$env:CERTUM_PASSWORD" `
       #           --alias "Open Source Code Signing" `
       #           --tsaurl http://time.certum.pl `
-      #           dist\ThothSetup_3.16.0.exe
+      #           "$installer"
       #
       #     # Option B: signtool (if using USB token / local cert)
       #     # signtool sign /fd SHA256 /tr http://time.certum.pl /td SHA256 `
-      #     #   /f cert.pfx /p "$env:CERTUM_PASSWORD" dist\ThothSetup_3.16.0.exe
+      #     #   /f cert.pfx /p "$env:CERTUM_PASSWORD" "$installer"
+      #
+      #     # Verify the signature before publishing
+      #     signtool verify /pa "$installer"
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4

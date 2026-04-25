@@ -11,6 +11,7 @@ from nicegui import run, ui
 
 from designer.share import list_share_channels, share_project_to_channel, share_project_to_x
 from designer.publish import publish_project
+from designer.qr_utils import generate_qr_png_b64
 from designer.state import DesignerProject
 from designer.ui_theme import (
     dialog_card_style,
@@ -143,12 +144,46 @@ def show_share_dialog(project: DesignerProject) -> None:
                         if _link_info[0]:
                             _open_folder(_link_info[0]["path"])
 
+                    def _show_qr() -> None:
+                        if not _link_info[0]:
+                            ui.notify("Publish first to generate a QR code.",
+                                      type="warning")
+                            return
+                        url = _link_info[0].get("url", "")
+                        data_uri = generate_qr_png_b64(url)
+                        with ui.dialog() as qr_dlg, ui.card().style(
+                            dialog_card_style(min_width="320px",
+                                              max_width="400px")
+                        ):
+                            ui.label("Scan to open").classes(
+                                "text-subtitle1 text-weight-bold"
+                            )
+                            if data_uri:
+                                ui.image(data_uri).style(
+                                    "width: 260px; height: 260px;"
+                                    " image-rendering: pixelated;"
+                                    " margin: 4px auto;"
+                                )
+                            else:
+                                ui.label(
+                                    "QR generation unavailable — install qrcode."
+                                ).classes("text-xs text-amber-5")
+                            ui.label(url).classes(
+                                "text-xs text-grey-4"
+                            ).style("word-break: break-all;")
+                            with ui.row().classes("w-full justify-end q-mt-sm"):
+                                ui.button("Close", on_click=qr_dlg.close).props("flat")
+                        qr_dlg.open()
+
                     copy_link_btn = ui.button("Copy Link", on_click=_copy_link)
                     style_ghost_button(copy_link_btn, compact=True)
                     open_link_btn = ui.button("Open Link", on_click=_open_link)
                     style_ghost_button(open_link_btn, compact=True)
                     open_folder_btn = ui.button("Open Folder", on_click=_open_publish_folder)
                     style_ghost_button(open_folder_btn, compact=True)
+                    qr_btn = ui.button("Show QR", icon="qr_code_2",
+                                        on_click=_show_qr)
+                    style_ghost_button(qr_btn, compact=True)
 
             with ui.tab_panel("channel"):
                 if not active_channels:

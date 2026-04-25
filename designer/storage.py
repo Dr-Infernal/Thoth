@@ -275,8 +275,21 @@ def list_projects() -> list[dict]:
 
 
 def delete_project(project_id: str) -> bool:
-    """Delete a project file. Returns True if deleted."""
+    """Delete a project file. Returns True if deleted.
+
+    Cascades to the linked conversation thread: the associated
+    ``thread_meta`` row, LangGraph checkpoints, media, and external
+    state (shell/browser sessions, generation stop) are also removed.
+    """
+    # Fetch linked thread_id BEFORE unlinking the JSON file.
+    linked_thread_id = ""
     path = PROJECTS_DIR / f"{project_id}.json"
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                linked_thread_id = (json.load(f) or {}).get("thread_id", "") or ""
+        except Exception:
+            logger.debug("Could not read thread_id from %s", path, exc_info=True)
     deleted = False
     if path.exists():
         path.unlink()
@@ -285,11 +298,143 @@ def delete_project(project_id: str) -> bool:
         deleted = True
     if delete_project_assets(project_id):
         deleted = True
+    # Cascade thread cleanup
+    if linked_thread_id:
+        try:
+            from threads import _delete_thread, purge_external_state
+            purge_external_state(linked_thread_id)
+            _delete_thread(linked_thread_id)
+        except Exception:
+            logger.exception(
+                "Failed to cascade thread deletion for project %s (thread %s)",
+                project_id, linked_thread_id,
+            )
     return deleted
 
 
+def delete_projects(project_ids: list[str]) -> tuple[int, list[tuple[str, str]]]:
+    """Delete several designer projects at once.
+
+    Wraps :func:`delete_project` so the JSON file, references dir, and
+    assets dir are all cleaned up per project. Returns
+    ``(deleted_count, failures)``. A project whose JSON was already
+    missing (returns False) is not counted.
+    """
+    deleted = 0
+    failures: list[tuple[str, str]] = []
+    for pid in project_ids:
+        try:
+            if delete_project(pid):
+                deleted += 1
+        except Exception as exc:
+            failures.append((pid, str(exc)))
+    return deleted, failures
+
+
+def _fork_thread_for_duplicate(
+    old_thread_id: str,
+    new_thread_id: str,
+    new_project_id: str,
+    new_project_name: str,
+) -> None:
+    """Copy a LangGraph thread's checkpoints/writes and metadata under a new
+    ``thread_id`` so the duplicated project gets an independent conversation
+    that starts from the original history but diverges afterwards.
+
+    If any step fails the new project simply ends up without a thread link;
+    the first message sent in the copy will then create a fresh thread.
+    """
+    if not old_thread_id or not new_thread_id:
+        return
+    import sqlite3
+    try:
+        from threads import DB_PATH, _save_thread_meta, _set_thread_project_id
+        from threads import _thread_ui_media_path, _MEDIA_DIR
+    except Exception:
+        logger.debug("Thread module unavailable; skipping thread fork", exc_info=True)
+        return
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            # Copy LangGraph checkpoint rows under the new thread_id.
+            # Both tables have thread_id as the first column of the
+            # primary key, so a straight INSERT…SELECT with a column
+            # substitution is safe and keeps every other column intact.
+            for table in ("checkpoints", "writes"):
+                try:
+                    cols = [
+                        r[1] for r in conn.execute(
+                            f"PRAGMA table_info({table})"
+                        ).fetchall()
+                    ]
+                except sqlite3.OperationalError:
+                    # Table hasn't been created yet (no messages sent).
+                    continue
+                if not cols or "thread_id" not in cols:
+                    continue
+                select_exprs = ", ".join(
+                    "?" if c == "thread_id" else c for c in cols
+                )
+                col_list = ", ".join(cols)
+                try:
+                    conn.execute(
+                        f"INSERT OR IGNORE INTO {table} ({col_list}) "
+                        f"SELECT {select_exprs} FROM {table} "
+                        f"WHERE thread_id = ?",
+                        (new_thread_id, old_thread_id),
+                    )
+                except sqlite3.OperationalError:
+                    logger.debug(
+                        "Checkpoint fork failed for table %s", table, exc_info=True,
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception(
+            "Failed to fork checkpoint tables for thread %s -> %s",
+            old_thread_id, new_thread_id,
+        )
+
+    # Register the new thread in thread_meta, linked to the new project.
+    try:
+        _save_thread_meta(new_thread_id, new_project_name)
+        _set_thread_project_id(new_thread_id, new_project_id)
+    except Exception:
+        logger.exception(
+            "Failed to register thread_meta for forked thread %s", new_thread_id,
+        )
+
+    # Copy the media sidecar + per-thread media directory so inline
+    # images/docs referenced in the history still resolve for the copy.
+    try:
+        old_sidecar = _thread_ui_media_path(old_thread_id)
+        if old_sidecar.exists():
+            new_sidecar = _thread_ui_media_path(new_thread_id)
+            new_sidecar.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(old_sidecar, new_sidecar)
+        old_media_dir = _MEDIA_DIR / old_thread_id
+        if old_media_dir.exists():
+            shutil.copytree(
+                old_media_dir, _MEDIA_DIR / new_thread_id, dirs_exist_ok=True,
+            )
+    except Exception:
+        logger.exception(
+            "Failed to copy thread media for fork %s -> %s",
+            old_thread_id, new_thread_id,
+        )
+
+
 def duplicate_project(project_id: str, new_name: Optional[str] = None) -> Optional[DesignerProject]:
-    """Duplicate an existing project with a new ID."""
+    """Duplicate an existing project with a new ID.
+
+    The copy gets its own filesystem id, its own reference and asset
+    directories, and — crucially — its own conversation thread. Without
+    this fork every duplicate would share the original's ``thread_id``
+    and new messages in any copy would accumulate into every sibling's
+    history.
+    """
     original = load_project(project_id)
     if not original:
         return None
@@ -300,6 +445,21 @@ def duplicate_project(project_id: str, new_name: Optional[str] = None) -> Option
     new_project.name = new_name or f"{original.name} (Copy)"
     new_project.created_at = datetime.now(timezone.utc).isoformat()
     new_project.updated_at = datetime.now(timezone.utc).isoformat()
+
+    # Fork the conversation thread so the copy has its own independent
+    # history starting from the original's checkpoint.
+    old_thread_id = (original.thread_id or "").strip()
+    if old_thread_id:
+        new_thread_id = f"designer_{new_project.id}"
+        new_project.thread_id = new_thread_id
+        _fork_thread_for_duplicate(
+            old_thread_id, new_thread_id, new_project.id, new_project.name,
+        )
+    else:
+        # No prior thread — leave thread_id empty so a fresh one is
+        # created the first time the user sends a message.
+        new_project.thread_id = None
+
     save_project(new_project)
     original_ref_dir = _project_reference_dir(project_id)
     if original_ref_dir.exists():
