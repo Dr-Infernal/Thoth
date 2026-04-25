@@ -21,12 +21,12 @@ Thoth is a **local-first AI assistant built for personal AI sovereignty** — yo
 
 <table align="center">
   <tr>
-    <td align="center"><a href="https://youtu.be/ansfEqAr6g0"><img src="https://img.youtube.com/vi/ansfEqAr6g0/maxresdefault.jpg" width="360" alt="Demo 1 — Researcher"><br><b>Demo 1 — Researcher</b></a></td>
-    <td align="center"><a href="https://youtu.be/61JFO0ElgBE"><img src="https://img.youtube.com/vi/61JFO0ElgBE/maxresdefault.jpg" width="360" alt="Demo 2 — Small Business"><br><b>Demo 2 — Small Business</b></a></td>
+    <td align="center"><a href="https://youtu.be/ansfEqAr6g0"><img src="https://img.youtube.com/vi/ansfEqAr6g0/maxresdefault.jpg" width="360" alt="Demo 1"></a></td>
+    <td align="center"><a href="https://youtu.be/61JFO0ElgBE"><img src="https://img.youtube.com/vi/61JFO0ElgBE/maxresdefault.jpg" width="360" alt="Demo 2"></a></td>
   </tr>
   <tr>
-    <td align="center"><a href="https://youtu.be/dMoSay7uyoc"><img src="https://img.youtube.com/vi/dMoSay7uyoc/maxresdefault.jpg" width="360" alt="Demo 3 — Developer"><br><b>Demo 3 — Developer</b></a></td>
-    <td align="center"><a href="https://youtu.be/xYJC2IVKH7Y"><img src="https://img.youtube.com/vi/xYJC2IVKH7Y/maxresdefault.jpg" width="360" alt="Demo 4 — Power User"><br><b>Demo 4 — Power User</b></a></td>
+    <td align="center"><a href="https://youtu.be/dMoSay7uyoc"><img src="https://img.youtube.com/vi/dMoSay7uyoc/maxresdefault.jpg" width="360" alt="Demo 3"></a></td>
+    <td align="center"><a href="https://youtu.be/xYJC2IVKH7Y"><img src="https://img.youtube.com/vi/xYJC2IVKH7Y/maxresdefault.jpg" width="360" alt="Demo 4"></a></td>
   </tr>
 </table>
 
