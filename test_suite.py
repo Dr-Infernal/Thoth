@@ -16508,6 +16508,78 @@ try:
 except Exception as e:
     record("FAIL", "73r-setup-mode-aspect", f"{type(e).__name__}: {e}")
 
+# ── 73s. Phase 2.2 — multi-route preview merges per-page <style>/<link> ─
+# Regression for v3.17 app_mockup preview bug: the live preview of
+# active page N>0 rendered unstyled (default browser font/colors) while
+# the bottom thumbnail strip showed correct branded styling. Cause:
+# render_multi_route_html only kept page 0's <head>, dropping per-page
+# <style> blocks. Fix merges every page's <style>/<link rel=stylesheet>
+# blocks into the shell head, deduped.
+try:
+    from designer.preview import render_multi_route_html as _rmr73s
+    from designer.state import DesignerProject as _DP73s, DesignerPage as _DPage73s
+
+    _p0_73s = (
+        '<!DOCTYPE html><html><head>'
+        '<style>body{background:#fff;color:#000}</style>'
+        '</head><body><div>Page 0</div></body></html>'
+    )
+    _p1_73s = (
+        '<!DOCTYPE html><html><head>'
+        '<style>.nike-hero{background:#000;color:#fff;font-family:Inter}</style>'
+        '<link rel="stylesheet" href="https://example.test/brand.css">'
+        '</head><body><div class="nike-hero">YOU\'RE IN.</div></body></html>'
+    )
+    _p2_73s = (
+        '<!DOCTYPE html><html><head>'
+        '<style>.cta-btn{background:#ff6a00;color:#fff;border-radius:24px}</style>'
+        '</head><body><a class="cta-btn">Start Exploring</a></body></html>'
+    )
+    _proj73s = _DP73s(
+        id="__test73s__", name="App Mockup", mode="app_mockup",
+        pages=[
+            _DPage73s(html=_p0_73s, title="P0", route_id="p0"),
+            _DPage73s(html=_p1_73s, title="Welcome", route_id="welcome"),
+            _DPage73s(html=_p2_73s, title="CTA", route_id="cta"),
+        ],
+    )
+    _out73s = _rmr73s(_proj73s, active_route_id="cta")
+
+    # Per-page CSS from pages 1 and 2 must appear in the assembled head.
+    assert ".nike-hero{background:#000" in _out73s, (
+        "page 1 <style> block lost in multi-route merge"
+    )
+    assert ".cta-btn{background:#ff6a00" in _out73s, (
+        "page 2 <style> block lost in multi-route merge"
+    )
+    assert 'href="https://example.test/brand.css"' in _out73s, (
+        "page 1 stylesheet <link> lost in multi-route merge"
+    )
+
+    # Each merged style block should appear exactly once even if pages
+    # repeat the same CSS (dedup guard).
+    _proj73s_dup = _DP73s(
+        id="__test73s_dup__", name="Dup", mode="app_mockup",
+        pages=[
+            _DPage73s(html=_p0_73s, title="P0", route_id="p0"),
+            _DPage73s(html=_p1_73s, title="A", route_id="a"),
+            _DPage73s(html=_p1_73s, title="B", route_id="b"),
+        ],
+    )
+    _dup_out = _rmr73s(_proj73s_dup, active_route_id="b")
+    # Page 0's <style> appears once (it's the shell). Page 1's CSS,
+    # included by both routes a and b, must be deduped to a single copy
+    # in the merged head + the original copy from each section's body
+    # was extracted via _extract_body_inner, so total occurrences of the
+    # nike-hero rule in merged HEAD region should be exactly 1.
+    assert _dup_out.count(".nike-hero{background:#000") == 1, (
+        f"expected dedup, got {_dup_out.count('.nike-hero{background:#000')} copies"
+    )
+
+    record("PASS", "73s: multi-route preview merges per-page <style>/<link>")
+except Exception as e:
+    record("FAIL", "73s-multi-route-css-merge", f"{type(e).__name__}: {e}")
+
 
 # ── 74a. Phase 2.3.A — Template.mode + get_templates_for_mode ─────────────
 try:
@@ -18738,6 +18810,162 @@ try:
     record("PASS", "73p: updater_guide tool guide present")
 except Exception as e:
     record("FAIL", "73p-tool-guide", f"{type(e).__name__}: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# SECTION 74 · TOOL SCHEMA GEMINI COMPATIBILITY (v3.17.1)
+# ═══════════════════════════════════════════════════════════════════
+# Regression: Gemini's GenerateContentRequest validator rejects function
+# declarations whose array parameters are missing `items` (e.g. a bare
+# `list` annotation on a StructuredTool function). The whole agent turn
+# fails with `400 INVALID_ARGUMENT … missing field`. Walk every
+# registered tool's JSON schema and assert no array property is missing
+# `items` (and no object is missing `properties`).
+
+print()
+print("─" * 60)
+print("SECTION 74: Tool Schema Gemini Compatibility")
+print("─" * 60)
+
+# 74a. every registered StructuredTool produces a Gemini-valid schema
+try:
+    import os as _os74a
+    _os74a.environ.setdefault("THOTH_HEADLESS", "1")
+    import importlib as _imp74a
+    _imp74a.import_module("tools")
+    try:
+        _imp74a.import_module("designer.tool")
+    except Exception:
+        pass
+    try:
+        _imp74a.import_module("channels.tool_factory")
+    except Exception:
+        pass
+    from tools import registry as _reg74a
+
+    # Force-load every tool module so registry.register() runs.
+    import pkgutil as _pk74a
+    import tools as _tpkg74a
+    for _m in _pk74a.iter_modules(_tpkg74a.__path__):
+        try:
+            _imp74a.import_module(f"tools.{_m.name}")
+        except Exception:
+            pass
+
+    def _walk74a(node, path, name, problems):
+        if not isinstance(node, dict):
+            return
+        t = node.get("type")
+        if t == "array" and "items" not in node:
+            problems.append(f"{name}::{path or '<root>'} array missing 'items'")
+        if t == "object":
+            for k, v in (node.get("properties") or {}).items():
+                _walk74a(v, f"{path}.{k}", name, problems)
+        if "items" in node:
+            _walk74a(node["items"], f"{path}[]", name, problems)
+        for key in ("anyOf", "oneOf", "allOf"):
+            for i, sub in enumerate(node.get(key, []) or []):
+                _walk74a(sub, f"{path}.{key}[{i}]", name, problems)
+        if isinstance(node.get("additionalProperties"), dict):
+            _walk74a(node["additionalProperties"], f"{path}.<*>", name, problems)
+
+    _all74a = []
+    try:
+        _all74a = list(_reg74a.get_langchain_tools() or [])
+    except Exception:
+        _all74a = []
+    if not _all74a:
+        # Fallback: enumerate via BaseTool wrappers
+        for _ti in getattr(_reg74a, "_tools", {}).values():
+            try:
+                _all74a.extend(_ti.as_langchain_tools() or [])
+            except Exception:
+                continue
+
+    _problems74a: list[str] = []
+    for _t in _all74a:
+        _name = getattr(_t, "name", str(_t))
+        try:
+            _schema = None
+            if getattr(_t, "tool_call_schema", None) is not None:
+                try:
+                    _schema = _t.tool_call_schema.model_json_schema()
+                except Exception:
+                    _schema = None
+            if _schema is None and getattr(_t, "args_schema", None) is not None:
+                try:
+                    _schema = _t.args_schema.model_json_schema()
+                except Exception:
+                    _schema = None
+            if _schema is None:
+                continue
+            _walk74a(_schema, "", _name, _problems74a)
+        except Exception:
+            continue
+
+    assert not _problems74a, "Gemini-incompatible tool schemas: " + "; ".join(_problems74a[:8])
+    record("PASS", f"74a: {len(_all74a)} registered tool schemas Gemini-valid")
+except Exception as e:
+    record("FAIL", "74a-tool-schema-gemini", f"{type(e).__name__}: {e}")
+
+# 74b. AST guard: no StructuredTool function uses a bare list/dict/tuple/set
+# annotation. These render as `type: array` with no `items` and Gemini
+# rejects them. Catches the bug at source even when registry is partial.
+try:
+    import ast as _ast74b
+    from pathlib import Path as _P74b
+
+    _problems74b: list[str] = []
+    for _root in ("tools", "designer", "channels", "plugins"):
+        _rp = _P74b(_root)
+        if not _rp.exists():
+            continue
+        for _py in _rp.rglob("*.py"):
+            try:
+                _src = _py.read_text(encoding="utf-8")
+                _tree = _ast74b.parse(_src)
+            except Exception:
+                continue
+            # collect names referenced as `func=NAME` inside StructuredTool.from_function(...)
+            _tool_funcs: set[str] = set()
+            for _node in _ast74b.walk(_tree):
+                if isinstance(_node, _ast74b.Call):
+                    _f = _node.func
+                    _is_sfn = (
+                        isinstance(_f, _ast74b.Attribute)
+                        and _f.attr == "from_function"
+                        and isinstance(_f.value, _ast74b.Name)
+                        and _f.value.id == "StructuredTool"
+                    )
+                    if not _is_sfn:
+                        continue
+                    for _kw in _node.keywords:
+                        if _kw.arg == "func" and isinstance(_kw.value, _ast74b.Name):
+                            _tool_funcs.add(_kw.value.id)
+            if not _tool_funcs:
+                continue
+            for _node in _ast74b.walk(_tree):
+                if not isinstance(_node, _ast74b.FunctionDef):
+                    continue
+                if _node.name not in _tool_funcs:
+                    continue
+                for _arg in _node.args.args:
+                    _ann = _arg.annotation
+                    if _ann is None:
+                        continue
+                    _bare = None
+                    if isinstance(_ann, _ast74b.Name) and _ann.id in {"list", "dict", "tuple", "set"}:
+                        _bare = _ann.id
+                    elif isinstance(_ann, _ast74b.Subscript) and isinstance(_ann.value, _ast74b.Name) and _ann.value.id == "Optional":
+                        _inner = _ann.slice
+                        if isinstance(_inner, _ast74b.Name) and _inner.id in {"list", "dict", "tuple", "set"}:
+                            _bare = f"Optional[{_inner.id}]"
+                    if _bare:
+                        _problems74b.append(f"{_py.as_posix()}:{_node.lineno} {_node.name}({_arg.arg}: {_bare})")
+    assert not _problems74b, "bare-generic tool annotations (Gemini-incompatible): " + "; ".join(_problems74b[:8])
+    record("PASS", "74b: no StructuredTool funcs use bare list/dict/tuple/set annotations")
+except Exception as e:
+    record("FAIL", "74b-ast-bare-generic", f"{type(e).__name__}: {e}")
 
 
 print(f"  ✅ PASS: {PASS}")

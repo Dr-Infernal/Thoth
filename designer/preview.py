@@ -183,6 +183,17 @@ INTERACTIVE_MODES = {"landing", "app_mockup", "storyboard"}
 
 _BODY_OPEN_RE = _re_body_open = __import__("re").compile(r"<body[^>]*>", __import__("re").IGNORECASE)
 _BODY_CLOSE_RE = __import__("re").compile(r"</body>", __import__("re").IGNORECASE)
+# Per-page <style>...</style> and <link rel="stylesheet" ...> blocks. The
+# multi-route preview merges these from every page so sections rendered
+# from pages 1..N keep their CSS (otherwise they'd inherit only page 0's
+# head and look unstyled — see app_mockup preview regression).
+_HEAD_STYLE_RE = __import__("re").compile(
+    r"<style\b[^>]*>.*?</style>", __import__("re").IGNORECASE | __import__("re").DOTALL,
+)
+_HEAD_LINK_CSS_RE = __import__("re").compile(
+    r"<link\b[^>]*\brel\s*=\s*['\"]?stylesheet['\"]?[^>]*>",
+    __import__("re").IGNORECASE,
+)
 
 
 # ── Phase 2.2.I — phone-frame chrome for app_mockup preview ───────────
@@ -303,6 +314,43 @@ def render_multi_route_html(
     if not head_block:
         head_block = "<!DOCTYPE html><html><head></head><body>"
         first_body_inner = first_rendered
+
+    # Collect <style>/<link rel=stylesheet> blocks from every page beyond
+    # the first, deduped, so per-page CSS survives the multi-route merge.
+    # Without this, pages 1..N render with only page 0's head — which is
+    # how the v3.17 app_mockup preview lost its branded styling on routes
+    # other than the first one.
+    extra_head_parts: list[str] = []
+    seen_blocks: set[str] = set()
+    for _i in range(1, len(project.pages)):
+        try:
+            _r = render_page_html(project, project.pages[_i].html, page_index=_i)
+        except Exception:
+            continue
+        _h, _ = _extract_body_inner(_r)
+        if not _h:
+            continue
+        for _m in _HEAD_STYLE_RE.findall(_h) + _HEAD_LINK_CSS_RE.findall(_h):
+            _key = _m.strip()
+            if _key and _key not in seen_blocks:
+                seen_blocks.add(_key)
+                extra_head_parts.append(_m)
+
+    if extra_head_parts:
+        _injected = "\n".join(extra_head_parts)
+        # Insert just before </head> in the shell; fall back to prepending
+        # to the body open tag if no </head> is present.
+        if "</head>" in head_block.lower():
+            # case-insensitive replace of the first </head>
+            _idx = head_block.lower().find("</head>")
+            head_block = head_block[:_idx] + _injected + head_block[_idx:]
+        else:
+            # Find the <body…> tag and inject before it
+            _bm = _BODY_OPEN_RE.search(head_block)
+            if _bm:
+                head_block = head_block[: _bm.start()] + _injected + head_block[_bm.start():]
+            else:
+                head_block = head_block + _injected
 
     sections: list[str] = []
     for idx, page in enumerate(project.pages):

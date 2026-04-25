@@ -1509,7 +1509,7 @@ def _preview_screen(route_id: str) -> str:
     return f"Switched preview to route '{route_id}' (page {idx + 1})."
 
 
-def _reorder_routes(route_ids: list) -> str:
+def _reorder_routes(route_ids: list[str]) -> str:
     """Reorder project.pages to match the provided route_id list."""
     project = _require_project()
     err = _require_interactive(project, "designer_reorder_routes")
