@@ -7,9 +7,9 @@ This is the end-to-end release checklist for Thoth.
 Thoth uses semantic versioning:
 
 - Patch: `3.17.1` for bug fixes
-- Minor: `3.18.0` for new backwards-compatible features
+- Minor: `3.19.0` for new backwards-compatible features
 - Major: `4.0.0` for breaking changes
-- Beta/RC: `3.18.0-beta.1`, `3.18.0-rc.1`
+- Beta/RC: `3.19.0-beta.1`, `3.19.0-rc.1`
 
 ## Before release
 
@@ -39,7 +39,12 @@ Thoth uses semantic versioning:
    report version placeholder.
 
 5. Update `RELEASE_NOTES.md` with human-readable notes.
-6. Open and merge the release-prep PR.
+6. Confirm new shipped runtime files are covered by platform packaging:
+   Windows `installer/thoth_setup.iss`, macOS `installer/build_mac_app.sh`,
+   and the installer payload notes in `installer/README.md`.
+7. Smoke-test first-run behavior against a clean data directory before building
+   artifacts, especially setup wizard imports and provider config defaults.
+8. Open and merge the release-prep PR.
 
 ## Build artifacts
 

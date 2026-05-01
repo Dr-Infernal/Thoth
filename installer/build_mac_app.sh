@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./installer/build_mac_app.sh                  # local unsigned build
-#   ./installer/build_mac_app.sh 3.18.0            # specify version
+#   ./installer/build_mac_app.sh 3.19.0            # specify version
 #
 # For signed builds (CI), set environment variables:
 #   CODESIGN_IDENTITY="Developer ID Application: Name (TEAMID)"
@@ -152,8 +152,8 @@ for f in "$PROJECT_DIR"/*.py; do
 done
 cp "$PROJECT_DIR/requirements.txt" "$APP_SRC/"
 
-# Sub-packages (tools, channels, bundled_skills, tool_guides, ui, plugins, designer, scripts, utils, mcp_client, migration)
-for pkg in tools channels bundled_skills tool_guides ui plugins designer scripts utils mcp_client migration; do
+# Sub-packages (tools, channels, bundled_skills, tool_guides, ui, plugins, designer, scripts, utils, providers, mcp_client, migration)
+for pkg in tools channels bundled_skills tool_guides ui plugins designer scripts utils providers mcp_client migration; do
     if [ -d "$PROJECT_DIR/$pkg" ]; then
         rsync -a \
               --exclude='__pycache__' --exclude='*.pyc' \

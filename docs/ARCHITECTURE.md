@@ -12,7 +12,7 @@
 - [Wiki Vault](#wiki-vault)
 - [Dream Cycle](#dream-cycle)
 - [Document Knowledge Extraction](#document-knowledge-extraction)
-- [Brain Model & Cloud Models](#brain-model--cloud-models)
+- [Brain Model & Providers](#brain-model--providers)
 - [Voice Input & Text-to-Speech](#voice-input--text-to-speech)
 - [Shell Access](#shell-access)
 - [Browser Automation](#browser-automation)
@@ -111,7 +111,7 @@ A 5-phase background daemon refines the knowledge graph during idle hours and en
 - **Phase 2: Description enrichment** — thin entities (<80 chars) appearing in multiple conversations get richer descriptions from conversation context and graph neighborhood
 - **Phase 3: Confidence decay** — stale `dream_infer` relations older than 90 days lose 10% confidence per cycle; very low-confidence edges are pruned automatically
 - **Phase 4: Relationship inference** — co-occurring entity pairs with no meaningful edge are evaluated for a specific typed relation; hub diversity caps, batch rotation, half-overlap reuse, multi-excerpt evidence, and a 7-day rejection cache improve quality and reduce repetition
-- **Phase 5: Insights analysis** — the system captures a snapshot of recent logs, config, channels, designer activity, memory stats, and existing insights, feeds it to `DREAM_INSIGHTS_PROMPT`, and stores actionable results in `insights.py`
+- **Phase 5: Insights analysis** — the system captures a snapshot of recent logs, provider/model/media configuration, channels, task state, memory stats, skills, and existing insights, feeds it to `DREAM_INSIGHTS_PROMPT`, and stores actionable results in `insights.py`
 - **Three-layer anti-contamination** — sentence-level excerpt filtering, deterministic post-enrichment validation, and strengthened prompting prevent cross-entity fact bleed
 - **Ollama busy check** — queries `/api/ps` before starting; defers if Ollama is actively serving a user request to avoid competing for GPU or CPU
 - **Configurable window** — default 1–5 AM local time; checks every 30 minutes if enabled, idle, in window, and not yet run that day
@@ -141,24 +141,30 @@ Uploaded documents are processed through a three-phase **map-reduce LLM pipeline
 
 ---
 
-## Brain Model & Cloud Models
+## Brain Model & Providers
 
-The brain model is Thoth's default LLM — the model used for conversations, memory extraction, dream analysis, and any thread or workflow without a specific override. It can be a local Ollama model or an opt-in cloud model.
+The brain model is Thoth's default LLM — the model used for conversations, memory extraction, dream analysis, and any thread or workflow without a specific override. It can be a local Ollama model or an opt-in provider model.
 
 Thoth is built and tested for local models first. Every feature supports local models, and that remains the priority. Local models already handle tool calling, multi-step reasoning, memory extraction, and long conversations well with a 14B+ model.
 
-Cloud models are supported for users without a dedicated GPU, for frontier reasoning on demand, or for trying many providers without downloading large local weights. Thoth supports opt-in cloud models through **OpenAI** (direct API), **Anthropic** (Claude), **Google AI** (Gemini), **xAI** (Grok), and **OpenRouter** (many third-party models), all configured from the GUI.
+Provider models are supported for users without a dedicated GPU, for frontier reasoning on demand, or for trying many providers without downloading large local weights. Thoth supports opt-in provider models through **OpenAI** (direct API), **Anthropic** (Claude), **Google AI** (Gemini), **xAI** (Grok), **OpenRouter** (many third-party models), and **ChatGPT / Codex** (subscription-backed Codex models). Provider connections, health, and credential sources are configured from Settings -> Providers; model catalog browsing, pinning, and defaults live in Settings -> Models.
 
-- **Dynamic model switching** — change the brain model from Settings; choose from curated local models or any connected cloud model
+The `providers/` subsystem now owns provider config, auth metadata, model catalog normalization, runtime construction, display-safe status, and Quick Choices. Existing public functions in `models.py` remain as compatibility facades while provider-backed selection is rolled through the app.
+
+ChatGPT / Codex is deliberately modeled as a subscription provider, not as another OpenAI API-key route. Direct Codex runtime requires Thoth's in-app ChatGPT device-flow sign-in so Thoth stores its own runnable OAuth tokens in the local OS credential store. Existing Codex CLI auth files can be referenced only as display-safe metadata: Thoth records that the external login exists, path/fingerprint metadata, and broad auth-file shape, but it does not copy runnable tokens from `~/.codex/auth.json`.
+
+Codex runtime uses ChatGPT's subscription/internal Codex backend rather than the public OpenAI API. That means endpoint behavior, catalog shape, auth requirements, rate limits, and model availability may change upstream. When a ChatGPT / Codex model is selected, the current conversation plus model-visible tool context and tool results are sent to ChatGPT / Codex for that turn. Durable Thoth data such as memories, documents, files, and other conversations remain local unless explicitly included in the active conversation or surfaced by a tool result.
+
+- **Dynamic model switching** — change the brain model from Settings; choose from pinned local/provider Quick Choices managed in the Models catalog
 - **Per-thread & per-workflow model override** — conversations and workflows can each run on a different model, with overrides persisted locally
-- **Starred models** — favorite cloud models appear alongside local models in the inline picker for quick switching
-- **Cost-efficient context management** — smart context trimming compresses older conversation turns and shrinks oversized tool outputs, reducing token usage and API costs for cloud models
+- **Quick Choices** — models pinned from the consolidated Models catalog appear in chat, workflow, channel, Designer, and status-tool pickers
+- **Cost-efficient context management** — smart context trimming compresses older conversation turns and shrinks oversized tool outputs, reducing token usage and API costs for provider models
 - **Curated local models** — only tool-calling-capable local models are surfaced prominently
 - **Tool-support validation** — unsupported local models are warned about and can be auto-reverted if they fail a live tool-call check
 - **Download buttons** — local models not yet present show download actions with progress
-- **Configurable context window** — local and cloud context caps can be set independently; actual model limits are still respected
-- **Local & cloud indicators** — the UI clearly distinguishes downloaded local models, missing local models, and connected cloud models
-- **Cloud vision detection** — cloud models with image capability are detected and reused by the Vision feature when available
+- **Configurable context window** — local and provider context caps can be set independently; actual model limits are still respected
+- **Local & provider indicators** — the UI clearly distinguishes downloaded local models, missing local models, and connected provider models
+- **Provider vision detection** — provider models with image capability are detected and reused by the Vision feature when available
 
 ---
 
@@ -210,10 +216,10 @@ Cloud models are supported for users without a dedicated GPU, for frontier reaso
 - **Camera analysis** — capture and analyze images from your webcam in real-time
 - **Screen capture** — take screenshots and ask questions about what is on your screen
 - **Image file analysis** — analyze workspace image files by path without needing a camera or live capture
-- **Configurable vision model** — choose from local or cloud-capable vision models
+- **Configurable vision model** — choose from local or provider-capable vision models
 - **Camera selection** — pick which camera to use when multiple devices are present
 - **Inline image display** — captured and workspace images are shown inline in chat
-- **Cloud vision support** — cloud models with image capability are auto-detected and work alongside local vision models
+- **Provider vision support** — provider models with image capability are auto-detected and work alongside local vision models
 
 ---
 
@@ -380,7 +386,7 @@ Thoth now carries an explicit self-description into prompts and uses Dream Cycle
 
 ### Insight Generation & Triage
 
-- **Dream snapshot analysis** — Dream Cycle phase 5 captures logs, config, usage signals, and active insights, then runs `DREAM_INSIGHTS_PROMPT`
+- **Dream snapshot analysis** — Dream Cycle phase 5 captures logs, provider/model/media configuration, usage signals, and active insights, then runs `DREAM_INSIGHTS_PROMPT`
 - **Structured insight store** — `insights.py` persists categorized insights like `error_pattern`, `skill_proposal`, `tool_config`, `knowledge_quality`, `usage_pattern`, and `system_health`
 - **Dedup and pruning** — similar titles and semantically overlapping insights are merged; stale insights are auto-pruned; last-analysis time is tracked
 - **Pin / dismiss / apply actions** — the Workflow Console exposes user actions for curating the insight list without leaving the app
@@ -464,7 +470,7 @@ Tool guides are lightweight `SKILL.md` packages that attach contextual instructi
 
 ## Image Generation
 
-Thoth can generate and edit images through multiple cloud providers, render them inline, persist them to disk, and reuse them in designer workflows or channel delivery.
+Thoth can generate and edit images through multiple external providers, render them inline, persist them to disk, and reuse them in designer workflows or channel delivery.
 
 - **Provider support** — OpenAI image models, xAI Grok Imagine, Google Imagen 4, and Gemini image-capable models
 - **Generate and edit flows** — prompts can generate a new image or edit the most recent image, an attached image, or an on-disk file
@@ -636,7 +642,7 @@ A sandboxed, hot-reloadable extension system lets plugins add new tools and skil
 - **Native window** — runs in a desktop window via pywebview rather than depending on a browser tab
 - **System tray** — `launcher.py` exposes open and quit controls plus running-state feedback
 - **Splash screen** — Tk-based splash with console fallback during startup
-- **First-launch setup wizard** — guides the user through Local or Cloud setup paths without touching config files
+- **First-launch setup wizard** — guides the user through migration, Local, or Providers setup paths without touching config files
 - **Self-contained installers** — Windows and macOS releases bundle dependencies for one-click setup
 - **Auto-restart flow** — closing the native window does not kill the tray-managed app process; reopen is fast
 - **Release pipeline** — build, sign, notarize, and publish automation lives in CI
@@ -647,7 +653,7 @@ A sandboxed, hot-reloadable extension system lets plugins add new tools and skil
 
 - **Multi-turn threads** — conversation history is stored in SQLite via LangGraph checkpointing and local thread metadata
 - **Auto-naming and switching** — threads are named from the conversation and can be reopened, exported, or deleted individually
-- **Per-thread model override** — conversations can pin a different local or cloud model than the global default
+- **Per-thread model override** — conversations can pin a different local or provider model than the global default
 - **File attachments** — drag-and-drop, clipboard paste, and standard upload flows handle images, PDFs, spreadsheets, JSON, and text
 - **Media persistence** — chat media is stored per thread on disk with sidecar metadata; generated content persists more aggressively than transient capture artifacts
 - **Inline rich rendering** — Plotly charts, Mermaid diagrams, YouTube embeds, syntax-highlighted code, and images render directly in the transcript
@@ -690,6 +696,7 @@ Thoth ships with **13 manual bundled skills** and **18 tool guides**. Manual ski
 | **⚙️ Task Automation** | Design effective workflows with steps, conditions, approvals, triggers, and delivery routing |
 | **🌐 Web Navigator** | Strategic patterns for browser automation, research, forms, and data extraction |
 
+- **Claude Code Delegation** — disabled by default, this skill treats Claude Code CLI as an external coding worker while Thoth remains coordinator. It favors bounded `claude -p` print-mode tasks, explicit working-directory checks, `--allowedTools`, turn/budget limits, diff inspection, Thoth-side verification, and user approval before write-capable or destructive delegation.
 - **User skills** — custom skills live in `~/.thoth/skills/<name>/SKILL.md`; user skills with the same name as a bundled skill override it
 - **In-app skill editor** — skills can be created and edited directly from Settings
 - **Per-skill enablement** — only enabled manual skills are injected into the system prompt
@@ -712,14 +719,14 @@ Thoth ships with **13 manual bundled skills** and **18 tool guides**. Manual ski
 | **`wiki_vault.py`** | Obsidian-compatible markdown vault export, indexing, search, and conversation export |
 | **`dream_cycle.py`** | Nightly graph refinement engine: merges, enrichment, decay, relation inference, insights analysis, and journal logging |
 | **`document_extraction.py`** | Background document map-reduce extraction pipeline with provenance-aware graph writes |
-| **`models.py`** | Local and cloud model management, context caps, starred models, provider detection, and model factories |
+| **`models.py`** | Local model management plus compatibility facades for provider model catalogs, context caps, Quick Choices, provider detection, and model factories |
 | **`documents.py`** | Document ingestion, chunking, embedding, vector-store persistence, and per-document cleanup |
 | **`voice.py`** | Faster-whisper-based speech input pipeline and voice-state management |
 | **`tts.py`** | Kokoro text-to-speech integration, voice catalog, and streaming playback |
-| **`vision.py`** | Camera capture, screen capture, and workspace image analysis via local or cloud vision models |
+| **`vision.py`** | Camera capture, screen capture, and workspace image analysis via local or provider vision models |
 | **`data_reader.py`** | Shared structured-data loader for CSV, TSV, Excel, JSON, and JSONL |
 | **`launcher.py`** | Desktop launcher, system tray, splash screen, app lifecycle, and logging bootstrap |
-| **`api_keys.py`** + **`secret_store.py`** | API key storage and retrieval for tools and cloud providers, backed by OS keyring with metadata-only local files and legacy plaintext migration |
+| **`api_keys.py`** + **`secret_store.py`** | API key storage and retrieval for tools and API-key providers, backed by OS keyring with metadata-only local files and legacy plaintext migration |
 | **`identity.py`** | Assistant name, personality, and self-improvement preference storage with sanitization |
 | **`self_knowledge.py`** | Capability manifest, identity-line builder, live runtime state builder, and prompt-time self-knowledge assembly |
 | **`insights.py`** | Structured insight store with dedup, pruning, pin/dismiss/apply state, and last-analysis tracking |
@@ -759,7 +766,8 @@ All user data is stored under `~/.thoth/` (or `%USERPROFILE%\\.thoth\\` on Windo
 ├── dream_rejections.json          # Rejected inference-pair cache
 ├── insights.json                  # Structured insight store
 ├── api_keys.json                  # API key metadata only; raw key values live in the OS credential store when available
-├── cloud_config.json              # Starred cloud models and cloud settings
+├── cloud_config.json              # Legacy provider-model pinning compatibility data
+├── providers.json                 # Provider metadata, Quick Choices, routing profiles, and credential fingerprints only
 ├── app_config.json                # Onboarding and first-run flags
 ├── user_config.json               # Avatar preferences, identity, and self-improvement settings
 ├── channels_config.json           # Channel enablement and per-channel config
@@ -811,16 +819,16 @@ Most open-source AI assistants are still **developer tools disguised as products
 
 | | ChatGPT / Claude / Gemini | Thoth |
 |---|---|---|
-| **Your data** | Stored on provider servers, subject to their privacy policies | Stays on your machine. With opt-in cloud models, only the current conversation goes to the provider; memories, files, designer projects, and history remain local |
+| **Your data** | Stored on provider servers, subject to their privacy policies | Stays on your machine. With opt-in provider models, only the current conversation and model-visible tool context go to the selected provider; memories, files, designer projects, and history remain local unless explicitly included |
 | **Conversations** | Provider-owned chat history | Local SQLite-backed threads, exportable anytime |
-| **Cost** | Subscription or provider billing | Free with local models; cloud usage is pay-per-token only when you opt in |
+| **Cost** | Subscription or provider billing | Free with local models; provider usage is upstream API billing or ChatGPT subscription access only when you opt in |
 | **Memory** | Limited, opaque, provider-controlled | Personal knowledge graph with entities, relations, visualization, wiki export, and background refinement |
 | **Tools** | Limited app integrations and provider-defined plug-ins | 30 core tools plus auto-generated channel tools: shell, browser, filesystem, Gmail, Calendar, memory graph, Designer Studio, Thoth Status, MCP external tools, image generation, video generation, research tools, and more |
 | **Customization** | Pick a model and maybe a custom instruction | Swap models per thread or workflow, configure name and personality, build workflows, toggle tools and skills, and enable self-improvement features |
 | **Voice** | Usually cloud-processed | Local faster-whisper STT plus Kokoro TTS |
-| **Availability** | Internet required | Local models work offline; cloud models are optional |
+| **Availability** | Internet required | Local models work offline; provider models are optional |
 
-> **Bottom line:** cloud assistants rent you access to someone else's system. Thoth gives you **personal AI sovereignty** — local-first by default, cloud when you choose it, and all of your durable data under your own control.
+> **Bottom line:** cloud assistants rent you access to someone else's system. Thoth gives you **personal AI sovereignty** — local-first by default, providers when you choose them, and all of your durable data under your own control.
 
 ### How is Thoth different from OpenClaw?
 

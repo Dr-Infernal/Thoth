@@ -14,7 +14,7 @@
 
 Thoth is a **local-first AI assistant for personal AI sovereignty**: a desktop agent with memory, tools, workflows, design creation, messaging, plugins, and optional cloud models while your durable data stays on your machine.
 
-It runs fully local through [Ollama](https://ollama.com/) with 39 curated tool-calling models, or you can opt into OpenAI, Anthropic, Google AI, xAI, and OpenRouter when you want frontier reasoning or do not have a GPU. API keys are stored in the OS credential store when available; Thoth has no account system, server, or telemetry pipeline.
+It runs fully local through [Ollama](https://ollama.com/) with 39 curated tool-calling models, or you can opt into OpenAI, Anthropic, Google AI, xAI, OpenRouter, and ChatGPT / Codex when you want frontier reasoning or do not have a GPU. API keys and in-app subscription tokens are stored in the OS credential store when available; Thoth has no account system, server, or telemetry pipeline.
 
 > **🖥️ One-click install on Windows & macOS** — download, run, done. No terminal, Docker, or config files required. [Get it here.](https://github.com/siddsachar/Thoth/releases)
 
@@ -61,19 +61,19 @@ Thoth ships as a desktop app for Windows and macOS with one-click installers, tr
 
 ### Extensible Without Giving Up Control
 
-Plugins add tools and skills through a sandboxed marketplace; MCP servers add external tools with per-server and per-tool review; the migration wizard imports selected Hermes/OpenClaw data with backups and redacted reports. Core and plugin API keys use the OS credential store when available, with metadata-only files in Thoth's data directory.
+Plugins add tools and skills through a sandboxed marketplace; MCP servers add external tools with per-server and per-tool review; Claude Code Delegation can coordinate Claude Code CLI as an approval-gated external coding worker; the migration wizard imports selected Hermes/OpenClaw data with backups and redacted reports. Core and plugin API keys use the OS credential store when available, with metadata-only files in Thoth's data directory.
 
 ## Feature Map
 
 | Area | What Thoth Includes |
 |------|---------------------|
-| **Agent & Models** | LangGraph ReAct agent, streaming, thinking bubbles, smart context trimming, 39 curated Ollama models, opt-in OpenAI/Anthropic/Google/xAI/OpenRouter cloud models, per-thread and per-workflow model overrides |
+| **Agent & Models** | LangGraph ReAct agent, streaming, thinking bubbles, smart context trimming, 39 curated Ollama models, opt-in OpenAI/Anthropic/Google/xAI/OpenRouter provider models plus ChatGPT / Codex subscription models, per-thread and per-workflow model overrides |
 | **Memory & Knowledge** | Personal knowledge graph, FAISS semantic recall, 67 typed relations, graph visualization, Obsidian wiki export, document extraction, Dream Cycle refinement, self-knowledge, and insights |
 | **Design & Media** | Designer Studio, PDFs/HTML/PNG/PPTX export, published interactive links, image generation/editing, video generation, chart insertion, Mermaid/Plotly rendering, and media persistence |
 | **Tools** | 30 core tools covering search, browser, shell, filesystem, documents, Gmail, Calendar, X, memory, workflows, tracker, image/video, vision, status, MCP, updates, computation, weather, charts, and system info |
 | **Automation** | Scheduled workflows, step pipelines, conditions, approvals, subtasks, webhooks, task-completion triggers, notifications, channel delivery, run history, and safety modes |
 | **Channels & Voice** | Telegram, WhatsApp, Discord, Slack, SMS, local faster-whisper STT, Kokoro TTS, media intake, reactions, streaming, approval routing, and tunnel manager |
-| **Platform & Extensibility** | Native desktop app, one-click installers, auto-updates, plugin marketplace, MCP client, migration wizard, configurable identity, secure API-key storage, 13 manual skills, and 18 tool guides |
+| **Platform & Extensibility** | Native desktop app, one-click installers, auto-updates, plugin marketplace, MCP client, migration wizard, configurable identity, secure API-key storage, 13 manual skills including Claude Code Delegation, and 18 tool guides |
 
 [Detailed architecture and subsystem reference →](docs/ARCHITECTURE.md)
 
@@ -86,7 +86,7 @@ Plugins add tools and skills through a sandboxed marketplace; MCP servers add ex
 | | Thoth | OpenClaw |
 |---|---|---|
 | **Getting started** | **One-click installer** (`.exe` / `.dmg`) — download, run, done. Built-in setup wizard, no terminal required | `npm install -g openclaw@latest` → CLI onboarding. Requires Node.js 24. Windows needs WSL2 (no native Windows support) |
-| **Local AI (offline)** | **Local-first** — Ollama with 39 curated models out of the box. Works fully offline. Cloud is opt-in | Cloud-first design — requires an API key to start. Local model support through provider config |
+| **Local AI (offline)** | **Local-first** — Ollama with 39 curated models out of the box. Works fully offline. Provider models are opt-in | Cloud-first design — requires an API key to start. Local model support through provider config |
 | **Memory** | **Personal knowledge graph** — 10 entity types, typed directional relations, visual explorer, FAISS semantic search + 1-hop graph expansion, memory decay, orphan repair | Flat markdown files (`MEMORY.md` + daily notes) with semantic search. No structured graph |
 | **Knowledge refinement** | **Dream Cycle** — 5-phase nightly engine: duplicate merging (≥0.93 similarity), description enrichment, stale-confidence decay, relationship inference with hub diversity caps and rejection cache, and actionable insight generation. 3-layer anti-contamination system, dream journal | Dreaming (experimental) — Light/Deep/REM phases that promote short-term signals to long-term memory via scoring thresholds |
 | **Document intelligence** | **Map-reduce LLM pipeline** — extracts structured entities and relations into the knowledge graph with source provenance. Curated 67-type relation vocabulary, entity caps, self-loop rejection. Supports PDF, DOCX, EPUB, HTML, Markdown | File read/write/edit operations in the workspace |
@@ -100,7 +100,7 @@ Plugins add tools and skills through a sandboxed marketplace; MCP servers add ex
 | **Designer / Canvas** | Designer Studio for decks, one-pagers, reports, published links, plus Mermaid diagrams and Plotly charts rendered inline | A2UI — agent-driven interactive visual workspace |
 | **Plugins** | Sandboxed plugin marketplace with hot-reload and security scanning | npm plugin ecosystem + ClawHub skill registry. Large community catalog |
 | **Privacy** | All data local. No account, no server, no telemetry. API keys use the OS credential store when available — Thoth has no servers | Self-hosted gateway. Data stays on your machine. Some channel integrations require external services |
-| **Cost** | **Free** with local models. Cloud: pay-per-token (pennies/conversation) | Free + open source. Requires a cloud API key to function |
+| **Cost** | **Free** with local models. Provider models use upstream API billing or ChatGPT subscription access only when you opt in | Free + open source. Requires a cloud API key to function |
 
 > **In short:** OpenClaw is a powerful gateway for developers who want their AI assistant on every messaging platform. Thoth is built for people who want **personal AI sovereignty** — local-first intelligence, a structured knowledge graph that grows with you, one-click setup, and tools that work without touching a terminal. Different philosophies, both open source.
 
@@ -185,7 +185,7 @@ Thoth's agent has access to 30 core tool modules. Many of them expose multiple o
 │  │  Sidebar   │  │   Chat Interface     │  │   Settings Dialog │   │
 │  │  Threads   │  │   Streaming Tokens   │  │   14 Tabs         │   │
 │  │  Controls  │  │   Tool Status        │  │   Tool Config     │   │
-│  │ Knowledge  │  │ Knowledge Graph View │  │   Cloud Settings  │   │
+│  │ Knowledge  │  │ Knowledge Graph View │  │ Provider Settings │   │
 │  │ Approvals  │  │   Approval Gates     │  │                   │   │
 │  └────────────┘  └──────────────────────┘  └───────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────────┐   │
@@ -212,7 +212,7 @@ Thoth's agent has access to 30 core tool modules. Many of them expose multiple o
   ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐
   │   LLMs   │ │Knowledge│ │ SQLite │ │ FAISS  │ │External│
   │  Ollama  │ │ Graph  │ │Threads │ │ Vector │ │  APIs  │
-  │ + Cloud  │ │(SQLite+│ │(local) │ │ Store  │ │(opt-in)│
+   │+Providers│ │(SQLite+│ │(local) │ │ Store  │ │(opt-in)│
   │ (opt-in) │ │NetworkX)│ │        │ │        │ │        │
   └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘
 ```
@@ -236,7 +236,7 @@ Thoth's agent has access to 30 core tool modules. Many of them expose multiple o
 
 > **Note:** The default local model (`qwen3:14b`, ~9 GB) runs well on CPU with 16 GB RAM, but a GPU makes responses significantly faster. Smaller models like `qwen3:8b` (~5 GB) work on 8 GB RAM machines.
 
-### For Cloud Models Only (No Local GPU Needed)
+### For Provider Models Only (No Local GPU Needed)
 
 | Requirement | Details |
 |-------------|---------|
@@ -247,7 +247,7 @@ Thoth's agent has access to 30 core tool modules. Many of them expose multiple o
 | **GPU** | Not needed |
 | **Internet** | Required (LLM inference happens on the provider's servers) |
 
-> You still need an API key from [OpenAI](https://platform.openai.com/), [Anthropic](https://console.anthropic.com/), [Google AI](https://aistudio.google.com/), [xAI](https://console.x.ai/), or [OpenRouter](https://openrouter.ai/). Cloud models are billed per-token by the provider — typically pennies per conversation.
+> You still need an API key from [OpenAI](https://platform.openai.com/), [Anthropic](https://console.anthropic.com/), [Google AI](https://aistudio.google.com/), [xAI](https://console.x.ai/), or [OpenRouter](https://openrouter.ai/), or an in-app ChatGPT sign-in for ChatGPT / Codex. API providers are billed per-token by the upstream provider; ChatGPT / Codex uses your ChatGPT subscription access.
 
 ---
 
@@ -270,7 +270,7 @@ Thoth's agent has access to 30 core tool modules. Many of them expose multiple o
 
 > **Works on Apple Silicon (M1/M2/M3/M4) and Intel Macs** (macOS 12+). No terminal, no manual setup — just double-click and go.
 
-> **Using cloud models only?** The installer still sets up Ollama by default, but you can skip model downloads. On first launch, choose the **Cloud** setup path, enter your API key, and start chatting — no GPU required.
+> **Using provider models only?** The installer still sets up Ollama by default, but you can skip model downloads. On first launch, choose the **Providers** setup path, enter your API key, and start chatting — no GPU required.
 
 ---
 
@@ -278,7 +278,7 @@ Thoth's agent has access to 30 core tool modules. Many of them expose multiple o
 
 > **Prefer a manual install?** A few commands from source:
 
-1. **Install [Ollama](https://ollama.com/)** *(required for local models — skip if using cloud models only)*
+1. **Install [Ollama](https://ollama.com/)** *(required for local models — skip if using provider models only)*
 
 2. **Clone the repository**
    ```bash
@@ -316,25 +316,28 @@ Thoth's agent has access to 30 core tool modules. Many of them expose multiple o
    python app.py
    ```
 
-> **First launch:** A setup wizard lets you choose between **Local** (Ollama) and **Cloud** (API key) setup paths. For local, the default brain model (`qwen3:14b`, ~9 GB) is recommended. For cloud, enter your API key (OpenAI, Anthropic, Google AI, xAI, or OpenRouter) and pick a default model.
+> **First launch:** A setup wizard lets you choose between **Local** (Ollama) and **Providers** (API key) setup paths. For local, the default brain model (`qwen3:14b`, ~9 GB) is recommended. For Providers, enter your API key (OpenAI, Anthropic, Google AI, xAI, or OpenRouter), pick a default model, and seed Quick Choices for everyday pickers. ChatGPT / Codex sign-in is available after launch in **Settings → Providers**.
 
 ---
 
 ## 🔑 API Key Setup (Optional)
 
-Most tools work without any API keys. For cloud models and enhanced functionality:
+Most tools work without any API keys. For provider models and enhanced functionality:
 
-### Cloud LLM Providers
+### LLM Providers
 
 | Service | Key | Purpose | How to Get |
 |---------|-----|---------|------------|
 | **OpenAI** | `OPENAI_API_KEY` | GPT and other OpenAI models | [platform.openai.com](https://platform.openai.com/) |
+| **ChatGPT / Codex** | In-app ChatGPT sign-in | Subscription-backed Codex models | **Settings → Providers → ChatGPT / Codex** |
 | **Anthropic** | `ANTHROPIC_API_KEY` | Claude models (direct API) | [console.anthropic.com](https://console.anthropic.com/) |
 | **Google AI** | `GOOGLE_API_KEY` | Gemini models (direct API) | [aistudio.google.com](https://aistudio.google.com/) |
 | **xAI** | `XAI_API_KEY` | Grok models (direct API) | [console.x.ai](https://console.x.ai/) |
 | **OpenRouter** | `OPENROUTER_API_KEY` | 100+ models from all major providers (Claude, Gemini, Llama, etc.) | [openrouter.ai](https://openrouter.ai/) |
 
-Configure cloud keys in **⚙️ Settings → ☁️ Cloud** tab. Keys are stored in your OS credential store (Windows Credential Manager, macOS Keychain, or Linux Secret Service/KWallet where available); `~/.thoth/api_keys.json` keeps only local metadata such as saved-state and masked fingerprints. Keys are never sent to Thoth's servers (there are none).
+Configure provider keys and subscription accounts in **Settings → Providers**. Keys and in-app ChatGPT / Codex tokens are stored in your OS credential store (Windows Credential Manager, macOS Keychain, or Linux Secret Service/KWallet where available); `~/.thoth/api_keys.json` and `~/.thoth/providers.json` keep only local metadata such as saved-state, provider status, Quick Choices, and masked fingerprints. External Codex CLI login files are metadata/reference only: Thoth can show that a CLI login exists, but direct Codex runtime requires the in-app ChatGPT sign-in and does not copy runnable tokens from `~/.codex/auth.json`.
+
+ChatGPT / Codex uses ChatGPT's subscription/internal Codex backend rather than the public OpenAI API. That backend may change upstream, including endpoint behavior, catalog shape, auth requirements, rate limits, and model availability.
 
 ### Tool API Keys
 
@@ -381,12 +384,13 @@ For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credent
    - *"What did I ask about taxes last week?"* → uses Conversation Search
 4. **Open ⚙️ Settings** to configure models, enable/disable tools, and set up integrations
 
-### Cloud Models (No GPU? Start Here)
+### Provider Models (No GPU? Start Here)
 
-1. **Launch Thoth** → on the setup wizard, choose **☁️ Cloud**
+1. **Launch Thoth** → on the setup wizard, choose **Providers**
 2. **Enter your API key** (OpenAI, Anthropic, Google AI, xAI, or OpenRouter) → Thoth validates and fetches available models
-3. **Pick a default model** (e.g. GPT) and start chatting — no downloads, no GPU needed
-4. Switch models per conversation anytime from the chat header dropdown
+3. **Pick a default model** and add the models you actually use to Quick Choices — no downloads, no GPU needed
+4. Optional: open **Settings → Providers** to sign in to ChatGPT / Codex for subscription-backed Codex models
+5. Switch models per conversation anytime from the chat header dropdown; raw provider catalogs and pinning live in **Settings → Models**
 
 ---
 
@@ -394,7 +398,7 @@ For **Gmail** and **Google Calendar**, you'll need a Google Cloud OAuth `credent
 
 **Local models (default):** All LLM inference runs on your machine via Ollama. Documents, memories, and conversations stored locally in `~/.thoth/`. External network calls only when using online tools (web search, Gmail, Calendar) — each individually disableable. No telemetry, no tracking.
 
-**Cloud models (opt-in):** Only the current conversation is sent to the LLM provider (OpenAI, Anthropic, Google AI, xAI, or OpenRouter). Memories, knowledge graph, documents, files, and other conversations never leave your machine. Your API key connects directly to the provider — Thoth has no servers and no middleman.
+**Provider models (opt-in):** The current conversation plus model-visible tool context and tool results are sent to the selected LLM provider (OpenAI, Anthropic, Google AI, xAI, OpenRouter, or ChatGPT / Codex). Memories, knowledge graph, documents, files, and other conversations never leave your machine unless you explicitly include them in the active conversation or expose them through a tool result. API-key providers connect directly to the provider; ChatGPT / Codex uses your in-app ChatGPT sign-in and ChatGPT subscription/internal Codex backend. Thoth has no servers and no middleman.
 
 **Always:** Core and plugin API keys are stored locally in your OS credential store when available, with only masked metadata in Thoth's data folder. No Thoth account required; no sign-up; no server to phone home to. Tools can be individually disabled to control what the agent can access.
 
